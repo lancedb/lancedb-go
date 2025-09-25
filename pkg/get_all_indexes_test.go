@@ -18,14 +18,14 @@ func TestGetAllIndexes(t *testing.T) {
 	// Setup test database
 	tempDir, err := os.MkdirTemp("", "lancedb_test_indexes_")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf("❌Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
 	// Connect to database
 	conn, err := Connect(context.Background(), tempDir, nil)
 	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
+		t.Fatalf("❌Failed to connect: %v", err)
 	}
 	defer conn.Close()
 
@@ -40,44 +40,67 @@ func TestGetAllIndexes(t *testing.T) {
 	arrowSchema := arrow.NewSchema(fields, nil)
 	schema, err := NewSchema(arrowSchema)
 	if err != nil {
-		t.Fatalf("Failed to create schema: %v", err)
+		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	// Create table
 	table, err := conn.CreateTable(context.Background(), "test_indexes", *schema)
 	if err != nil {
-		t.Fatalf("Failed to create table: %v", err)
+		t.Fatalf("❌Failed to create table: %v", err)
 	}
 	defer table.Close()
 
 	// Add some sample data
-	fmt.Println("Adding sample data...")
+	t.Log("Adding sample data...")
 	pool := memory.NewGoAllocator()
 
 	// Create sample data
+	const numRecords = 300
+
+	// Generate IDs
 	idBuilder := array.NewInt32Builder(pool)
-	idBuilder.AppendValues([]int32{1, 2, 3, 4, 5}, nil)
+	ids := make([]int32, numRecords)
+	for i := 0; i < numRecords; i++ {
+		ids[i] = int32(i + 1)
+	}
+	idBuilder.AppendValues(ids, nil)
 	idArray := idBuilder.NewArray()
 	defer idArray.Release()
 
+	// Generate names
 	nameBuilder := array.NewStringBuilder(pool)
-	nameBuilder.AppendValues([]string{"Alice", "Bob", "Charlie", "Diana", "Eve"}, nil)
+	names := make([]string, numRecords)
+	for i := 0; i < numRecords; i++ {
+		names[i] = fmt.Sprintf("User_%d", i+1)
+	}
+	nameBuilder.AppendValues(names, nil)
 	nameArray := nameBuilder.NewArray()
 	defer nameArray.Release()
 
+	// Generate categories
 	categoryBuilder := array.NewStringBuilder(pool)
-	categoryBuilder.AppendValues([]string{"A", "B", "A", "C", "B"}, nil)
+	categories := make([]string, numRecords)
+	categoryOptions := []string{"A", "B", "C", "D", "E"}
+	for i := 0; i < numRecords; i++ {
+		categories[i] = categoryOptions[i%len(categoryOptions)]
+	}
+	categoryBuilder.AppendValues(categories, nil)
 	categoryArray := categoryBuilder.NewArray()
 	defer categoryArray.Release()
 
+	// Generate scores
 	scoreBuilder := array.NewFloat64Builder(pool)
-	scoreBuilder.AppendValues([]float64{95.5, 87.2, 92.8, 88.9, 94.1}, nil)
+	scores := make([]float64, numRecords)
+	for i := 0; i < numRecords; i++ {
+		scores[i] = 80.0 + float64(i%20)
+	}
+	scoreBuilder.AppendValues(scores, nil)
 	scoreArray := scoreBuilder.NewArray()
 	defer scoreArray.Release()
 
 	// Create vector embeddings (128-dimensional vectors)
-	embeddingValues := make([]float32, 5*128) // 5 records * 128 dimensions
-	for i := 0; i < 5; i++ {
+	embeddingValues := make([]float32, numRecords*128) // 300 records * 128 dimensions
+	for i := 0; i < numRecords; i++ {
 		for j := 0; j < 128; j++ {
 			// Create unique vector patterns for each record
 			embeddingValues[i*128+j] = float32(i)*0.1 + float32(j)*0.001
@@ -93,36 +116,36 @@ func TestGetAllIndexes(t *testing.T) {
 	// Create FixedSizeListArray for embeddings
 	embeddingListType := arrow.FixedSizeListOf(128, arrow.PrimitiveTypes.Float32)
 	embeddingArray := array.NewFixedSizeListData(
-		array.NewData(embeddingListType, 5, []*memory.Buffer{nil}, []arrow.ArrayData{embeddingFloat32Array.Data()}, 0, 0),
+		array.NewData(embeddingListType, numRecords, []*memory.Buffer{nil}, []arrow.ArrayData{embeddingFloat32Array.Data()}, 0, 0),
 	)
 	defer embeddingArray.Release()
 
 	// Create Arrow Record
 	columns := []arrow.Array{idArray, nameArray, categoryArray, scoreArray, embeddingArray}
-	record := array.NewRecord(arrowSchema, columns, 5)
+	record := array.NewRecord(arrowSchema, columns, numRecords)
 	defer record.Release()
 
 	// Add data to table
 	err = table.Add(record, nil)
 	if err != nil {
-		t.Fatalf("Failed to add data: %v", err)
+		t.Fatalf("❌Failed to add data: %v", err)
 	}
-	fmt.Println("✅ Sample data added successfully")
+	t.Log("✅ Sample data added successfully")
 
 	// Test GetAllIndexes on empty table (should return empty list)
-	fmt.Println("\n📋 Testing GetAllIndexes on table with no indexes...")
+	t.Log("\n📋 Testing GetAllIndexes on table with no indexes...")
 	indexes, err := table.GetAllIndexes()
 	if err != nil {
-		t.Fatalf("Failed to get indexes: %v", err)
+		t.Fatalf("❌Failed to get indexes: %v", err)
 	}
 
-	fmt.Printf("Found %d indexes (expected 0):\n", len(indexes))
+	t.Logf("Found %d indexes (expected 0):\n", len(indexes))
 	for i, idx := range indexes {
-		fmt.Printf("  %d. Name: %s, Columns: %v, Type: %s\n", i+1, idx.Name, idx.Columns, idx.IndexType)
+		t.Logf("  %d. Name: %s, Columns: %v, Type: %s\n", i+1, idx.Name, idx.Columns, idx.IndexType)
 	}
 
 	// Create some indexes
-	fmt.Println("\n🔧 Creating various indexes...")
+	t.Log("\n🔧 Creating various indexes...")
 
 	indexesToCreate := []struct {
 		name        string
@@ -177,60 +200,59 @@ func TestGetAllIndexes(t *testing.T) {
 
 	// Create each index
 	for _, indexSpec := range indexesToCreate {
-		fmt.Printf("\nCreating %s...\n", indexSpec.description)
-		fmt.Printf("  Columns: %v\n", indexSpec.columns)
-		fmt.Printf("  Type: %v\n", indexSpec.indexType)
-		fmt.Printf("  Custom Name: %s\n", indexSpec.customName)
+		t.Logf("\nCreating %s...\n", indexSpec.description)
+		t.Logf("  Columns: %v\n", indexSpec.columns)
+		t.Logf("  Type: %v\n", indexSpec.indexType)
+		t.Logf("  Custom Name: %s\n", indexSpec.customName)
 
 		err = table.CreateIndexWithName(indexSpec.columns, indexSpec.indexType, indexSpec.customName)
 		if err != nil {
-			fmt.Printf("  ❌ Failed to create %s: %v\n", indexSpec.name, err)
-			continue
+			t.Fatalf("❌ Failed to create %s: %v\n", indexSpec.name, err)
 		}
-		fmt.Printf("  ✅ %s created successfully\n", indexSpec.name)
+		t.Logf("  ✅ %s created successfully\n", indexSpec.name)
 
 		// Test GetAllIndexes after each index creation
-		fmt.Printf("  📋 Checking indexes after creating %s...\n", indexSpec.name)
+		t.Logf("  📋 Checking indexes after creating %s...\n", indexSpec.name)
 		indexes, err = table.GetAllIndexes()
 		if err != nil {
-			fmt.Printf("  ❌ Failed to get indexes: %v\n", err)
+			t.Logf("  ❌ Failed to get indexes: %v\n", err)
 			continue
 		}
-		fmt.Printf("  Found %d indexes:\n", len(indexes))
+		t.Logf("  Found %d indexes:\n", len(indexes))
 		for i, idx := range indexes {
-			fmt.Printf("    %d. Name: %s, Columns: %v, Type: %s\n", i+1, idx.Name, idx.Columns, idx.IndexType)
+			t.Logf("    %d. Name: %s, Columns: %v, Type: %s\n", i+1, idx.Name, idx.Columns, idx.IndexType)
 		}
 	}
 
 	// Final check - get all indexes
-	fmt.Println("\n📊 Final GetAllIndexes test...")
+	t.Log("\n📊 Final GetAllIndexes test...")
 	finalIndexes, err := table.GetAllIndexes()
 	if err != nil {
-		t.Fatalf("Failed to get final indexes: %v", err)
+		t.Fatalf("❌Failed to get final indexes: %v", err)
 	}
 
-	fmt.Printf("🎯 Total indexes on table: %d\n", len(finalIndexes))
+	t.Logf("🎯 Total indexes on table: %d\n", len(finalIndexes))
 	if len(finalIndexes) > 0 {
-		fmt.Println("Index details:")
+		t.Log("Index details:")
 		for i, idx := range finalIndexes {
-			fmt.Printf("  %d. Name: %s\n", i+1, idx.Name)
-			fmt.Printf("     Columns: %v\n", idx.Columns)
-			fmt.Printf("     Type: %s\n", idx.IndexType)
-			fmt.Println()
+			t.Logf("  %d. Name: %s\n", i+1, idx.Name)
+			t.Logf("     Columns: %v\n", idx.Columns)
+			t.Logf("     Type: %s\n", idx.IndexType)
+			t.Log()
 		}
 	}
 
 	// Test error cases
-	fmt.Println("🧪 Testing error cases...")
+	t.Log("🧪 Testing error cases...")
 
 	// Test GetAllIndexes on closed table
 	table.Close()
 	_, err = table.GetAllIndexes()
 	if err != nil {
-		fmt.Printf("✅ Correctly caught closed table error: %v\n", err)
+		t.Logf("✅ Correctly caught closed table error: %v\n", err)
 	} else {
-		fmt.Println("❌ Should have failed on closed table")
+		t.Log("❌ Should have failed on closed table")
 	}
 
-	fmt.Println("\n🎉 GetAllIndexes functionality test completed successfully!")
+	t.Log("\n🎉 GetAllIndexes functionality test completed successfully!")
 }

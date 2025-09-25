@@ -19,7 +19,7 @@ func TestInsertUpdateDelete(t *testing.T) {
 
 	conn, err := Connect(context.Background(), dbPath, nil)
 	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
+		t.Fatalf("❌Failed to connect: %v", err)
 	}
 	defer conn.Close()
 
@@ -54,13 +54,13 @@ func TestInsertUpdateDelete(t *testing.T) {
 	arrowSchema := arrow.NewSchema(fields, nil)
 	schema, err := NewSchema(arrowSchema)
 	if err != nil {
-		t.Fatalf("Failed to create schema: %v", err)
+		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	tableName := "test_data_operations"
 	table, err := conn.CreateTable(context.Background(), tableName, *schema)
 	if err != nil {
-		t.Fatalf("Failed to create table: %v", err)
+		t.Fatalf("❌Failed to create table: %v", err)
 	}
 	defer table.Close()
 
@@ -90,7 +90,7 @@ func testTableAdd(t *testing.T, table *Table) {
 	// For now, test that Add method returns the expected "not implemented" error
 	err := table.Add(nil, nil)
 	if err == nil {
-		t.Error("Expected Add to return error since it's not implemented")
+		t.Fatal("❌Expected Add to return error since it's not implemented")
 	}
 
 	expectedMsg := "data addition not yet implemented"
@@ -179,7 +179,7 @@ func TestUpdateDataTypes(t *testing.T) {
 
 	conn, err := Connect(context.Background(), dbPath, nil)
 	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
+		t.Fatalf("❌Failed to connect: %v", err)
 	}
 	defer conn.Close()
 
@@ -193,12 +193,12 @@ func TestUpdateDataTypes(t *testing.T) {
 	arrowSchema := arrow.NewSchema(fields, nil)
 	schema, err := NewSchema(arrowSchema)
 	if err != nil {
-		t.Fatalf("Failed to create schema: %v", err)
+		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	table, err := conn.CreateTable(context.Background(), "test_types", *schema)
 	if err != nil {
-		t.Fatalf("Failed to create table: %v", err)
+		t.Fatalf("❌Failed to create table: %v", err)
 	}
 	defer table.Close()
 
@@ -270,7 +270,7 @@ func TestTableErrorHandling(t *testing.T) {
 
 	conn, err := Connect(context.Background(), dbPath, nil)
 	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
+		t.Fatalf("❌Failed to connect: %v", err)
 	}
 	defer conn.Close()
 
@@ -282,12 +282,12 @@ func TestTableErrorHandling(t *testing.T) {
 	arrowSchema := arrow.NewSchema(fields, nil)
 	schema, err := NewSchema(arrowSchema)
 	if err != nil {
-		t.Fatalf("Failed to create schema: %v", err)
+		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	table, err := conn.CreateTable(context.Background(), "test_errors", *schema)
 	if err != nil {
-		t.Fatalf("Failed to create table: %v", err)
+		t.Fatalf("❌ Failed to create table: %v", err)
 	}
 
 	t.Run("Test invalid update syntax", func(t *testing.T) {
@@ -296,18 +296,18 @@ func TestTableErrorHandling(t *testing.T) {
 		}
 		err := table.Update("invalid filter syntax $$", updates)
 		if err == nil {
-			t.Error("Expected error for invalid filter syntax")
+			t.Fatal("❌ Expected error for invalid filter syntax")
 		} else {
-			t.Logf("Got expected error: %v", err)
+			t.Logf("✅ Got expected error: %v", err)
 		}
 	})
 
 	t.Run("Test invalid delete syntax", func(t *testing.T) {
 		err := table.Delete("invalid filter syntax $$")
 		if err == nil {
-			t.Error("Expected error for invalid filter syntax")
+			t.Fatal("❌Expected error for invalid filter syntax")
 		} else {
-			t.Logf("Got expected error: %v", err)
+			t.Logf("✅ Got expected error: %v", err)
 		}
 	})
 
@@ -319,16 +319,16 @@ func TestTableErrorHandling(t *testing.T) {
 
 		err := table.Update("id = 1", updates)
 		if err == nil {
-			t.Error("Expected error for update on closed table")
+			t.Fatal("❌Expected error for update on closed table")
 		} else {
-			t.Logf("Got expected error for update on closed table: %v", err)
+			t.Logf("✅ Got expected error for update on closed table: %v", err)
 		}
 
 		err = table.Delete("id = 1")
 		if err == nil {
-			t.Error("Expected error for delete on closed table")
+			t.Fatal("❌Expected error for delete on closed table")
 		} else {
-			t.Logf("Got expected error for delete on closed table: %v", err)
+			t.Logf("✅ Got expected error for delete on closed table: %v", err)
 		}
 	})
 }
@@ -337,7 +337,7 @@ func TestTableErrorHandling(t *testing.T) {
 func setupTestDB2(t *testing.T) string {
 	tempDir, err := os.MkdirTemp("", "lancedb_test_data_ops_")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf("❌Failed to create temp dir: %v", err)
 	}
 	return tempDir
 }

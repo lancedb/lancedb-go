@@ -13,13 +13,13 @@ func setupTestDB(t *testing.T) (*Connection, func()) {
 
 	tmpDir, err := os.MkdirTemp("", "lancedb_table_test")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf("❌Failed to create temp dir: %v", err)
 	}
 
 	dbPath := filepath.Join(tmpDir, "test.lance")
 	conn, err := Connect(context.Background(), dbPath, nil)
 	if err != nil {
-		t.Fatalf("Failed to connect to database: %v", err)
+		t.Fatalf("❌Failed to connect to database: %v", err)
 	}
 
 	cleanup := func() {
@@ -42,12 +42,12 @@ func createTestTable(t *testing.T, conn *Connection, name string) *Table {
 		AddBooleanField("active", true).
 		Build()
 	if err != nil {
-		t.Fatalf("Failed to create schema: %v", err)
+		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	table, err := conn.CreateTable(context.Background(), name, *schema)
 	if err != nil {
-		t.Fatalf("Failed to create table: %v", err)
+		t.Fatalf("❌Failed to create table: %v", err)
 	}
 
 	return table
@@ -61,7 +61,7 @@ func TestTableName(t *testing.T) {
 	defer table.Close()
 
 	if table.Name() != "test_table_name" {
-		t.Errorf("Expected table name 'test_table_name', got '%s'", table.Name())
+		t.Fatalf("❌Expected table name 'test_table_name', got '%s'", table.Name())
 	}
 }
 
@@ -73,18 +73,18 @@ func TestTableIsOpen(t *testing.T) {
 
 	// Table should be open initially
 	if !table.IsOpen() {
-		t.Error("Table should be open after creation")
+		t.Fatal("❌Table should be open after creation")
 	}
 
 	// Close the table
 	err := table.Close()
 	if err != nil {
-		t.Fatalf("Failed to close table: %v", err)
+		t.Fatalf("❌Failed to close table: %v", err)
 	}
 
 	// Table should be closed now
 	if table.IsOpen() {
-		t.Error("Table should be closed after calling Close()")
+		t.Fatal("❌Table should be closed after calling Close()")
 	}
 }
 
@@ -97,19 +97,19 @@ func TestTableSchema(t *testing.T) {
 
 	schema, err := table.Schema()
 	if err != nil {
-		t.Fatalf("Failed to get table schema: %v", err)
+		t.Fatalf("❌Failed to get table schema: %v", err)
 	}
 
 	// Verify expected fields
 	expectedFields := []string{"id", "name", "score", "embedding", "active"}
 	if schema.NumFields() != len(expectedFields) {
-		t.Fatalf("Expected %d fields, got %d", len(expectedFields), schema.NumFields())
+		t.Fatalf("❌Expected %d fields, got %d", len(expectedFields), schema.NumFields())
 	}
 
 	for i, expectedName := range expectedFields {
 		field := schema.Field(i)
 		if field.Name != expectedName {
-			t.Errorf("Expected field %d to be '%s', got '%s'", i, expectedName, field.Name)
+			t.Fatalf("❌Expected field %d to be '%s', got '%s'", i, expectedName, field.Name)
 		}
 	}
 
@@ -126,11 +126,11 @@ func TestTableCount(t *testing.T) {
 	// Empty table should have 0 rows
 	count, err := table.Count()
 	if err != nil {
-		t.Fatalf("Failed to count rows: %v", err)
+		t.Fatalf("❌ Failed to count rows: %v", err)
 	}
 
 	if count != 0 {
-		t.Errorf("Expected 0 rows in empty table, got %d", count)
+		t.Fatalf("❌ Expected 0 rows in empty table, got %d", count)
 	}
 
 	t.Logf("Table row count: %d", count)
@@ -145,11 +145,11 @@ func TestTableVersion(t *testing.T) {
 
 	version, err := table.Version()
 	if err != nil {
-		t.Fatalf("Failed to get table version: %v", err)
+		t.Fatalf("❌Failed to get table version: %v", err)
 	}
 
 	if version < 0 {
-		t.Errorf("Expected non-negative version, got %d", version)
+		t.Fatalf("❌ Expected non-negative version, got %d", version)
 	}
 
 	t.Logf("Table version: %d", version)
@@ -164,23 +164,23 @@ func TestTableClose(t *testing.T) {
 	// Close the table
 	err := table.Close()
 	if err != nil {
-		t.Fatalf("Failed to close table: %v", err)
+		t.Fatalf("❌Failed to close table: %v", err)
 	}
 
 	// Operations on closed table should fail
 	_, err = table.Count()
 	if err == nil {
-		t.Error("Expected error when calling Count() on closed table")
+		t.Fatal("❌Expected error when calling Count() on closed table")
 	}
 
 	_, err = table.Schema()
 	if err == nil {
-		t.Error("Expected error when calling Schema() on closed table")
+		t.Fatal("❌Expected error when calling Schema() on closed table")
 	}
 
 	_, err = table.Version()
 	if err == nil {
-		t.Error("Expected error when calling Version() on closed table")
+		t.Fatal("❌Expected error when calling Version() on closed table")
 	}
 }
 
@@ -195,43 +195,43 @@ func TestOpenTable(t *testing.T) {
 	// Open the same table with a new handle
 	table2, err := conn.OpenTable(context.Background(), "test_open_table")
 	if err != nil {
-		t.Fatalf("Failed to open existing table: %v", err)
+		t.Fatalf("❌Failed to open existing table: %v", err)
 	}
 	defer table2.Close()
 
 	// Both tables should have the same name
 	if table1.Name() != table2.Name() {
-		t.Errorf("Table names should match: '%s' vs '%s'", table1.Name(), table2.Name())
+		t.Fatalf("❌Table names should match: '%s' vs '%s'", table1.Name(), table2.Name())
 	}
 
 	// Both tables should refer to the same data
 	count1, err := table1.Count()
 	if err != nil {
-		t.Fatalf("Failed to count rows in table1: %v", err)
+		t.Fatalf("❌Failed to count rows in table1: %v", err)
 	}
 
 	count2, err := table2.Count()
 	if err != nil {
-		t.Fatalf("Failed to count rows in table2: %v", err)
+		t.Fatalf("❌Failed to count rows in table2: %v", err)
 	}
 
 	if count1 != count2 {
-		t.Errorf("Row counts should match: %d vs %d", count1, count2)
+		t.Fatalf("❌Row counts should match: %d vs %d", count1, count2)
 	}
 
 	// Both tables should have the same version
 	version1, err := table1.Version()
 	if err != nil {
-		t.Fatalf("Failed to get version from table1: %v", err)
+		t.Fatalf("❌Failed to get version from table1: %v", err)
 	}
 
 	version2, err := table2.Version()
 	if err != nil {
-		t.Fatalf("Failed to get version from table2: %v", err)
+		t.Fatalf("❌Failed to get version from table2: %v", err)
 	}
 
 	if version1 != version2 {
-		t.Errorf("Versions should match: %d vs %d", version1, version2)
+		t.Fatalf("❌Versions should match: %d vs %d", version1, version2)
 	}
 }
 
@@ -244,27 +244,27 @@ func TestTableLifecycle(t *testing.T) {
 
 	// Test initial state
 	if !table.IsOpen() {
-		t.Error("Table should be open after creation")
+		t.Fatal("❌Table should be open after creation")
 	}
 
 	if table.Name() != "test_lifecycle" {
-		t.Errorf("Expected table name 'test_lifecycle', got '%s'", table.Name())
+		t.Fatalf("❌ Expected table name 'test_lifecycle', got '%s'", table.Name())
 	}
 
 	// Test operations work
 	count, err := table.Count()
 	if err != nil {
-		t.Fatalf("Count should work on open table: %v", err)
+		t.Fatalf("❌ Count should work on open table: %v", err)
 	}
 
 	version, err := table.Version()
 	if err != nil {
-		t.Fatalf("Version should work on open table: %v", err)
+		t.Fatalf("❌ Version should work on open table: %v", err)
 	}
 
 	schema, err := table.Schema()
 	if err != nil {
-		t.Fatalf("Schema should work on open table: %v", err)
+		t.Fatalf("❌ Schema should work on open table: %v", err)
 	}
 
 	t.Logf("Table lifecycle test - Count: %d, Version: %d, Fields: %d",
@@ -273,17 +273,17 @@ func TestTableLifecycle(t *testing.T) {
 	// Close table
 	err = table.Close()
 	if err != nil {
-		t.Fatalf("Failed to close table: %v", err)
+		t.Fatalf("❌Failed to close table: %v", err)
 	}
 
 	// Verify a closed state
 	if table.IsOpen() {
-		t.Error("Table should be closed after Close()")
+		t.Fatal("❌ Table should be closed after Close()")
 	}
 
 	// Verify operations fail on a closed table
 	_, err = table.Count()
 	if err == nil {
-		t.Error("Operations should fail on closed table")
+		t.Fatal("❌ Operations should fail on closed table")
 	}
 }

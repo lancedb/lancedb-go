@@ -32,14 +32,14 @@ func TestSelectQueries(t *testing.T) {
 	// Setup test database
 	tempDir, err := os.MkdirTemp("", "lancedb_test_select_")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf("❌Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
 	// Connect to database
 	conn, err := Connect(context.Background(), tempDir, nil)
 	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
+		t.Fatalf("❌Failed to connect: %v", err)
 	}
 	defer conn.Close()
 
@@ -54,13 +54,13 @@ func TestSelectQueries(t *testing.T) {
 	arrowSchema := arrow.NewSchema(fields, nil)
 	schema, err := NewSchema(arrowSchema)
 	if err != nil {
-		t.Fatalf("Failed to create schema: %v", err)
+		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	// Create table
 	table, err := conn.CreateTable(context.Background(), "test_select", *schema)
 	if err != nil {
-		t.Fatalf("Failed to create table: %v", err)
+		t.Fatalf("❌Failed to create table: %v", err)
 	}
 	defer table.Close()
 
@@ -119,18 +119,18 @@ func TestSelectQueries(t *testing.T) {
 	// Add data to table
 	err = table.Add(record, nil)
 	if err != nil {
-		t.Fatalf("Failed to add data: %v", err)
+		t.Fatalf("❌Failed to add data: %v", err)
 	}
 	t.Log("✅ Sample data added successfully")
 
 	t.Run("Select All Records", func(t *testing.T) {
 		results, err := table.Select(QueryConfig{})
 		if err != nil {
-			t.Fatalf("Failed to select all records: %v", err)
+			t.Fatalf("❌Failed to select all records: %v", err)
 		}
 
 		if len(results) != numRecords {
-			t.Errorf("Expected %d records, got %d", numRecords, len(results))
+			t.Fatalf("❌Expected %d records, got %d", numRecords, len(results))
 		}
 
 		t.Logf("Retrieved %d records", len(results))
@@ -142,26 +142,26 @@ func TestSelectQueries(t *testing.T) {
 	t.Run("Select Specific Columns", func(t *testing.T) {
 		results, err := table.SelectWithColumns([]string{"id", "name"})
 		if err != nil {
-			t.Fatalf("Failed to select specific columns: %v", err)
+			t.Fatalf("❌Failed to select specific columns: %v", err)
 		}
 
 		if len(results) != numRecords {
-			t.Errorf("Expected %d records, got %d", numRecords, len(results))
+			t.Fatalf("❌Expected %d records, got %d", numRecords, len(results))
 		}
 
 		// Check that only selected columns are present
 		for i, row := range results {
 			if len(row) != 2 {
-				t.Errorf("Record %d should have 2 columns, got %d", i, len(row))
+				t.Fatalf("❌Record %d should have 2 columns, got %d", i, len(row))
 			}
 			if _, ok := row["id"]; !ok {
-				t.Errorf("Record %d missing 'id' column", i)
+				t.Fatalf("❌Record %d missing 'id' column", i)
 			}
 			if _, ok := row["name"]; !ok {
-				t.Errorf("Record %d missing 'name' column", i)
+				t.Fatalf("❌Record %d missing 'name' column", i)
 			}
 			if _, ok := row["score"]; ok {
-				t.Errorf("Record %d should not have 'score' column", i)
+				t.Fatalf("❌Record %d should not have 'score' column", i)
 			}
 		}
 		t.Log("✅ Column selection works correctly")
@@ -170,23 +170,22 @@ func TestSelectQueries(t *testing.T) {
 	t.Run("Select with Filter", func(t *testing.T) {
 		results, err := table.SelectWithFilter("score > 90")
 		if err != nil {
-			t.Fatalf("Failed to select with filter: %v", err)
+			t.Fatalf("❌Failed to select with filter: %v", err)
 		}
 
 		// Should return records with score > 90 (Alice: 95.5, Charlie: 92.8, Eve: 94.1)
 		expectedCount := 3
 		if len(results) != expectedCount {
-			t.Errorf("Expected %d records with score > 90, got %d", expectedCount, len(results))
+			t.Fatalf("❌Expected %d records with score > 90, got %d", expectedCount, len(results))
 		}
 
 		for _, row := range results {
 			score, ok := row["score"].(float64)
 			if !ok {
-				t.Error("Score should be float64")
-				continue
+				t.Fatal("Score should be float64")
 			}
 			if score <= 90 {
-				t.Errorf("Found record with score %.1f, expected > 90", score)
+				t.Fatalf("❌Found record with score %.1f, expected > 90", score)
 			}
 		}
 		t.Log("✅ Filtering works correctly")
@@ -196,11 +195,11 @@ func TestSelectQueries(t *testing.T) {
 		limit := 3
 		results, err := table.SelectWithLimit(limit, 0)
 		if err != nil {
-			t.Fatalf("Failed to select with limit: %v", err)
+			t.Fatalf("❌Failed to select with limit: %v", err)
 		}
 
 		if len(results) != limit {
-			t.Errorf("Expected %d records, got %d", limit, len(results))
+			t.Fatalf("❌Expected %d records, got %d", limit, len(results))
 		}
 		t.Log("✅ Limit works correctly")
 	})
@@ -214,11 +213,11 @@ func TestSelectQueries(t *testing.T) {
 
 		results, err := table.VectorSearch("embedding", queryVector, 3)
 		if err != nil {
-			t.Fatalf("Failed to perform vector search: %v", err)
+			t.Fatalf("❌Failed to perform vector search: %v", err)
 		}
 
 		if len(results) == 0 {
-			t.Error("Expected some results from vector search")
+			t.Fatal("❌Expected some results from vector search")
 		}
 
 		t.Logf("Vector search returned %d results", len(results))
@@ -236,18 +235,18 @@ func TestSelectQueries(t *testing.T) {
 
 		results, err := table.VectorSearchWithFilter("embedding", queryVector, 5, "category = 'A'")
 		if err != nil {
-			t.Fatalf("Failed to perform vector search with filter: %v", err)
+			t.Fatalf("❌Failed to perform vector search with filter: %v", err)
 		}
 
 		// Should only return records with category 'A' (Alice and Charlie)
 		for _, row := range results {
 			category, ok := row["category"].(string)
 			if !ok {
-				t.Error("Category should be string")
+				t.Fatal("Category should be string")
 				continue
 			}
 			if category != "A" {
-				t.Errorf("Found record with category '%s', expected 'A'", category)
+				t.Fatalf("❌Found record with category '%s', expected 'A'", category)
 			}
 		}
 		t.Log("✅ Vector search with filter works correctly")
@@ -273,11 +272,11 @@ func TestSelectQueries(t *testing.T) {
 
 		results, err := table.Select(config)
 		if err != nil {
-			t.Fatalf("Failed to perform complex query: %v", err)
+			t.Fatalf("❌Failed to perform complex query: %v", err)
 		}
 
 		if len(results) > limit {
-			t.Errorf("Expected at most %d records due to limit, got %d", limit, len(results))
+			t.Fatalf("❌Expected at most %d records due to limit, got %d", limit, len(results))
 		}
 
 		// Debug: print actual columns received
@@ -293,14 +292,14 @@ func TestSelectQueries(t *testing.T) {
 			expectedCols := []string{"id", "name", "score"}
 			for _, col := range expectedCols {
 				if _, ok := row[col]; !ok {
-					t.Errorf("Record %d missing expected column '%s'", i, col)
+					t.Fatalf("❌Record %d missing expected column '%s'", i, col)
 				}
 			}
 
 			// Check score filter
 			if score, ok := row["score"].(float64); ok {
 				if score <= 85 {
-					t.Errorf("Found record with score %.1f, expected > 85", score)
+					t.Fatalf("❌Found record with score %.1f, expected > 85", score)
 				}
 			}
 		}
@@ -317,9 +316,9 @@ func TestSelectQueries(t *testing.T) {
 
 		_, err := table.Select(config)
 		if err == nil {
-			t.Error("Expected error for FTS search, but got none")
+			t.Fatal("❌Expected error for FTS search, but got none")
 		} else if !contains(err.Error(), "Full-text search is not currently supported") {
-			t.Errorf("Expected FTS not supported error, got: %v", err)
+			t.Fatalf("❌Expected FTS not supported error, got: %v", err)
 		}
 		t.Log("✅ FTS search correctly returns not supported error")
 	})
@@ -328,10 +327,10 @@ func TestSelectQueries(t *testing.T) {
 		table.Close()
 		_, err := table.Select(QueryConfig{})
 		if err == nil {
-			t.Error("Expected error when querying closed table")
+			t.Fatal("❌Expected error when querying closed table")
 		}
 		if err.Error() != "table is closed" {
-			t.Errorf("Expected 'table is closed' error, got: %v", err)
+			t.Fatalf("❌Expected 'table is closed' error, got: %v", err)
 		}
 		t.Log("✅ Error handling for closed table works correctly")
 	})
@@ -341,18 +340,18 @@ func TestConvenienceMethods(t *testing.T) {
 	// Setup test database
 	tempDir, err := os.MkdirTemp("", "lancedb_test_convenience_")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf("❌Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
 	// Connect to database
 	conn, err := Connect(context.Background(), tempDir, nil)
 	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
+		t.Fatalf("❌Failed to connect: %v", err)
 	}
 	defer conn.Close()
 
-	// Create simple test schema
+	// Create a simple test schema
 	fields := []arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
 		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: false},
@@ -361,13 +360,13 @@ func TestConvenienceMethods(t *testing.T) {
 	arrowSchema := arrow.NewSchema(fields, nil)
 	schema, err := NewSchema(arrowSchema)
 	if err != nil {
-		t.Fatalf("Failed to create schema: %v", err)
+		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	// Create table
 	table, err := conn.CreateTable(context.Background(), "test_convenience", *schema)
 	if err != nil {
-		t.Fatalf("Failed to create table: %v", err)
+		t.Fatalf("❌Failed to create table: %v", err)
 	}
 	defer table.Close()
 
@@ -394,7 +393,7 @@ func TestConvenienceMethods(t *testing.T) {
 
 	err = table.Add(record, nil)
 	if err != nil {
-		t.Fatalf("Failed to add data: %v", err)
+		t.Fatalf("❌Failed to add data: %v", err)
 	}
 
 	t.Run("SelectWithColumns", func(t *testing.T) {
@@ -403,7 +402,7 @@ func TestConvenienceMethods(t *testing.T) {
 			t.Fatalf("SelectWithColumns failed: %v", err)
 		}
 		if len(results) != 3 {
-			t.Errorf("Expected 3 results, got %d", len(results))
+			t.Fatalf("❌Expected 3 results, got %d", len(results))
 		}
 		t.Log("✅ SelectWithColumns works")
 	})
@@ -414,7 +413,7 @@ func TestConvenienceMethods(t *testing.T) {
 			t.Fatalf("SelectWithFilter failed: %v", err)
 		}
 		if len(results) != 2 { // Alice: 95.5, Charlie: 92.8
-			t.Errorf("Expected 2 results, got %d", len(results))
+			t.Fatalf("❌Expected 2 results, got %d", len(results))
 		}
 		t.Log("✅ SelectWithFilter works")
 	})
@@ -425,7 +424,7 @@ func TestConvenienceMethods(t *testing.T) {
 			t.Fatalf("SelectWithLimit failed: %v", err)
 		}
 		if len(results) != 2 {
-			t.Errorf("Expected 2 results, got %d", len(results))
+			t.Fatalf("❌Expected 2 results, got %d", len(results))
 		}
 		t.Log("✅ SelectWithLimit works")
 	})

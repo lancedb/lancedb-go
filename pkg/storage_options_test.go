@@ -13,7 +13,7 @@ func TestStorageOptionsBasic(t *testing.T) {
 	// Setup test database
 	tempDir, err := os.MkdirTemp("", "lancedb_test_storage_")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf(" ❌Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
@@ -21,16 +21,16 @@ func TestStorageOptionsBasic(t *testing.T) {
 		// Test connection without any storage options (should work like before)
 		conn, err := Connect(context.Background(), tempDir, nil)
 		if err != nil {
-			t.Fatalf("Failed to connect without storage options: %v", err)
+			t.Fatalf(" ❌Failed to connect without storage options: %v", err)
 		}
 		defer conn.Close()
 
 		if conn.handle == nil {
-			t.Error("Connection handle should not be nil")
+			t.Fatal("❌Connection handle should not be nil")
 		}
 
 		if conn.closed {
-			t.Error("Connection should not be marked as closed")
+			t.Fatal("❌Connection should not be marked as closed")
 		}
 
 		t.Log("✅ Connection without storage options works correctly")
@@ -41,7 +41,7 @@ func TestStorageOptionsBasic(t *testing.T) {
 		options := &ConnectionOptions{}
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with empty options: %v", err)
+			t.Fatalf(" ❌Failed to connect with empty options: %v", err)
 		}
 		defer conn.Close()
 
@@ -55,7 +55,7 @@ func TestStorageOptionsBasic(t *testing.T) {
 		}
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with empty storage options: %v", err)
+			t.Fatalf(" ❌Failed to connect with empty storage options: %v", err)
 		}
 		defer conn.Close()
 
@@ -67,7 +67,7 @@ func TestS3StorageOptions(t *testing.T) {
 	// Setup test database
 	tempDir, err := os.MkdirTemp("", "lancedb_test_s3_storage_")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf(" ❌Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
@@ -114,7 +114,7 @@ func TestS3StorageOptions(t *testing.T) {
 		// Test connection (environment variables should be set by Rust code)
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with S3 options: %v", err)
+			t.Fatalf(" ❌Failed to connect with S3 options: %v", err)
 		}
 		defer conn.Close()
 
@@ -144,7 +144,7 @@ func TestS3StorageOptions(t *testing.T) {
 
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with S3 session token: %v", err)
+			t.Fatalf(" ❌Failed to connect with S3 session token: %v", err)
 		}
 		defer conn.Close()
 
@@ -167,7 +167,7 @@ func TestS3StorageOptions(t *testing.T) {
 
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with S3 profile: %v", err)
+			t.Fatalf(" ❌Failed to connect with S3 profile: %v", err)
 		}
 		defer conn.Close()
 
@@ -190,7 +190,7 @@ func TestS3StorageOptions(t *testing.T) {
 
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with anonymous S3 access: %v", err)
+			t.Fatalf(" ❌Failed to connect with anonymous S3 access: %v", err)
 		}
 		defer conn.Close()
 
@@ -217,7 +217,7 @@ func TestS3StorageOptions(t *testing.T) {
 
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with custom S3 endpoint: %v", err)
+			t.Fatalf(" ❌Failed to connect with custom S3 endpoint: %v", err)
 		}
 		defer conn.Close()
 
@@ -229,7 +229,7 @@ func TestCloudStorageOptionsPlaceholders(t *testing.T) {
 	// Setup test database
 	tempDir, err := os.MkdirTemp("", "lancedb_test_cloud_storage_")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf(" ❌Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
@@ -249,7 +249,7 @@ func TestCloudStorageOptionsPlaceholders(t *testing.T) {
 
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with Azure options: %v", err)
+			t.Fatalf(" ❌Failed to connect with Azure options: %v", err)
 		}
 		defer conn.Close()
 
@@ -272,7 +272,7 @@ func TestCloudStorageOptionsPlaceholders(t *testing.T) {
 
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with GCS options: %v", err)
+			t.Fatalf(" ❌Failed to connect with GCS options: %v", err)
 		}
 		defer conn.Close()
 
@@ -284,7 +284,7 @@ func TestGeneralStorageOptions(t *testing.T) {
 	// Setup test database
 	tempDir, err := os.MkdirTemp("", "lancedb_test_general_storage_")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf(" ❌Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
@@ -308,7 +308,7 @@ func TestGeneralStorageOptions(t *testing.T) {
 
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with general storage options: %v", err)
+			t.Fatalf(" ❌Failed to connect with general storage options: %v", err)
 		}
 		defer conn.Close()
 
@@ -333,7 +333,7 @@ func TestGeneralStorageOptions(t *testing.T) {
 
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with local storage options: %v", err)
+			t.Fatalf(" ❌Failed to connect with local storage options: %v", err)
 		}
 		defer conn.Close()
 
@@ -345,7 +345,7 @@ func TestCombinedStorageOptions(t *testing.T) {
 	// Setup test database
 	tempDir, err := os.MkdirTemp("", "lancedb_test_combined_storage_")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf(" ❌Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
@@ -371,7 +371,7 @@ func TestCombinedStorageOptions(t *testing.T) {
 
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with combined options: %v", err)
+			t.Fatalf(" ❌Failed to connect with combined options: %v", err)
 		}
 		defer conn.Close()
 
@@ -412,7 +412,7 @@ func TestCombinedStorageOptions(t *testing.T) {
 
 		conn, err := Connect(context.Background(), tempDir, options)
 		if err != nil {
-			t.Fatalf("Failed to connect with all storage options: %v", err)
+			t.Fatalf(" ❌Failed to connect with all storage options: %v", err)
 		}
 		defer conn.Close()
 
@@ -447,7 +447,7 @@ func TestStorageOptionsErrorCases(t *testing.T) {
 
 		tempDir, err := os.MkdirTemp("", "lancedb_test_malformed_")
 		if err != nil {
-			t.Fatalf("Failed to create temp dir: %v", err)
+			t.Fatalf(" ❌Failed to create temp dir: %v", err)
 		}
 		defer os.RemoveAll(tempDir)
 

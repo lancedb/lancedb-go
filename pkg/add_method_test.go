@@ -5,7 +5,6 @@ package lancedb
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
 
@@ -18,14 +17,14 @@ func TestAddMethod(t *testing.T) {
 	// Setup test database
 	tempDir, err := os.MkdirTemp("", "lancedb_test_add_")
 	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
+		t.Fatalf("❌Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
 	// Connect to database
 	conn, err := Connect(context.Background(), tempDir, nil)
 	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
+		t.Fatalf("❌Failed to connect: %v", err)
 	}
 	defer conn.Close()
 
@@ -38,13 +37,13 @@ func TestAddMethod(t *testing.T) {
 	arrowSchema := arrow.NewSchema(fields, nil)
 	schema, err := NewSchema(arrowSchema)
 	if err != nil {
-		t.Fatalf("Failed to create schema: %v", err)
+		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	// Create table
 	table, err := conn.CreateTable(context.Background(), "test_add", *schema)
 	if err != nil {
-		t.Fatalf("Failed to create table: %v", err)
+		t.Fatalf("❌Failed to create table: %v", err)
 	}
 	defer table.Close()
 
@@ -74,27 +73,27 @@ func TestAddMethod(t *testing.T) {
 	record := array.NewRecord(arrowSchema, columns, 3)
 	defer record.Release()
 
-	fmt.Println("Testing Table.Add method...")
-	fmt.Printf("Adding record with %d rows\n", record.NumRows())
+	t.Log("Testing Table.Add method... \n")
+	t.Logf("Adding record with %d rows\n", record.NumRows())
 
 	// Test the Add method
 	err = table.Add(record, nil)
 	if err != nil {
-		t.Fatalf("Failed to add data: %v", err)
+		t.Fatalf("❌Failed to add data: %v", err)
 	}
 
-	fmt.Println("✅ Successfully added data to table!")
+	t.Log("✅Successfully added data to table! \n")
 
 	// Verify data was added by checking row count
 	count, err := table.Count()
 	if err != nil {
-		t.Fatalf("Failed to get row count: %v", err)
+		t.Fatalf("❌Failed to get row count: %v", err)
 	}
 
-	fmt.Printf("✅ Table now contains %d rows\n", count)
+	t.Logf("Table now contains %d rows\n", count)
 
 	// Test adding more data
-	fmt.Println("\nAdding more data...")
+	t.Log("\nAdding more data...")
 
 	// Create more sample data
 	idBuilder2 := array.NewInt32Builder(pool)
@@ -118,16 +117,16 @@ func TestAddMethod(t *testing.T) {
 
 	err = table.Add(record2, nil)
 	if err != nil {
-		t.Fatalf("Failed to add second batch: %v", err)
+		t.Fatalf("❌Failed to add second batch: %v", err)
 	}
 
 	// Check final count
 	finalCount, err := table.Count()
 	if err != nil {
-		t.Fatalf("Failed to get final row count: %v", err)
+		t.Fatalf("❌Failed to get final row count: %v", err)
 	}
 
-	fmt.Printf("✅ Table now contains %d rows after second batch\n", finalCount)
+	t.Logf("✅ Table now contains %d rows after second batch\n", finalCount)
 
-	fmt.Println("\n🎉 Table.Add method implementation is working correctly!")
+	t.Log("\n🎉 Table.Add method implementation is working correctly!")
 }
