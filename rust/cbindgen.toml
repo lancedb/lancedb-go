@@ -9,38 +9,6 @@ usize_is_size_t = true
 [export]
 # Export only functions that actually exist
 include = [
-    # Core functions from lib.rs
-    "lancedb_init",
-    "lancedb_free_string", 
-    "lancedb_result_free",
-    
-    # Connection functions from connection.rs
-    "lancedb_connect",
-    "lancedb_connection_close",
-    "lancedb_list_tables",
-    "lancedb_free_table_names",
-    
-    # Table functions from table_simple.rs  
-    "lancedb_table_open",
-    # Note: lancedb_table_create excluded due to Arrow FFI types
-    "lancedb_table_drop",
-    "lancedb_table_close",
-    # Note: lancedb_table_add and lancedb_table_schema excluded due to Arrow FFI types
-    
-    # Query functions from query_simple.rs
-    "lancedb_query_vector_search",
-    "lancedb_query_limit",
-    "lancedb_query_filter", 
-    # Note: lancedb_query_execute excluded due to Arrow FFI types
-    "lancedb_query_close",
-    
-    # Note: Schema functions excluded due to Arrow FFI types
-    
-    # Error functions from error.rs
-    "lancedb_error_free",
-    "lancedb_error_code",
-    "lancedb_error_message",
-    
     # Version functions from types.rs
     "lancedb_version_info_free",
     
@@ -70,14 +38,6 @@ include = [
 
 # Exclude functions that use Arrow FFI types which cbindgen can't resolve
 exclude = [
-    "lancedb_table_create",   # Uses FFI_ArrowSchema
-    "lancedb_table_add",      # Uses FFI_ArrowArray/FFI_ArrowSchema
-    "lancedb_table_schema",   # Uses FFI_ArrowSchema  
-    "lancedb_query_execute",  # Uses FFI_ArrowArray/FFI_ArrowSchema
-    "lancedb_schema_create",  # Uses FFI_ArrowSchema
-    "lancedb_schema_combine", # Uses FFI_ArrowSchema
-    "lancedb_schema_field_count", # Uses FFI_ArrowSchema
-    "lancedb_schema_field_name",  # Uses FFI_ArrowSchema
 ]
 
 [struct]
