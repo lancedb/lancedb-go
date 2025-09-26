@@ -1,42 +1,39 @@
-name: CI
+name: CI (Optimized)
 
 on:
   push:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
-  workflow_dispatch: # Allow manual triggers
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
-  # Check code formatting and basic linting
-  format-check:
-    name: Format Check
+  # ⚡ Phase 1: Lightning-fast checks (only formatting)
+  quick-checks:
+    name: Quick Checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Rust
+      - name: Setup Rust (minimal)
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
 
-      - name: Setup Go
+      - name: Setup Go (minimal)  
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
-          cache: true
 
       - name: Check Rust formatting
-        run: |
-          cd rust
-          cargo fmt -- --check
+        run: cd rust && cargo fmt -- --check
 
-      - name: Check Go formatting  
+      - name: Check Go formatting
         run: |
           if [ -n "$(gofmt -l .)" ]; then
             echo "Go code is not formatted. Run 'go fmt ./...' to fix."
@@ -44,20 +41,22 @@ jobs:
             exit 1
           fi
 
-  # Build and test matrix
-  build-test:
-    name: Build & Test
+  # 🏗️ Phase 2: Build artifacts once (includes linting)
+  build-artifacts:
+    name: Build Artifacts
+    needs: quick-checks
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-13] # macos-13 for x86_64, macos-latest for arm64
-        go-version: ['1.21', '1.22', '1.23']
         include:
           - os: ubuntu-latest
             rust-target: x86_64-unknown-linux-gnu
-          - os: macos-latest  
+            artifact-name: linux-x64
+          - os: macos-latest
             rust-target: aarch64-apple-darwin
+            artifact-name: macos-arm64
           - os: macos-13
             rust-target: x86_64-apple-darwin
+            artifact-name: macos-x64
     runs-on: ${{ matrix.os }}
     
     steps:
@@ -73,8 +72,20 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: '1.21'
           cache: true
+
+      # Install system dependencies
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install system dependencies (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew install protobuf
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -90,19 +101,17 @@ jobs:
             ${{ matrix.os }}-cargo-${{ matrix.rust-target }}-
             ${{ matrix.os }}-cargo-
 
-      - name: Install cbindgen
-        run: cargo install cbindgen --version ^0.26
-
-      - name: Install golangci-lint (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install cbindgen (cached)
         run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.55.2
-          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          if ! command -v cbindgen &> /dev/null; then
+            cargo install cbindgen --version ^0.26
+          fi
 
-      - name: Install golangci-lint (macOS)
-        if: startsWith(matrix.os, 'macos')
+      # Rust linting (moved here from quick-checks)
+      - name: Lint Rust code
         run: |
-          brew install golangci-lint
+          cd rust
+          cargo clippy --target ${{ matrix.rust-target }} -- -D warnings
 
       - name: Build Rust library
         run: |
@@ -118,104 +127,94 @@ jobs:
       - name: Copy library files
         run: |
           mkdir -p rust/target/generated/lib
-          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-            cp rust/target/${{ matrix.rust-target }}/release/liblancedb_go.a rust/target/generated/lib/
-          else
-            cp rust/target/${{ matrix.rust-target }}/release/liblancedb_go.a rust/target/generated/lib/
-          fi
-
-      - name: Download Go dependencies
-        run: |
-          go mod download
-          go mod tidy
+          cp rust/target/${{ matrix.rust-target }}/release/liblancedb_go.* rust/target/generated/lib/
 
       - name: Build Go module
         run: go build ./...
 
-      - name: Lint Rust code
-        run: |
-          cd rust
-          cargo clippy --target ${{ matrix.rust-target }} -- -D warnings
+      # 📦 Upload reusable artifacts
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.artifact-name }}
+          path: |
+            rust/target/generated/
+            rust/target/${{ matrix.rust-target }}/release/liblancedb_go.*
+          retention-days: 1
+          compression-level: 6
 
-      - name: Lint Go code
+  # 🧪 Phase 3: Testing (reuses artifacts)
+  test:
+    name: Test Suite
+    needs: build-artifacts
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go-version: ['1.21', '1.22', '1.23']
+        exclude:
+          # Optimize: only test latest Go on macOS
+          - os: macos-latest
+            go-version: '1.22'
+          - os: macos-latest
+            go-version: '1.21'
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      # 📥 Download pre-built artifacts (no rebuild!)
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.os == 'ubuntu-latest' && 'linux-x64' || 'macos-arm64' }}
+          path: .
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: v1.55.2
+          skip-cache: false
+
+      - name: Run Go linting
         run: golangci-lint run --config .golangci.yml
 
-      - name: Run Go tests
+      - name: Run tests with race detection
         run: go test -v -race ./...
 
-      - name: Run Go benchmarks
+      - name: Run benchmarks
         run: go test -bench=. -benchmem ./...
 
-  # Build examples
-  build-examples:
-    name: Build Examples
-    needs: [format-check, build-test]
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-          cache: true
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            rust/target/
-          key: ubuntu-latest-cargo-examples-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: |
-            ubuntu-latest-cargo-examples-
-            ubuntu-latest-cargo-
-
-      - name: Install cbindgen
-        run: cargo install cbindgen --version ^0.26
-
-      - name: Build project (required for examples)
-        run: make build
-
-      - name: Build examples
-        run: make examples
-
-      - name: Test examples build artifacts
-        run: |
-          echo "Checking built examples..."
-          ls -la rust/target/*_example || echo "No example binaries found"
-          
-  # Security scan
+  # 🔒 Security scanning (lightweight, no rebuild)
   security:
     name: Security Scan
+    needs: quick-checks
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Rust
+      - name: Setup Rust (minimal)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Setup Go
+      - name: Setup Go (minimal)
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
-          cache: true
 
-      - name: Run Rust security audit
+      - name: Run Rust security audit (cached)
         run: |
-          cargo install cargo-audit
-          cd rust
-          cargo audit
+          if ! command -v cargo-audit &> /dev/null; then
+            cargo install --locked cargo-audit
+          fi
+          cd rust && cargo audit
 
       - name: Run Go security scan
         uses: securecodewarrior/github-action-gosec@master
@@ -229,17 +228,15 @@ jobs:
         with:
           sarif_file: gosec.sarif
 
-  # Documentation check
-  docs:
-    name: Documentation
+  # ⚡ Examples (reuses artifacts)
+  build-examples:
+    name: Build Examples
+    needs: build-artifacts
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -247,57 +244,87 @@ jobs:
           go-version: '1.21'
           cache: true
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
+      # 📥 Reuse build artifacts instead of rebuilding
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            rust/target/
-          key: ubuntu-latest-cargo-docs-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: |
-            ubuntu-latest-cargo-docs-
-            ubuntu-latest-cargo-
+          name: build-linux-x64
+          path: .
+
+      - name: Build examples (using pre-built artifacts)
+        run: |
+          for dir in examples/*/; do
+            if [ -d "$dir" ] && [ "$(basename "$dir")" != "README.md" ]; then
+              example_name=$(basename "$dir")
+              echo "Building $example_name..."
+              cd "$dir"
+              go build -o "../../rust/target/${example_name}_example" .
+              cd ../..
+            fi
+          done
+
+      - name: Upload example binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: examples
+          path: rust/target/*_example
+          retention-days: 1
+
+  # 📚 Documentation (minimal dependencies)
+  docs:
+    name: Documentation
+    needs: quick-checks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (minimal)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Go (minimal)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
 
       - name: Generate Rust documentation
-        run: |
-          cd rust
-          cargo doc --no-deps
+        run: cd rust && cargo doc --no-deps
 
       - name: Check Go documentation
-        run: |
-          go doc -all ./... > /dev/null
+        run: go doc -all ./... > /dev/null
 
-  # Final status check
+  # 🎯 Final status aggregation
   ci-success:
     name: CI Success
     if: always()
-    needs: [format-check, build-test, build-examples, security, docs]
+    needs: [quick-checks, build-artifacts, test, security, build-examples, docs]
     runs-on: ubuntu-latest
     
     steps:
       - name: Check all jobs status
         run: |
-          if [[ "${{ needs.format-check.result }}" != "success" ]]; then
-            echo "Format check failed"
+          jobs_status='${{ toJson(needs) }}'
+          echo "Jobs status: $jobs_status"
+          
+          if echo "$jobs_status" | jq -r '.[] | select(.result != "success" and .result != "skipped") | .result' | grep -q .; then
+            echo "❌ Some jobs failed"
             exit 1
           fi
-          if [[ "${{ needs.build-test.result }}" != "success" ]]; then
-            echo "Build and test failed"
-            exit 1
-          fi
-          if [[ "${{ needs.build-examples.result }}" != "success" ]]; then
-            echo "Build examples failed"
-            exit 1
-          fi
-          if [[ "${{ needs.security.result }}" != "success" ]]; then
-            echo "Security scan failed"
-            exit 1
-          fi
-          if [[ "${{ needs.docs.result }}" != "success" ]]; then
-            echo "Documentation check failed"
-            exit 1
-          fi
-          echo "All CI jobs completed successfully!"
+          
+          echo "✅ All jobs completed successfully!"
+
+  # 🧹 Cleanup (optional)
+  cleanup:
+    name: Cleanup Artifacts
+    if: always()
+    needs: ci-success
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete temporary artifacts
+        uses: geekyeggo/delete-artifact@v4
+        with:
+          name: |
+            build-*
+            examples
+        continue-on-error: true

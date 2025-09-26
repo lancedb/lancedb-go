@@ -9,15 +9,15 @@ fn main() {
 
     // Generate C header using cbindgen
     let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    
+
     // Override C++ standard library on macOS
     if cfg!(target_os = "macos") {
         println!("cargo:rustc-link-arg=-stdlib=libc++");
         println!("cargo:rustc-link-lib=c++");
-        
+
         // Set environment variables for C/C++ compilation
         println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=11.0");
-        
+
         // Override any attempts to link with libstdc++
         println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
     }

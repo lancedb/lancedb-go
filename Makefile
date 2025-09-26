@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-.PHONY: all build test clean install-deps install-act fmt lint lint-rust lint-go lint-go-fix lint-report examples docs release ci-local ci-format ci-build ci-security ci-docs ci-examples
+.PHONY: all build test clean install-deps install-act fmt lint lint-rust lint-go lint-go-fix lint-report examples docs release ci-quick ci-format ci-build ci-test ci-security ci-docs ci-examples ci-local ci-list ci-stage1 ci-stage2 ci-stage3 ci-debug ci-clean ci-graph
 
 # Default target
 all: build test
@@ -196,53 +196,6 @@ check-tools:
 	@command -v cbindgen >/dev/null 2>&1 || { echo "cbindgen is required. Install with: cargo install cbindgen"; exit 1; }
 	@echo "All required tools are installed"
 
-# === Local CI Testing with act ===
-
-# Run complete local CI pipeline (all jobs)
-ci-local: install-act
-	@echo "🚀 Running complete CI pipeline locally..."
-	@echo "This will run all GitHub Actions jobs locally using act"
-	act
-
-# Run format check locally (fast)
-ci-format: install-act
-	@echo "🔍 Running format check locally..."
-	act -j format-check
-
-# Run build and test matrix locally (slower, requires Docker)
-ci-build: install-act
-	@echo "🔨 Running build and test jobs locally..."
-	@echo "⚠️  Note: This downloads large Docker images and may take several minutes on first run"
-	act -j build-test
-
-# Run security scan locally
-ci-security: install-act
-	@echo "🔒 Running security scan locally..."
-	act -j security
-
-# Run documentation check locally
-ci-docs: install-act
-	@echo "📚 Running documentation check locally..."
-	act -j docs
-
-# Run examples build locally
-ci-examples: install-act
-	@echo "⚡ Running examples build locally..."
-	act -j build-examples
-
-# Quick local validation (format + lint, no Docker required)
-ci-quick: check-fmt lint
-	@echo "✅ Quick local validation completed!"
-	@echo "   • Code formatting: ✓"
-	@echo "   • Linting: ✓"
-	@echo ""
-	@echo "💡 Run 'make ci-format' to test with the exact same environment as GitHub Actions"
-
-# List all available CI jobs
-ci-list: install-act
-	@echo "📋 Available GitHub Actions jobs:"
-	act --list
-
 # Show help
 help:
 	@echo "Available targets:"
@@ -265,14 +218,20 @@ help:
 	@echo ""
 	@echo "=== Local CI Testing ==="
 	@echo "  ci-quick     - Quick validation (format + lint, no Docker)"
-	@echo "  ci-format    - Run format check locally using act"
-	@echo "  ci-build     - Run build & test matrix locally (requires Docker)"
-	@echo "  ci-security  - Run security scan locally"
-	@echo "  ci-docs      - Run documentation check locally"
-	@echo "  ci-examples  - Run examples build locally"
-	@echo "  ci-local     - Run complete CI pipeline locally (all jobs)"
+	@echo "  ci-format    - Run format and basic checks using act"
+	@echo "  ci-build     - Run build artifacts workflow (includes linting)"
+	@echo "  ci-test      - Run test suite using act"
+	@echo "  ci-security  - Run security scan using act"
+	@echo "  ci-docs      - Run documentation check using act"
+	@echo "  ci-examples  - Run examples build using act"
+	@echo "  ci-local     - Run complete optimized CI pipeline"
 	@echo "  ci-list      - List all available CI jobs"
-	@echo ""
+	@echo "  ci-stage1    - Run Stage 1 (quick-checks only)"
+	@echo "  ci-stage2    - Run Stage 2 (build, security, docs)"
+	@echo "  ci-stage3    - Run Stage 3 (tests and examples)"
+	@echo "  ci-debug     - Run CI with verbose debug output"
+	@echo "  ci-clean     - Clean Docker containers and images"
+	@echo "  ci-graph     - Show CI workflow dependencies"	@echo ""
 	@echo "=== Examples & Documentation ==="
 	@echo "  examples     - Build all examples"
 	@echo "  run-examples - Run all examples"
@@ -289,3 +248,94 @@ help:
 	@echo ""
 	@echo "=== Help ==="
 	@echo "  help         - Show this help"
+
+# === Local CI Testing with act ===
+
+# Quick local validation (format + lint, no Docker required)
+ci-quick: check-fmt lint
+	@echo "✅ Quick local validation completed!"
+	@echo "   • Code formatting: ✓"
+	@echo "   • Linting: ✓"
+	@echo ""
+	@echo "💡 Run 'make ci-format' to test with the exact same environment as GitHub Actions"
+
+# Run format and basic checks locally (fast)
+ci-format: install-act
+	@echo "🔍 Running format and basic checks locally..."
+	act -j quick-checks
+
+# Run build artifacts workflow locally (includes linting)
+ci-build: install-act
+	@echo "🏗️ Running build artifacts workflow locally..."
+	@echo "⚠️  Note: This downloads large Docker images and may take several minutes on first run"
+	act -j build-artifacts
+
+# Run test suite locally (requires build artifacts)
+ci-test: install-act
+	@echo "🧪 Running test suite locally..."
+	@echo "⚠️  This requires build-artifacts to run first or will build them automatically"
+	act -j test
+
+# Run security scan locally
+ci-security: install-act
+	@echo "🔒 Running security scan locally..."
+	act -j security
+
+# Run documentation check locally
+ci-docs: install-act
+	@echo "📚 Running documentation check locally..."
+	act -j docs
+
+# Run examples build locally
+ci-examples: install-act
+	@echo "⚡ Running examples build locally..."
+	act -j build-examples
+
+# Run complete optimized CI pipeline (all jobs)
+ci-local: install-act
+	@echo "🚀 Running complete optimized CI pipeline locally..."
+	@echo "This will run all GitHub Actions jobs in the optimized workflow"
+	act
+
+# List all available CI jobs
+ci-list: install-act
+	@echo "📋 Available GitHub Actions jobs:"
+	act --list
+
+# Run specific stages of the CI pipeline
+ci-stage1: install-act
+	@echo "🚦 Running CI Stage 1 (Quick Checks)..."
+	act -j quick-checks
+
+ci-stage2: install-act
+	@echo "🚦 Running CI Stage 2 (Build, Security, Docs)..."
+	act -j build-artifacts -j security -j docs
+
+ci-stage3: install-act
+	@echo "🚦 Running CI Stage 3 (Tests and Examples)..."
+	act -j test -j build-examples
+
+# Debug CI workflow with verbose output
+ci-debug: install-act
+	@echo "🐞 Running CI with debug output..."
+	act --verbose
+
+# Clean act Docker containers and images
+ci-clean:
+	@echo "🧹 Cleaning act Docker containers and images..."
+	@docker container prune -f
+	@docker image prune -f
+	@echo "✅ Docker cleanup completed"
+
+# Show CI workflow graph/dependencies
+ci-graph: install-act
+	@echo "📊 CI Workflow Dependencies:"
+	@echo "Stage 0: quick-checks"
+	@echo "Stage 1: build-artifacts, security, docs (depends on quick-checks)"
+	@echo "Stage 2: test, build-examples (depends on build-artifacts)"
+	@echo "Stage 3: ci-success (depends on all previous)"
+	@echo "Stage 4: cleanup (depends on ci-success)"
+	@echo ""
+	@echo "📋 Available jobs:"
+	@act --list
+

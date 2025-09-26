@@ -9,11 +9,11 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 use std::sync::{Arc, OnceLock};
 
-use tokio::runtime::Runtime;
-use lancedb::connect;
-use lancedb::query::{QueryBase, ExecutableQuery};
-use tokio_stream::StreamExt;
 use arrow_ipc;
+use lancedb::connect;
+use lancedb::query::{ExecutableQuery, QueryBase};
+use tokio::runtime::Runtime;
+use tokio_stream::StreamExt;
 
 /// Result type for C interface
 #[repr(C)]
@@ -31,7 +31,8 @@ impl SimpleResult {
     }
 
     pub fn error(msg: String) -> Self {
-        let c_msg = CString::new(msg).unwrap_or_else(|_| CString::new("Invalid error message").unwrap());
+        let c_msg =
+            CString::new(msg).unwrap_or_else(|_| CString::new("Invalid error message").unwrap());
         Self {
             success: false,
             error_message: c_msg.into_raw(),
@@ -43,10 +44,12 @@ impl SimpleResult {
 static SIMPLE_RUNTIME: OnceLock<Arc<Runtime>> = OnceLock::new();
 
 fn get_simple_runtime() -> Arc<Runtime> {
-    SIMPLE_RUNTIME.get_or_init(|| {
-        let rt = Runtime::new().expect("Failed to create tokio runtime");
-        Arc::new(rt)
-    }).clone()
+    SIMPLE_RUNTIME
+        .get_or_init(|| {
+            let rt = Runtime::new().expect("Failed to create tokio runtime");
+            Arc::new(rt)
+        })
+        .clone()
 }
 
 /// Convert C string to Rust string
@@ -83,10 +86,8 @@ pub extern "C" fn simple_lancedb_connect(
         };
 
         let rt = get_simple_runtime();
-        
-        match rt.block_on(async {
-            connect(&uri_str).execute().await
-        }) {
+
+        match rt.block_on(async { connect(&uri_str).execute().await }) {
             Ok(conn) => {
                 let boxed_conn = Box::new(conn);
                 unsafe {
@@ -100,7 +101,9 @@ pub extern "C" fn simple_lancedb_connect(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_connect".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_connect".to_string(),
+        ))),
     }
 }
 
@@ -129,20 +132,22 @@ pub extern "C" fn simple_lancedb_connect_with_options(
         // Parse storage options from JSON
         let storage_options: serde_json::Value = match serde_json::from_str(&options_str) {
             Ok(opts) => opts,
-            Err(e) => return SimpleResult::error(format!("Failed to parse storage options JSON: {}", e)),
+            Err(e) => {
+                return SimpleResult::error(format!("Failed to parse storage options JSON: {}", e))
+            }
         };
 
         let rt = get_simple_runtime();
-        
+
         match rt.block_on(async {
             // For now, we'll handle S3 credentials via environment variables or AWS config
             // This is a simplified approach until LanceDB's API structure is clearer
-            
+
             // Apply AWS credentials if provided
             if let Some(s3_config) = storage_options.get("s3_config") {
                 apply_s3_environment_variables(s3_config);
             }
-            
+
             // Create connection with URI (storage options applied via environment)
             connect(&uri_str).execute().await
         }) {
@@ -159,7 +164,9 @@ pub extern "C" fn simple_lancedb_connect_with_options(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_connect_with_options".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_connect_with_options".to_string(),
+        ))),
     }
 }
 
@@ -167,40 +174,41 @@ pub extern "C" fn simple_lancedb_connect_with_options(
 /// This is a simplified approach that works with most AWS SDK integrations
 fn apply_s3_environment_variables(s3_config: &serde_json::Value) {
     use std::env;
-    
+
     // Set AWS credentials via environment variables if provided
     if let Some(access_key) = s3_config.get("access_key_id").and_then(|v| v.as_str()) {
         env::set_var("AWS_ACCESS_KEY_ID", access_key);
     }
-    
+
     if let Some(secret_key) = s3_config.get("secret_access_key").and_then(|v| v.as_str()) {
         env::set_var("AWS_SECRET_ACCESS_KEY", secret_key);
     }
-    
+
     if let Some(session_token) = s3_config.get("session_token").and_then(|v| v.as_str()) {
         env::set_var("AWS_SESSION_TOKEN", session_token);
     }
-    
+
     if let Some(region) = s3_config.get("region").and_then(|v| v.as_str()) {
         env::set_var("AWS_REGION", region);
         env::set_var("AWS_DEFAULT_REGION", region);
     }
-    
+
     if let Some(profile) = s3_config.get("profile").and_then(|v| v.as_str()) {
         env::set_var("AWS_PROFILE", profile);
     }
-    
+
     // Note: Other S3 options like custom endpoints, path style, etc. would need
     // to be supported by LanceDB's connection builder API directly.
     // For now, this provides basic AWS credential management.
 }
 
-
 /// Close a connection
 #[no_mangle]
 pub extern "C" fn simple_lancedb_close(handle: *mut c_void) -> *mut SimpleResult {
     if handle.is_null() {
-        return Box::into_raw(Box::new(SimpleResult::error("Invalid null handle".to_string())));
+        return Box::into_raw(Box::new(SimpleResult::error(
+            "Invalid null handle".to_string(),
+        )));
     }
 
     let result = std::panic::catch_unwind(|| -> SimpleResult {
@@ -213,7 +221,9 @@ pub extern "C" fn simple_lancedb_close(handle: *mut c_void) -> *mut SimpleResult
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_close".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_close".to_string(),
+        ))),
     }
 }
 
@@ -237,14 +247,15 @@ pub extern "C" fn simple_lancedb_table_names(
                 let len = table_names.len();
                 unsafe {
                     *count = len as c_int;
-                    
+
                     if len == 0 {
                         *names = ptr::null_mut();
                         return SimpleResult::ok();
                     }
 
                     // Allocate array of string pointers
-                    let array = libc::malloc(len * std::mem::size_of::<*mut c_char>()) as *mut *mut c_char;
+                    let array =
+                        libc::malloc(len * std::mem::size_of::<*mut c_char>()) as *mut *mut c_char;
                     if array.is_null() {
                         return SimpleResult::error("Failed to allocate memory".to_string());
                     }
@@ -254,7 +265,7 @@ pub extern "C" fn simple_lancedb_table_names(
                         let c_name = CString::new(name.clone()).unwrap().into_raw();
                         *array.add(i) = c_name;
                     }
-                    
+
                     *names = array;
                 }
                 SimpleResult::ok()
@@ -265,7 +276,9 @@ pub extern "C" fn simple_lancedb_table_names(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_table_names".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_names".to_string(),
+        ))),
     }
 }
 
@@ -328,33 +341,32 @@ pub extern "C" fn simple_lancedb_create_table(
 
         // Parse the JSON schema and create an Arrow schema
         match serde_json::from_str::<serde_json::Value>(&schema_str) {
-            Ok(schema_json_value) => {
-                match create_arrow_schema_from_json(&schema_json_value) {
-                    Ok(arrow_schema) => {
-                        match rt.block_on(async {
-                            use arrow_array::RecordBatchIterator;
-                            let empty_batches = RecordBatchIterator::new(
-                                vec![] as Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>>,
-                                Arc::new(arrow_schema)
-                            );
-                            conn.create_table(&name, empty_batches)
-                                .execute()
-                                .await
-                        }) {
-                            Ok(_) => SimpleResult::ok(),
-                            Err(e) => SimpleResult::error(format!("Failed to create table: {}", e)),
-                        }
+            Ok(schema_json_value) => match create_arrow_schema_from_json(&schema_json_value) {
+                Ok(arrow_schema) => {
+                    match rt.block_on(async {
+                        use arrow_array::RecordBatchIterator;
+                        let empty_batches = RecordBatchIterator::new(
+                            vec![]
+                                as Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>>,
+                            Arc::new(arrow_schema),
+                        );
+                        conn.create_table(&name, empty_batches).execute().await
+                    }) {
+                        Ok(_) => SimpleResult::ok(),
+                        Err(e) => SimpleResult::error(format!("Failed to create table: {}", e)),
                     }
-                    Err(e) => SimpleResult::error(format!("Failed to create Arrow schema: {}", e)),
                 }
-            }
+                Err(e) => SimpleResult::error(format!("Failed to create Arrow schema: {}", e)),
+            },
             Err(e) => SimpleResult::error(format!("Failed to parse schema JSON: {}", e)),
         }
     });
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_create_table".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_create_table".to_string(),
+        ))),
     }
 }
 
@@ -377,16 +389,15 @@ pub extern "C" fn simple_lancedb_create_table_with_ipc(
         };
 
         // Convert raw pointer to slice
-        let schema_bytes = unsafe { 
-            std::slice::from_raw_parts(schema_ipc, schema_len) 
-        };
+        let schema_bytes = unsafe { std::slice::from_raw_parts(schema_ipc, schema_len) };
 
         let conn = unsafe { &*(handle as *const lancedb::Connection) };
         let rt = get_simple_runtime();
 
         // Deserialize Arrow schema directly from IPC bytes using FileReader
         let arrow_schema = match arrow_ipc::reader::FileReader::try_new(
-            std::io::Cursor::new(schema_bytes), None
+            std::io::Cursor::new(schema_bytes),
+            None,
         ) {
             Ok(reader) => reader.schema(),
             Err(e) => return SimpleResult::error(format!("Invalid IPC schema: {}", e)),
@@ -396,11 +407,9 @@ pub extern "C" fn simple_lancedb_create_table_with_ipc(
             use arrow_array::RecordBatchIterator;
             let empty_batches = RecordBatchIterator::new(
                 vec![] as Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>>,
-                arrow_schema  // arrow_schema is already Arc<Schema>
+                arrow_schema, // arrow_schema is already Arc<Schema>
             );
-            conn.create_table(&name, empty_batches)
-                .execute()
-                .await
+            conn.create_table(&name, empty_batches).execute().await
         }) {
             Ok(_) => SimpleResult::ok(),
             Err(e) => SimpleResult::error(format!("Failed to create table: {}", e)),
@@ -409,31 +418,39 @@ pub extern "C" fn simple_lancedb_create_table_with_ipc(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_create_table_with_ipc".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_create_table_with_ipc".to_string(),
+        ))),
     }
 }
 
 /// Helper function to create Arrow schema from JSON
-fn create_arrow_schema_from_json(schema_json: &serde_json::Value) -> Result<arrow_schema::Schema, Box<dyn std::error::Error>> {
+fn create_arrow_schema_from_json(
+    schema_json: &serde_json::Value,
+) -> Result<arrow_schema::Schema, Box<dyn std::error::Error>> {
     use arrow_schema::{DataType, Field, Schema};
-    
-    let fields_array = schema_json.get("fields")
+
+    let fields_array = schema_json
+        .get("fields")
         .and_then(|f| f.as_array())
         .ok_or("Schema JSON must have 'fields' array")?;
 
     let mut fields = Vec::new();
-    
+
     for field_json in fields_array {
-        let name = field_json.get("name")
+        let name = field_json
+            .get("name")
             .and_then(|n| n.as_str())
             .ok_or("Field must have 'name' string")?
             .to_string();
-            
-        let type_str = field_json.get("type")
+
+        let type_str = field_json
+            .get("type")
             .and_then(|t| t.as_str())
             .ok_or("Field must have 'type' string")?;
-            
-        let nullable = field_json.get("nullable")
+
+        let nullable = field_json
+            .get("nullable")
             .and_then(|n| n.as_bool())
             .unwrap_or(true);
 
@@ -451,75 +468,83 @@ fn create_arrow_schema_from_json(schema_json: &serde_json::Value) -> Result<arro
             _ => {
                 // Check for vector type
                 if type_str.starts_with("fixed_size_list[int8;") {
-                    let dimension_str = type_str.trim_start_matches("fixed_size_list[int8;")
+                    let dimension_str = type_str
+                        .trim_start_matches("fixed_size_list[int8;")
                         .trim_end_matches(']');
-                    let dimension: i32 = dimension_str.parse()
+                    let dimension: i32 = dimension_str
+                        .parse()
                         .map_err(|_| format!("Invalid vector dimension: {}", dimension_str))?;
                     DataType::FixedSizeList(
                         Arc::new(Field::new("item", DataType::Int8, false)),
                         dimension,
                     )
-                }
-                else if type_str.starts_with("fixed_size_list[int16;") {
-                    let dimension_str = type_str.trim_start_matches("fixed_size_list[int16;")
+                } else if type_str.starts_with("fixed_size_list[int16;") {
+                    let dimension_str = type_str
+                        .trim_start_matches("fixed_size_list[int16;")
                         .trim_end_matches(']');
-                    let dimension: i32 = dimension_str.parse()
+                    let dimension: i32 = dimension_str
+                        .parse()
                         .map_err(|_| format!("Invalid vector dimension: {}", dimension_str))?;
                     DataType::FixedSizeList(
                         Arc::new(Field::new("item", DataType::Int16, false)),
                         dimension,
                     )
-                }
-                else if type_str.starts_with("fixed_size_list[int32;") {
-                    let dimension_str = type_str.trim_start_matches("fixed_size_list[int32;")
+                } else if type_str.starts_with("fixed_size_list[int32;") {
+                    let dimension_str = type_str
+                        .trim_start_matches("fixed_size_list[int32;")
                         .trim_end_matches(']');
-                    let dimension: i32 = dimension_str.parse()
+                    let dimension: i32 = dimension_str
+                        .parse()
                         .map_err(|_| format!("Invalid vector dimension: {}", dimension_str))?;
                     DataType::FixedSizeList(
                         Arc::new(Field::new("item", DataType::Int32, false)),
                         dimension,
                     )
-                }
-                else if type_str.starts_with("fixed_size_list[int64;") {
-                    let dimension_str = type_str.trim_start_matches("fixed_size_list[int64;")
+                } else if type_str.starts_with("fixed_size_list[int64;") {
+                    let dimension_str = type_str
+                        .trim_start_matches("fixed_size_list[int64;")
                         .trim_end_matches(']');
-                    let dimension: i32 = dimension_str.parse()
+                    let dimension: i32 = dimension_str
+                        .parse()
                         .map_err(|_| format!("Invalid vector dimension: {}", dimension_str))?;
                     DataType::FixedSizeList(
                         Arc::new(Field::new("item", DataType::Int64, false)),
                         dimension,
                     )
-                }
-                else if type_str.starts_with("fixed_size_list[float16;") {
-                    let dimension_str = type_str.trim_start_matches("fixed_size_list[float16;")
+                } else if type_str.starts_with("fixed_size_list[float16;") {
+                    let dimension_str = type_str
+                        .trim_start_matches("fixed_size_list[float16;")
                         .trim_end_matches(']');
-                    let dimension: i32 = dimension_str.parse()
+                    let dimension: i32 = dimension_str
+                        .parse()
                         .map_err(|_| format!("Invalid vector dimension: {}", dimension_str))?;
                     DataType::FixedSizeList(
                         Arc::new(Field::new("item", DataType::Float16, false)),
                         dimension,
                     )
                 } else if type_str.starts_with("fixed_size_list[float32;") {
-                    let dimension_str = type_str.trim_start_matches("fixed_size_list[float32;")
+                    let dimension_str = type_str
+                        .trim_start_matches("fixed_size_list[float32;")
                         .trim_end_matches(']');
-                    let dimension: i32 = dimension_str.parse()
+                    let dimension: i32 = dimension_str
+                        .parse()
                         .map_err(|_| format!("Invalid vector dimension: {}", dimension_str))?;
                     DataType::FixedSizeList(
                         Arc::new(Field::new("item", DataType::Float32, false)),
                         dimension,
                     )
-                }
-                else if type_str.starts_with("fixed_size_list[float64;") {
-                    let dimension_str = type_str.trim_start_matches("fixed_size_list[float64;")
+                } else if type_str.starts_with("fixed_size_list[float64;") {
+                    let dimension_str = type_str
+                        .trim_start_matches("fixed_size_list[float64;")
                         .trim_end_matches(']');
-                    let dimension: i32 = dimension_str.parse()
+                    let dimension: i32 = dimension_str
+                        .parse()
                         .map_err(|_| format!("Invalid vector dimension: {}", dimension_str))?;
                     DataType::FixedSizeList(
                         Arc::new(Field::new("item", DataType::Float64, false)),
                         dimension,
                     )
-                }
-                else {
+                } else {
                     return Err(format!("Unsupported data type: {}", type_str).into());
                 }
             }
@@ -558,7 +583,9 @@ pub extern "C" fn simple_lancedb_drop_table(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_drop_table".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_drop_table".to_string(),
+        ))),
     }
 }
 
@@ -596,7 +623,9 @@ pub extern "C" fn simple_lancedb_open_table(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_open_table".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_open_table".to_string(),
+        ))),
     }
 }
 
@@ -627,7 +656,9 @@ pub extern "C" fn simple_lancedb_table_count_rows(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_table_count_rows".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_count_rows".to_string(),
+        ))),
     }
 }
 
@@ -658,7 +689,9 @@ pub extern "C" fn simple_lancedb_table_version(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_table_version".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_version".to_string(),
+        ))),
     }
 }
 
@@ -679,7 +712,8 @@ pub extern "C" fn simple_lancedb_table_schema(
         match rt.block_on(async { table.schema().await }) {
             Ok(arrow_schema) => {
                 // Convert Arrow schema to JSON
-                let fields: Vec<serde_json::Value> = arrow_schema.fields()
+                let fields: Vec<serde_json::Value> = arrow_schema
+                    .fields()
                     .iter()
                     .map(|field| {
                         let type_str = match field.data_type() {
@@ -700,10 +734,10 @@ pub extern "C" fn simple_lancedb_table_schema(
                                 } else {
                                     "unknown"
                                 }
-                            },
-                            _ => "unknown"
+                            }
+                            _ => "unknown",
                         };
-                        
+
                         serde_json::json!({
                             "name": field.name(),
                             "type": type_str,
@@ -733,7 +767,9 @@ pub extern "C" fn simple_lancedb_table_schema(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_table_schema".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_schema".to_string(),
+        ))),
     }
 }
 
@@ -741,7 +777,9 @@ pub extern "C" fn simple_lancedb_table_schema(
 #[no_mangle]
 pub extern "C" fn simple_lancedb_table_close(table_handle: *mut c_void) -> *mut SimpleResult {
     if table_handle.is_null() {
-        return Box::into_raw(Box::new(SimpleResult::error("Invalid null handle".to_string())));
+        return Box::into_raw(Box::new(SimpleResult::error(
+            "Invalid null handle".to_string(),
+        )));
     }
 
     let result = std::panic::catch_unwind(|| -> SimpleResult {
@@ -754,7 +792,9 @@ pub extern "C" fn simple_lancedb_table_close(table_handle: *mut c_void) -> *mut 
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_table_close".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_close".to_string(),
+        ))),
     }
 }
 
@@ -793,7 +833,9 @@ pub extern "C" fn simple_lancedb_table_delete(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_table_delete".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_delete".to_string(),
+        ))),
     }
 }
 
@@ -820,10 +862,13 @@ pub extern "C" fn simple_lancedb_table_update(
         };
 
         // Parse updates JSON into a map
-        let updates: std::collections::HashMap<String, serde_json::Value> = match serde_json::from_str(&updates_str) {
-            Ok(u) => u,
-            Err(e) => return SimpleResult::error(format!("Failed to parse updates JSON: {}", e)),
-        };
+        let updates: std::collections::HashMap<String, serde_json::Value> =
+            match serde_json::from_str(&updates_str) {
+                Ok(u) => u,
+                Err(e) => {
+                    return SimpleResult::error(format!("Failed to parse updates JSON: {}", e))
+                }
+            };
 
         let table = unsafe { &*(table_handle as *const lancedb::Table) };
         let rt = get_simple_runtime();
@@ -831,15 +876,22 @@ pub extern "C" fn simple_lancedb_table_update(
         // Validate all update values first
         for (column, value) in updates.iter() {
             match value {
-                serde_json::Value::String(_) | serde_json::Value::Number(_) | 
-                serde_json::Value::Bool(_) | serde_json::Value::Null => {},
-                _ => return SimpleResult::error(format!("Unsupported update value type for column {}", column)),
+                serde_json::Value::String(_)
+                | serde_json::Value::Number(_)
+                | serde_json::Value::Bool(_)
+                | serde_json::Value::Null => {}
+                _ => {
+                    return SimpleResult::error(format!(
+                        "Unsupported update value type for column {}",
+                        column
+                    ))
+                }
             }
         }
 
-        match rt.block_on(async { 
+        match rt.block_on(async {
             let mut update_builder = table.update().only_if(&predicate_str);
-            
+
             // Add each column update separately
             for (column, value) in updates.iter() {
                 let value_str = match value {
@@ -851,19 +903,19 @@ pub extern "C" fn simple_lancedb_table_update(
                 };
                 update_builder = update_builder.column(column, &value_str);
             }
-            
-            update_builder.execute().await 
+
+            update_builder.execute().await
         }) {
-            Ok(_update_result) => {
-                SimpleResult::ok()
-            }
+            Ok(_update_result) => SimpleResult::ok(),
             Err(e) => SimpleResult::error(format!("Failed to update rows: {}", e)),
         }
     });
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_table_update".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_update".to_string(),
+        ))),
     }
 }
 
@@ -896,7 +948,9 @@ pub extern "C" fn simple_lancedb_table_add_json(
         };
 
         if json_values.is_empty() {
-            unsafe { *added_count = 0; }
+            unsafe {
+                *added_count = 0;
+            }
             return SimpleResult::ok();
         }
 
@@ -917,7 +971,9 @@ pub extern "C" fn simple_lancedb_table_add_json(
                     table.add(batch_iter).execute().await
                 }) {
                     Ok(_) => {
-                        unsafe { *added_count = record_batch.num_rows() as i64; }
+                        unsafe {
+                            *added_count = record_batch.num_rows() as i64;
+                        }
                         SimpleResult::ok()
                     }
                     Err(e) => SimpleResult::error(format!("Failed to add data to table: {}", e)),
@@ -929,7 +985,9 @@ pub extern "C" fn simple_lancedb_table_add_json(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_table_add_json".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_add_json".to_string(),
+        ))),
     }
 }
 
@@ -938,8 +996,10 @@ fn json_to_record_batch(
     json_values: &[serde_json::Value],
     schema: &arrow_schema::Schema,
 ) -> Result<arrow_array::RecordBatch, String> {
-    use arrow_array::{ArrayRef, Int32Array, Int64Array, Float32Array, Float64Array, 
-                     BooleanArray, StringArray, FixedSizeListArray};
+    use arrow_array::{
+        ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, Float64Array, Int32Array,
+        Int64Array, StringArray,
+    };
     use arrow_schema::DataType;
     use std::sync::Arc;
 
@@ -951,14 +1011,18 @@ fn json_to_record_batch(
 
         match data_type {
             DataType::Int32 => {
-                let values: Result<Vec<Option<i32>>, String> = json_values.iter().map(|obj| {
-                    match obj.get(field_name) {
+                let values: Result<Vec<Option<i32>>, String> = json_values
+                    .iter()
+                    .map(|obj| match obj.get(field_name) {
                         Some(serde_json::Value::Number(n)) => {
                             if let Some(i) = n.as_i64() {
                                 if i >= i32::MIN as i64 && i <= i32::MAX as i64 {
                                     Ok(Some(i as i32))
                                 } else {
-                                    Err(format!("Number {} out of range for i32 in field {}", i, field_name))
+                                    Err(format!(
+                                        "Number {} out of range for i32 in field {}",
+                                        i, field_name
+                                    ))
                                 }
                             } else {
                                 Err(format!("Invalid number format in field {}", field_name))
@@ -966,17 +1030,21 @@ fn json_to_record_batch(
                         }
                         Some(serde_json::Value::Null) if field.is_nullable() => Ok(None),
                         None if field.is_nullable() => Ok(None),
-                        Some(_) => Err(format!("Expected number for field {} but got different type", field_name)),
+                        Some(_) => Err(format!(
+                            "Expected number for field {} but got different type",
+                            field_name
+                        )),
                         None => Err(format!("Missing required field {}", field_name)),
-                    }
-                }).collect();
-                
+                    })
+                    .collect();
+
                 let array = Int32Array::from(values?);
                 columns.push(Arc::new(array) as ArrayRef);
             }
             DataType::Int64 => {
-                let values: Result<Vec<Option<i64>>, String> = json_values.iter().map(|obj| {
-                    match obj.get(field_name) {
+                let values: Result<Vec<Option<i64>>, String> = json_values
+                    .iter()
+                    .map(|obj| match obj.get(field_name) {
                         Some(serde_json::Value::Number(n)) => {
                             if let Some(i) = n.as_i64() {
                                 Ok(Some(i))
@@ -986,17 +1054,21 @@ fn json_to_record_batch(
                         }
                         Some(serde_json::Value::Null) if field.is_nullable() => Ok(None),
                         None if field.is_nullable() => Ok(None),
-                        Some(_) => Err(format!("Expected number for field {} but got different type", field_name)),
+                        Some(_) => Err(format!(
+                            "Expected number for field {} but got different type",
+                            field_name
+                        )),
                         None => Err(format!("Missing required field {}", field_name)),
-                    }
-                }).collect();
-                
+                    })
+                    .collect();
+
                 let array = Int64Array::from(values?);
                 columns.push(Arc::new(array) as ArrayRef);
             }
             DataType::Float32 => {
-                let values: Result<Vec<Option<f32>>, String> = json_values.iter().map(|obj| {
-                    match obj.get(field_name) {
+                let values: Result<Vec<Option<f32>>, String> = json_values
+                    .iter()
+                    .map(|obj| match obj.get(field_name) {
                         Some(serde_json::Value::Number(n)) => {
                             if let Some(f) = n.as_f64() {
                                 Ok(Some(f as f32))
@@ -1006,17 +1078,21 @@ fn json_to_record_batch(
                         }
                         Some(serde_json::Value::Null) if field.is_nullable() => Ok(None),
                         None if field.is_nullable() => Ok(None),
-                        Some(_) => Err(format!("Expected number for field {} but got different type", field_name)),
+                        Some(_) => Err(format!(
+                            "Expected number for field {} but got different type",
+                            field_name
+                        )),
                         None => Err(format!("Missing required field {}", field_name)),
-                    }
-                }).collect();
-                
+                    })
+                    .collect();
+
                 let array = Float32Array::from(values?);
                 columns.push(Arc::new(array) as ArrayRef);
             }
             DataType::Float64 => {
-                let values: Result<Vec<Option<f64>>, String> = json_values.iter().map(|obj| {
-                    match obj.get(field_name) {
+                let values: Result<Vec<Option<f64>>, String> = json_values
+                    .iter()
+                    .map(|obj| match obj.get(field_name) {
                         Some(serde_json::Value::Number(n)) => {
                             if let Some(f) = n.as_f64() {
                                 Ok(Some(f))
@@ -1026,73 +1102,99 @@ fn json_to_record_batch(
                         }
                         Some(serde_json::Value::Null) if field.is_nullable() => Ok(None),
                         None if field.is_nullable() => Ok(None),
-                        Some(_) => Err(format!("Expected number for field {} but got different type", field_name)),
+                        Some(_) => Err(format!(
+                            "Expected number for field {} but got different type",
+                            field_name
+                        )),
                         None => Err(format!("Missing required field {}", field_name)),
-                    }
-                }).collect();
-                
+                    })
+                    .collect();
+
                 let array = Float64Array::from(values?);
                 columns.push(Arc::new(array) as ArrayRef);
             }
             DataType::Boolean => {
-                let values: Result<Vec<Option<bool>>, String> = json_values.iter().map(|obj| {
-                    match obj.get(field_name) {
+                let values: Result<Vec<Option<bool>>, String> = json_values
+                    .iter()
+                    .map(|obj| match obj.get(field_name) {
                         Some(serde_json::Value::Bool(b)) => Ok(Some(*b)),
                         Some(serde_json::Value::Null) if field.is_nullable() => Ok(None),
                         None if field.is_nullable() => Ok(None),
-                        Some(_) => Err(format!("Expected boolean for field {} but got different type", field_name)),
+                        Some(_) => Err(format!(
+                            "Expected boolean for field {} but got different type",
+                            field_name
+                        )),
                         None => Err(format!("Missing required field {}", field_name)),
-                    }
-                }).collect();
-                
+                    })
+                    .collect();
+
                 let array = BooleanArray::from(values?);
                 columns.push(Arc::new(array) as ArrayRef);
             }
             DataType::Utf8 => {
-                let values: Result<Vec<Option<String>>, String> = json_values.iter().map(|obj| {
-                    match obj.get(field_name) {
+                let values: Result<Vec<Option<String>>, String> = json_values
+                    .iter()
+                    .map(|obj| match obj.get(field_name) {
                         Some(serde_json::Value::String(s)) => Ok(Some(s.clone())),
                         Some(serde_json::Value::Null) if field.is_nullable() => Ok(None),
                         None if field.is_nullable() => Ok(None),
-                        Some(_) => Err(format!("Expected string for field {} but got different type", field_name)),
+                        Some(_) => Err(format!(
+                            "Expected string for field {} but got different type",
+                            field_name
+                        )),
                         None => Err(format!("Missing required field {}", field_name)),
-                    }
-                }).collect();
-                
+                    })
+                    .collect();
+
                 let array = StringArray::from(values?);
                 columns.push(Arc::new(array) as ArrayRef);
             }
-            DataType::FixedSizeList(inner_field, list_size) if matches!(inner_field.data_type(), DataType::Float32) => {
+            DataType::FixedSizeList(inner_field, list_size)
+                if matches!(inner_field.data_type(), DataType::Float32) =>
+            {
                 // Handle vector fields (FixedSizeList of Float32)
-                let values: Result<Vec<Option<Vec<f32>>>, String> = json_values.iter().map(|obj| {
-                    match obj.get(field_name) {
+                let values: Result<Vec<Option<Vec<f32>>>, String> = json_values
+                    .iter()
+                    .map(|obj| match obj.get(field_name) {
                         Some(serde_json::Value::Array(arr)) => {
                             if arr.len() != *list_size as usize {
-                                return Err(format!("Vector field {} expects {} elements but got {}", 
-                                                 field_name, list_size, arr.len()));
+                                return Err(format!(
+                                    "Vector field {} expects {} elements but got {}",
+                                    field_name,
+                                    list_size,
+                                    arr.len()
+                                ));
                             }
-                            let vec_values: Result<Vec<f32>, String> = arr.iter().map(|v| {
-                                match v.as_f64() {
+                            let vec_values: Result<Vec<f32>, String> = arr
+                                .iter()
+                                .map(|v| match v.as_f64() {
                                     Some(f) => Ok(f as f32),
-                                    None => Err(format!("Invalid vector element in field {}", field_name)),
-                                }
-                            }).collect();
+                                    None => Err(format!(
+                                        "Invalid vector element in field {}",
+                                        field_name
+                                    )),
+                                })
+                                .collect();
                             Ok(Some(vec_values?))
                         }
                         Some(serde_json::Value::Null) if field.is_nullable() => Ok(None),
                         None if field.is_nullable() => Ok(None),
-                        Some(_) => Err(format!("Expected array for vector field {} but got different type", field_name)),
+                        Some(_) => Err(format!(
+                            "Expected array for vector field {} but got different type",
+                            field_name
+                        )),
                         None => Err(format!("Missing required field {}", field_name)),
-                    }
-                }).collect();
-                
-                let flat_values: Vec<Option<f32>> = values?.into_iter().flat_map(|opt_vec| {
-                    match opt_vec {
+                    })
+                    .collect();
+
+                let flat_values: Vec<Option<f32>> = values?
+                    .into_iter()
+                    .flat_map(|opt_vec| match opt_vec {
                         Some(vec) => vec.into_iter().map(Some).collect::<Vec<_>>(),
                         None => (0..*list_size).map(|_| None).collect::<Vec<_>>(),
-                    }
-                }).collect();
-                
+                    })
+                    .collect();
+
                 let float_array = Float32Array::from(flat_values);
                 let list_array = FixedSizeListArray::new(
                     inner_field.clone(),
@@ -1156,108 +1258,112 @@ pub extern "C" fn simple_lancedb_table_create_index(
             "vector" | "ivf_pq" => {
                 // Create vector index (IVF_PQ)
                 rt.block_on(async {
-                    let mut index_builder = table.create_index(&columns, lancedb::index::Index::IvfPq(
-                        lancedb::index::vector::IvfPqIndexBuilder::default()
-                    ));
-                    
+                    let mut index_builder = table.create_index(
+                        &columns,
+                        lancedb::index::Index::IvfPq(
+                            lancedb::index::vector::IvfPqIndexBuilder::default(),
+                        ),
+                    );
+
                     if let Some(name) = index_name_str {
                         index_builder = index_builder.name(name);
                     }
-                    
+
                     index_builder.execute().await
                 })
             }
-            "ivf_flat" => {
-                rt.block_on(async {
-                    let mut index_builder = table.create_index(&columns, lancedb::index::Index::IvfFlat(
-                        lancedb::index::vector::IvfFlatIndexBuilder::default()
-                    ));
-                    
-                    if let Some(name) = index_name_str {
-                        index_builder = index_builder.name(name);
-                    }
-                    
-                    index_builder.execute().await
-                })
-            }
-            "hnsw_pq" => {
-                rt.block_on(async {
-                    let mut index_builder = table.create_index(&columns, lancedb::index::Index::IvfHnswPq(
-                        lancedb::index::vector::IvfHnswPqIndexBuilder::default()
-                    ));
-                    
-                    if let Some(name) = index_name_str {
-                        index_builder = index_builder.name(name);
-                    }
-                    
-                    index_builder.execute().await
-                })
-            }
-            "hnsw_sq" => {
-                rt.block_on(async {
-                    let mut index_builder = table.create_index(&columns, lancedb::index::Index::IvfHnswSq(
-                        lancedb::index::vector::IvfHnswSqIndexBuilder::default()
-                    ));
-                    
-                    if let Some(name) = index_name_str {
-                        index_builder = index_builder.name(name);
-                    }
-                    
-                    index_builder.execute().await
-                })
-            }
-            "btree" => {
-                rt.block_on(async {
-                    let mut index_builder = table.create_index(&columns, lancedb::index::Index::BTree(
-                        lancedb::index::scalar::BTreeIndexBuilder {}
-                    ));
-                    
-                    if let Some(name) = index_name_str {
-                        index_builder = index_builder.name(name);
-                    }
-                    
-                    index_builder.execute().await
-                })
-            }
-            "bitmap" => {
-                rt.block_on(async {
-                    let mut index_builder = table.create_index(&columns, lancedb::index::Index::Bitmap(
-                        lancedb::index::scalar::BitmapIndexBuilder {}
-                    ));
-                    
-                    if let Some(name) = index_name_str {
-                        index_builder = index_builder.name(name);
-                    }
-                    
-                    index_builder.execute().await
-                })
-            }
-            "label_list" => {
-                rt.block_on(async {
-                    let mut index_builder = table.create_index(&columns, lancedb::index::Index::LabelList(
-                        lancedb::index::scalar::LabelListIndexBuilder {}
-                    ));
-                    
-                    if let Some(name) = index_name_str {
-                        index_builder = index_builder.name(name);
-                    }
-                    
-                    index_builder.execute().await
-                })
-            }
-            "fts" => {
-                rt.block_on(async {
-                    let mut index_builder = table.create_index(&columns, lancedb::index::Index::FTS(
-                        lancedb::index::scalar::FtsIndexBuilder::default()
-                    ));
-                    
-                    if let Some(name) = index_name_str {
-                        index_builder = index_builder.name(name);
-                    }
-                    
-                    index_builder.execute().await
-                })
-            }
+            "ivf_flat" => rt.block_on(async {
+                let mut index_builder = table.create_index(
+                    &columns,
+                    lancedb::index::Index::IvfFlat(
+                        lancedb::index::vector::IvfFlatIndexBuilder::default(),
+                    ),
+                );
+
+                if let Some(name) = index_name_str {
+                    index_builder = index_builder.name(name);
+                }
+
+                index_builder.execute().await
+            }),
+            "hnsw_pq" => rt.block_on(async {
+                let mut index_builder = table.create_index(
+                    &columns,
+                    lancedb::index::Index::IvfHnswPq(
+                        lancedb::index::vector::IvfHnswPqIndexBuilder::default(),
+                    ),
+                );
+
+                if let Some(name) = index_name_str {
+                    index_builder = index_builder.name(name);
+                }
+
+                index_builder.execute().await
+            }),
+            "hnsw_sq" => rt.block_on(async {
+                let mut index_builder = table.create_index(
+                    &columns,
+                    lancedb::index::Index::IvfHnswSq(
+                        lancedb::index::vector::IvfHnswSqIndexBuilder::default(),
+                    ),
+                );
+
+                if let Some(name) = index_name_str {
+                    index_builder = index_builder.name(name);
+                }
+
+                index_builder.execute().await
+            }),
+            "btree" => rt.block_on(async {
+                let mut index_builder = table.create_index(
+                    &columns,
+                    lancedb::index::Index::BTree(lancedb::index::scalar::BTreeIndexBuilder {}),
+                );
+
+                if let Some(name) = index_name_str {
+                    index_builder = index_builder.name(name);
+                }
+
+                index_builder.execute().await
+            }),
+            "bitmap" => rt.block_on(async {
+                let mut index_builder = table.create_index(
+                    &columns,
+                    lancedb::index::Index::Bitmap(lancedb::index::scalar::BitmapIndexBuilder {}),
+                );
+
+                if let Some(name) = index_name_str {
+                    index_builder = index_builder.name(name);
+                }
+
+                index_builder.execute().await
+            }),
+            "label_list" => rt.block_on(async {
+                let mut index_builder = table.create_index(
+                    &columns,
+                    lancedb::index::Index::LabelList(
+                        lancedb::index::scalar::LabelListIndexBuilder {},
+                    ),
+                );
+
+                if let Some(name) = index_name_str {
+                    index_builder = index_builder.name(name);
+                }
+
+                index_builder.execute().await
+            }),
+            "fts" => rt.block_on(async {
+                let mut index_builder = table.create_index(
+                    &columns,
+                    lancedb::index::Index::FTS(lancedb::index::scalar::FtsIndexBuilder::default()),
+                );
+
+                if let Some(name) = index_name_str {
+                    index_builder = index_builder.name(name);
+                }
+
+                index_builder.execute().await
+            }),
             _ => return SimpleResult::error(format!("Unsupported index type: {}", index_type_str)),
         };
 
@@ -1269,7 +1375,9 @@ pub extern "C" fn simple_lancedb_table_create_index(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_table_create_index".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_create_index".to_string(),
+        ))),
     }
 }
 
@@ -1291,7 +1399,7 @@ pub extern "C" fn simple_lancedb_table_get_indexes(
             Ok(indexes) => {
                 // Convert the indexes to a JSON-serializable format
                 let mut index_info_list = Vec::new();
-                
+
                 for index in indexes {
                     let index_info = serde_json::json!({
                         "name": index.name,
@@ -1302,18 +1410,20 @@ pub extern "C" fn simple_lancedb_table_get_indexes(
                 }
 
                 match serde_json::to_string(&index_info_list) {
-                    Ok(json_str) => {
-                        match CString::new(json_str) {
-                            Ok(c_string) => {
-                                unsafe {
-                                    *indexes_json = c_string.into_raw();
-                                }
-                                SimpleResult::ok()
+                    Ok(json_str) => match CString::new(json_str) {
+                        Ok(c_string) => {
+                            unsafe {
+                                *indexes_json = c_string.into_raw();
                             }
-                            Err(_) => SimpleResult::error("Failed to convert JSON to C string".to_string()),
+                            SimpleResult::ok()
                         }
+                        Err(_) => {
+                            SimpleResult::error("Failed to convert JSON to C string".to_string())
+                        }
+                    },
+                    Err(e) => {
+                        SimpleResult::error(format!("Failed to serialize indexes to JSON: {}", e))
                     }
-                    Err(e) => SimpleResult::error(format!("Failed to serialize indexes to JSON: {}", e)),
                 }
             }
             Err(e) => SimpleResult::error(format!("Failed to list indexes: {}", e)),
@@ -1322,7 +1432,9 @@ pub extern "C" fn simple_lancedb_table_get_indexes(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_table_get_indexes".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_get_indexes".to_string(),
+        ))),
     }
 }
 
@@ -1374,35 +1486,46 @@ pub extern "C" fn simple_lancedb_table_select_query(
                     match vector {
                         Ok(vec) => {
                             // Use the limit from query config, or k if not specified
-                            let effective_limit = query_config.get("limit")
+                            let effective_limit = query_config
+                                .get("limit")
                                 .and_then(|v| v.as_u64())
                                 .map(|l| l as usize)
                                 .unwrap_or(k as usize);
-                            
-                            let mut vector_query = table.query().nearest_to(vec)?.column(column).limit(effective_limit);
-                            
+
+                            let mut vector_query = table
+                                .query()
+                                .nearest_to(vec)?
+                                .column(column)
+                                .limit(effective_limit);
+
                             // Apply WHERE filter for vector queries
-                            if let Some(filter) = query_config.get("where").and_then(|v| v.as_str()) {
+                            if let Some(filter) = query_config.get("where").and_then(|v| v.as_str())
+                            {
                                 vector_query = vector_query.only_if(filter);
                             }
-                            
+
                             // Apply column selection for vector queries
-                            if let Some(columns) = query_config.get("columns").and_then(|v| v.as_array()) {
+                            if let Some(columns) =
+                                query_config.get("columns").and_then(|v| v.as_array())
+                            {
                                 let column_names: Vec<String> = columns
                                     .iter()
                                     .filter_map(|v| v.as_str())
                                     .map(|s| s.to_string())
                                     .collect();
                                 if !column_names.is_empty() {
-                                    vector_query = vector_query.select(lancedb::query::Select::Columns(column_names));
+                                    vector_query = vector_query
+                                        .select(lancedb::query::Select::Columns(column_names));
                                 }
                             }
-                            
+
                             return vector_query.execute().await;
                         }
-                        Err(e) => return Err(lancedb::Error::InvalidInput {
-                            message: format!("Failed to parse vector: {}", e),
-                        }),
+                        Err(e) => {
+                            return Err(lancedb::Error::InvalidInput {
+                                message: format!("Failed to parse vector: {}", e),
+                            })
+                        }
                     }
                 }
             }
@@ -1457,7 +1580,7 @@ pub extern "C" fn simple_lancedb_table_select_query(
             Ok(record_batch_reader) => {
                 // Convert RecordBatch results to JSON
                 let mut results = Vec::new();
-                
+
                 // Note: This is a simplified approach. In a real implementation,
                 // you might want to stream results or handle large datasets differently.
                 match rt.block_on(async {
@@ -1469,17 +1592,18 @@ pub extern "C" fn simple_lancedb_table_select_query(
                                 for row_idx in 0..batch.num_rows() {
                                     let mut row = serde_json::Map::new();
                                     let schema = batch.schema();
-                                    
+
                                     for (col_idx, field) in schema.fields().iter().enumerate() {
                                         let column = batch.column(col_idx);
                                         let field_name = field.name();
-                                        
+
                                         // Convert Arrow array value to JSON value
-                                        let json_value = match convert_arrow_value_to_json(column, row_idx) {
-                                            Ok(v) => v,
-                                            Err(_) => serde_json::Value::Null,
-                                        };
-                                        
+                                        let json_value =
+                                            match convert_arrow_value_to_json(column, row_idx) {
+                                                Ok(v) => v,
+                                                Err(_) => serde_json::Value::Null,
+                                            };
+
                                         row.insert(field_name.clone(), json_value);
                                     }
                                     results.push(serde_json::Value::Object(row));
@@ -1493,21 +1617,26 @@ pub extern "C" fn simple_lancedb_table_select_query(
                     Ok(()) => {
                         // Serialize results to JSON
                         match serde_json::to_string(&results) {
-                            Ok(json_str) => {
-                                match CString::new(json_str) {
-                                    Ok(c_string) => {
-                                        unsafe {
-                                            *result_json = c_string.into_raw();
-                                        }
-                                        SimpleResult::ok()
+                            Ok(json_str) => match CString::new(json_str) {
+                                Ok(c_string) => {
+                                    unsafe {
+                                        *result_json = c_string.into_raw();
                                     }
-                                    Err(_) => SimpleResult::error("Failed to convert results to C string".to_string()),
+                                    SimpleResult::ok()
                                 }
-                            }
-                            Err(e) => SimpleResult::error(format!("Failed to serialize results to JSON: {}", e)),
+                                Err(_) => SimpleResult::error(
+                                    "Failed to convert results to C string".to_string(),
+                                ),
+                            },
+                            Err(e) => SimpleResult::error(format!(
+                                "Failed to serialize results to JSON: {}",
+                                e
+                            )),
                         }
                     }
-                    Err(e) => SimpleResult::error(format!("Failed to process query results: {}", e)),
+                    Err(e) => {
+                        SimpleResult::error(format!("Failed to process query results: {}", e))
+                    }
                 }
             }
             Err(e) => SimpleResult::error(format!("Failed to execute query: {}", e)),
@@ -1516,57 +1645,82 @@ pub extern "C" fn simple_lancedb_table_select_query(
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
-        Err(_) => Box::into_raw(Box::new(SimpleResult::error("Panic in simple_lancedb_table_select_query".to_string()))),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_select_query".to_string(),
+        ))),
     }
 }
 
 /// Helper function to convert Arrow array value to JSON
-fn convert_arrow_value_to_json(array: &dyn arrow_array::Array, row_idx: usize) -> Result<serde_json::Value, String> {
+fn convert_arrow_value_to_json(
+    array: &dyn arrow_array::Array,
+    row_idx: usize,
+) -> Result<serde_json::Value, String> {
     use arrow_schema::DataType;
-    
+
     if array.is_null(row_idx) {
         return Ok(serde_json::Value::Null);
     }
-    
+
     match array.data_type() {
         DataType::Int32 => {
-            let typed_array = array.as_any().downcast_ref::<arrow_array::Int32Array>()
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::Int32Array>()
                 .ok_or("Failed to downcast to Int32Array")?;
-            Ok(serde_json::Value::Number(serde_json::Number::from(typed_array.value(row_idx))))
+            Ok(serde_json::Value::Number(serde_json::Number::from(
+                typed_array.value(row_idx),
+            )))
         }
         DataType::Int64 => {
-            let typed_array = array.as_any().downcast_ref::<arrow_array::Int64Array>()
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::Int64Array>()
                 .ok_or("Failed to downcast to Int64Array")?;
-            Ok(serde_json::Value::Number(serde_json::Number::from(typed_array.value(row_idx))))
+            Ok(serde_json::Value::Number(serde_json::Number::from(
+                typed_array.value(row_idx),
+            )))
         }
         DataType::Float32 => {
-            let typed_array = array.as_any().downcast_ref::<arrow_array::Float32Array>()
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::Float32Array>()
                 .ok_or("Failed to downcast to Float32Array")?;
             Ok(serde_json::json!(typed_array.value(row_idx)))
         }
         DataType::Float64 => {
-            let typed_array = array.as_any().downcast_ref::<arrow_array::Float64Array>()
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::Float64Array>()
                 .ok_or("Failed to downcast to Float64Array")?;
             Ok(serde_json::json!(typed_array.value(row_idx)))
         }
         DataType::Boolean => {
-            let typed_array = array.as_any().downcast_ref::<arrow_array::BooleanArray>()
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::BooleanArray>()
                 .ok_or("Failed to downcast to BooleanArray")?;
             Ok(serde_json::Value::Bool(typed_array.value(row_idx)))
         }
         DataType::Utf8 => {
-            let typed_array = array.as_any().downcast_ref::<arrow_array::StringArray>()
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::StringArray>()
                 .ok_or("Failed to downcast to StringArray")?;
-            Ok(serde_json::Value::String(typed_array.value(row_idx).to_string()))
+            Ok(serde_json::Value::String(
+                typed_array.value(row_idx).to_string(),
+            ))
         }
         DataType::FixedSizeList(_, list_size) => {
-            let typed_array = array.as_any().downcast_ref::<arrow_array::FixedSizeListArray>()
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::FixedSizeListArray>()
                 .ok_or("Failed to downcast to FixedSizeListArray")?;
             let values_array = typed_array.values();
-            
+
             let start_idx = row_idx * (*list_size as usize);
             let end_idx = start_idx + (*list_size as usize);
-            
+
             let mut list_values = Vec::new();
             for i in start_idx..end_idx {
                 match convert_arrow_value_to_json(values_array.as_ref(), i) {
@@ -1576,7 +1730,10 @@ fn convert_arrow_value_to_json(array: &dyn arrow_array::Array, row_idx: usize) -
             }
             Ok(serde_json::Value::Array(list_values))
         }
-        _ => Ok(serde_json::Value::String(format!("Unsupported type: {:?}", array.data_type()))),
+        _ => Ok(serde_json::Value::String(format!(
+            "Unsupported type: {:?}",
+            array.data_type()
+        ))),
     }
 }
 

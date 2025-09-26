@@ -174,14 +174,14 @@ func insertIndexedData(table *lancedb.Table, schema *arrow.Schema) error {
 
 	// Build Arrow arrays
 	builders := []interface{}{
-		array.NewInt32Builder(pool),                          // id
-		array.NewStringBuilder(pool),                         // title
-		array.NewStringBuilder(pool),                         // content
-		array.NewStringBuilder(pool),                         // category
-		array.NewStringBuilder(pool),                         // status
-		array.NewFloat64Builder(pool),                        // price
-		array.NewInt32Builder(pool),                          // rating
-		array.NewStringBuilder(pool),                        // tags
+		array.NewInt32Builder(pool),   // id
+		array.NewStringBuilder(pool),  // title
+		array.NewStringBuilder(pool),  // content
+		array.NewStringBuilder(pool),  // category
+		array.NewStringBuilder(pool),  // status
+		array.NewFloat64Builder(pool), // price
+		array.NewInt32Builder(pool),   // rating
+		array.NewStringBuilder(pool),  // tags
 	}
 
 	// Append data
