@@ -1,0 +1,330 @@
+name: CI (Optimized)
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ⚡ Phase 1: Lightning-fast checks (only formatting)
+  quick-checks:
+    name: Quick Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (minimal)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Setup Go (minimal)  
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Check Rust formatting
+        run: cd rust && cargo fmt -- --check
+
+      - name: Check Go formatting
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Go code is not formatted. Run 'go fmt ./...' to fix."
+            gofmt -l .
+            exit 1
+          fi
+
+  # 🏗️ Phase 2: Build artifacts once (includes linting)
+  build-artifacts:
+    name: Build Artifacts
+    needs: quick-checks
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rust-target: x86_64-unknown-linux-gnu
+            artifact-name: linux-x64
+          - os: macos-latest
+            rust-target: aarch64-apple-darwin
+            artifact-name: macos-arm64
+          - os: macos-13
+            rust-target: x86_64-apple-darwin
+            artifact-name: macos-x64
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: ${{ matrix.rust-target }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      # Install system dependencies
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install system dependencies (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew install protobuf
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ${{ matrix.os }}-cargo-${{ matrix.rust-target }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.os }}-cargo-${{ matrix.rust-target }}-
+            ${{ matrix.os }}-cargo-
+
+      - name: Install cbindgen (cached)
+        run: |
+          if ! command -v cbindgen &> /dev/null; then
+            cargo install cbindgen --version ^0.26
+          fi
+
+      # Rust linting (moved here from quick-checks)
+      - name: Lint Rust code
+        run: |
+          cd rust
+          cargo clippy --target ${{ matrix.rust-target }} -- -D warnings
+
+      - name: Build Rust library
+        run: |
+          cd rust
+          cargo build --release --target ${{ matrix.rust-target }}
+
+      - name: Generate C headers
+        run: |
+          mkdir -p rust/target/generated/include
+          cd rust
+          cbindgen --config cbindgen.toml --crate lancedb-go --output target/generated/include/lancedb.h
+
+      - name: Copy library files
+        run: |
+          mkdir -p rust/target/generated/lib
+          cp rust/target/${{ matrix.rust-target }}/release/liblancedb_go.* rust/target/generated/lib/
+
+      - name: Build Go module
+        run: go build ./...
+
+      # 📦 Upload reusable artifacts
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.artifact-name }}
+          path: |
+            rust/target/generated/
+            rust/target/${{ matrix.rust-target }}/release/liblancedb_go.*
+          retention-days: 1
+          compression-level: 6
+
+  # 🧪 Phase 3: Testing (reuses artifacts)
+  test:
+    name: Test Suite
+    needs: build-artifacts
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go-version: ['1.21', '1.22', '1.23']
+        exclude:
+          # Optimize: only test latest Go on macOS
+          - os: macos-latest
+            go-version: '1.22'
+          - os: macos-latest
+            go-version: '1.21'
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      # 📥 Download pre-built artifacts (no rebuild!)
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ matrix.os == 'ubuntu-latest' && 'linux-x64' || 'macos-arm64' }}
+          path: .
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: v1.55.2
+          skip-cache: false
+
+      - name: Run Go linting
+        run: golangci-lint run --config .golangci.yml
+
+      - name: Run tests with race detection
+        run: go test -v -race ./...
+
+      - name: Run benchmarks
+        run: go test -bench=. -benchmem ./...
+
+  # 🔒 Security scanning (lightweight, no rebuild)
+  security:
+    name: Security Scan
+    needs: quick-checks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (minimal)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Go (minimal)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Run Rust security audit (cached)
+        run: |
+          if ! command -v cargo-audit &> /dev/null; then
+            cargo install --locked cargo-audit
+          fi
+          cd rust && cargo audit
+
+      - name: Run Go security scan
+        uses: securecodewarrior/github-action-gosec@master
+        with:
+          args: '-fmt sarif -out gosec.sarif ./...'
+        continue-on-error: true
+
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gosec.sarif
+
+  # ⚡ Examples (reuses artifacts)
+  build-examples:
+    name: Build Examples
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      # 📥 Reuse build artifacts instead of rebuilding
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-linux-x64
+          path: .
+
+      - name: Build examples (using pre-built artifacts)
+        run: |
+          for dir in examples/*/; do
+            if [ -d "$dir" ] && [ "$(basename "$dir")" != "README.md" ]; then
+              example_name=$(basename "$dir")
+              echo "Building $example_name..."
+              cd "$dir"
+              go build -o "../../rust/target/${example_name}_example" .
+              cd ../..
+            fi
+          done
+
+      - name: Upload example binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: examples
+          path: rust/target/*_example
+          retention-days: 1
+
+  # 📚 Documentation (minimal dependencies)
+  docs:
+    name: Documentation
+    needs: quick-checks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (minimal)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Go (minimal)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Generate Rust documentation
+        run: cd rust && cargo doc --no-deps
+
+      - name: Check Go documentation
+        run: go doc -all ./... > /dev/null
+
+  # 🎯 Final status aggregation
+  ci-success:
+    name: CI Success
+    if: always()
+    needs: [quick-checks, build-artifacts, test, security, build-examples, docs]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check all jobs status
+        run: |
+          jobs_status='${{ toJson(needs) }}'
+          echo "Jobs status: $jobs_status"
+          
+          if echo "$jobs_status" | jq -r '.[] | select(.result != "success" and .result != "skipped") | .result' | grep -q .; then
+            echo "❌ Some jobs failed"
+            exit 1
+          fi
+          
+          echo "✅ All jobs completed successfully!"
+
+  # 🧹 Cleanup (optional)
+  cleanup:
+    name: Cleanup Artifacts
+    if: always()
+    needs: ci-success
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete temporary artifacts
+        uses: geekyeggo/delete-artifact@v4
+        with:
+          name: |
+            build-*
+            examples
+        continue-on-error: true

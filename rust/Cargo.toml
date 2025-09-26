@@ -1,0 +1,45 @@
+[package]
+name = "lancedb-go"
+version = "0.25.1-beta.1"
+edition = "2021"
+description = "CGO bindings for LanceDB"
+license = "Apache-2.0"
+repository = "https://github.com/lancedb/lancedb-go"
+keywords = ["lancedb", "lance", "database", "vector", "search"]
+categories = ["database-implementations"]
+authors = ["LanceDB Devs <dev@lancedb.com>"]
+rust-version = "1.78.0"
+publish = false
+
+[lib]
+name = "lancedb_go"
+crate-type = ["cdylib", "staticlib"]
+path = "src/lib_simple.rs"
+
+[dependencies]
+lancedb = { git = "https://github.com/lancedb/lancedb.git", tag = "v0.22.1", default-features = false }
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros"] }
+libc = "0.2"
+log = "0.4"
+env_logger = "0.11"
+arrow = { version = "55.1", optional = false }
+arrow-array = "55.1"
+arrow-data = "55.1"
+arrow-schema = "55.1"
+arrow-ord = "55.1"
+arrow-cast = "55.1"
+arrow-ipc = "55.1"
+serde_json = "1.0"
+tokio-stream = "0.1"
+
+[target.aarch64-apple-darwin.dependencies]
+
+[target.x86_64-apple-darwin.dependencies]
+
+[features]
+default = []
+remote = ["lancedb/remote"]
+fp16kernels = ["lancedb/fp16kernels"]
+
+[build-dependencies]
+cbindgen = "0.26"

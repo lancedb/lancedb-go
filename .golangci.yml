@@ -1,0 +1,174 @@
+# golangci-lint configuration for lancedb-go
+# See: https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 5m
+  tests: true
+  go: "1.21"
+
+output:
+  formats:
+    - format: colored-line-number
+  print-issued-lines: true
+  print-linter-name: true
+
+linters:
+  disable-all: true
+  enable:
+    # Basic linters - these should be available in all versions
+    - errcheck        # Check for unchecked errors
+    - gosimple        # Simplify code
+    - govet           # Vet examines Go source code
+    - ineffassign     # Detect ineffectual assignments
+    - staticcheck     # Advanced Go linter
+    - typecheck       # Type-check Go code
+    - unused          # Find unused constants, variables, functions and types
+    
+    # Code quality
+    - gofmt           # Check if code is formatted with gofmt
+    - goimports       # Check if imports are sorted
+    - misspell        # Find commonly misspelled English words
+    - unconvert       # Remove unnecessary type conversions
+    
+    # Style and conventions
+    - revive          # Fast, configurable, extensible, flexible linter for Go
+    - gocyclo         # Cyclomatic complexity
+    
+    # Security
+    - gosec           # Security checker
+    
+    # Maintainability  
+    - goconst         # Find repeated strings that could be constants
+
+linters-settings:
+  gofmt:
+    simplify: true
+  
+  goimports:
+    local-prefixes: github.com/lancedb/lancedb-go
+  
+  govet:
+    enable-all: false
+  
+  revive:
+    min-confidence: 0.8
+    rules:
+      - name: exported
+        disabled: false
+      - name: package-comments
+        disabled: true  # Allow packages without comments for now
+      - name: var-naming
+        disabled: false
+      - name: indent-error-flow
+        disabled: false
+      - name: if-return
+        disabled: false
+      - name: blank-imports
+        disabled: false
+      - name: context-as-argument
+        disabled: false
+      - name: dot-imports
+        disabled: false
+      - name: error-return
+        disabled: false
+      - name: error-strings
+        disabled: false
+      - name: error-naming
+        disabled: false
+      - name: increment-decrement
+        disabled: false
+      - name: range
+        disabled: false
+      - name: receiver-naming
+        disabled: false
+      - name: time-naming
+        disabled: false
+      - name: unexported-return
+        disabled: false
+      - name: indent-error-flow
+        disabled: false
+      - name: errorf
+        disabled: false
+      - name: empty-block
+        disabled: false
+      - name: superfluous-else
+        disabled: false
+      - name: unused-parameter
+        disabled: false
+      - name: unreachable-code
+        disabled: false
+      - name: redefines-builtin-id
+        disabled: false
+  
+  staticcheck:
+    checks: ["all"]
+  
+  gosec:
+    severity: medium
+    confidence: medium
+    excludes:
+      - G104  # Allow unhandled errors for specific cases (like Close() calls)
+  
+  gocyclo:
+    min-complexity: 15
+  
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+    ignore-tests: true
+
+issues:
+  # Exclude specific directories
+  exclude-dirs:
+    - rust
+  
+  # Exclude specific file patterns
+  exclude-files:
+    - ".*\\.pb\\.go$"
+    - ".*_generated\\.go$"
+  
+  # List of regexps of issue texts to exclude, empty list by default.
+  exclude:
+    # Exclude some linters from running on tests files.
+    - "Error return value of .((os\\.)?std(out|err)\\..*|.*Close|.*Flush|os\\.Remove(All)?|.*printf?|os\\.(Un)?Setenv). is not checked"
+    - "exported (.+) should have comment or be unexported"
+    - "ST1000:"  # package comment
+  
+  exclude-rules:
+    # Exclude some linters from running on tests files.
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - gosec
+    
+    # Exclude some linters from running on example files.
+    - path: examples/
+      linters:
+        - errcheck
+        - gosec
+        - goconst
+    
+    # Disable certain linters for CGO files
+    - path: ".*\\.go"
+      text: "G103:"  # Allow CGO usage
+      linters:
+        - gosec
+    
+    # Allow long lines in CGO comments
+    - source: "^//.*#cgo"
+      linters:
+        - lll
+
+  # Maximum issues count per one linter. Set to 0 to disable. Default is 50.
+  max-issues-per-linter: 0
+  
+  # Maximum count of issues with the same text. Set to 0 to disable. Default is 3.
+  max-same-issues: 0
+
+  # Show only new issues: if there are unstaged changes or untracked files,
+  # only those changes are analyzed, else only changes in HEAD~ are analyzed.
+  new: false
+
+  # Fix found issues (if it's supported by the linter)
+  fix: false
