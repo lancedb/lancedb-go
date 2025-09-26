@@ -1,0 +1,303 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch: # Allow manual triggers
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Check code formatting and basic linting
+  format-check:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Check Rust formatting
+        run: |
+          cd rust
+          cargo fmt -- --check
+
+      - name: Check Go formatting  
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Go code is not formatted. Run 'go fmt ./...' to fix."
+            gofmt -l .
+            exit 1
+          fi
+
+  # Build and test matrix
+  build-test:
+    name: Build & Test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-13] # macos-13 for x86_64, macos-latest for arm64
+        go-version: ['1.21', '1.22', '1.23']
+        include:
+          - os: ubuntu-latest
+            rust-target: x86_64-unknown-linux-gnu
+          - os: macos-latest  
+            rust-target: aarch64-apple-darwin
+          - os: macos-13
+            rust-target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: ${{ matrix.rust-target }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ${{ matrix.os }}-cargo-${{ matrix.rust-target }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.os }}-cargo-${{ matrix.rust-target }}-
+            ${{ matrix.os }}-cargo-
+
+      - name: Install cbindgen
+        run: cargo install cbindgen --version ^0.26
+
+      - name: Install golangci-lint (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.55.2
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Install golangci-lint (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew install golangci-lint
+
+      - name: Build Rust library
+        run: |
+          cd rust
+          cargo build --release --target ${{ matrix.rust-target }}
+
+      - name: Generate C headers
+        run: |
+          mkdir -p rust/target/generated/include
+          cd rust
+          cbindgen --config cbindgen.toml --crate lancedb-go --output target/generated/include/lancedb.h
+
+      - name: Copy library files
+        run: |
+          mkdir -p rust/target/generated/lib
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            cp rust/target/${{ matrix.rust-target }}/release/liblancedb_go.a rust/target/generated/lib/
+          else
+            cp rust/target/${{ matrix.rust-target }}/release/liblancedb_go.a rust/target/generated/lib/
+          fi
+
+      - name: Download Go dependencies
+        run: |
+          go mod download
+          go mod tidy
+
+      - name: Build Go module
+        run: go build ./...
+
+      - name: Lint Rust code
+        run: |
+          cd rust
+          cargo clippy --target ${{ matrix.rust-target }} -- -D warnings
+
+      - name: Lint Go code
+        run: golangci-lint run --config .golangci.yml
+
+      - name: Run Go tests
+        run: go test -v -race ./...
+
+      - name: Run Go benchmarks
+        run: go test -bench=. -benchmem ./...
+
+  # Build examples
+  build-examples:
+    name: Build Examples
+    needs: [format-check, build-test]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ubuntu-latest-cargo-examples-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ubuntu-latest-cargo-examples-
+            ubuntu-latest-cargo-
+
+      - name: Install cbindgen
+        run: cargo install cbindgen --version ^0.26
+
+      - name: Build project (required for examples)
+        run: make build
+
+      - name: Build examples
+        run: make examples
+
+      - name: Test examples build artifacts
+        run: |
+          echo "Checking built examples..."
+          ls -la rust/target/*_example || echo "No example binaries found"
+          
+  # Security scan
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Run Rust security audit
+        run: |
+          cargo install cargo-audit
+          cd rust
+          cargo audit
+
+      - name: Run Go security scan
+        uses: securecodewarrior/github-action-gosec@master
+        with:
+          args: '-fmt sarif -out gosec.sarif ./...'
+        continue-on-error: true
+
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gosec.sarif
+
+  # Documentation check
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ubuntu-latest-cargo-docs-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ubuntu-latest-cargo-docs-
+            ubuntu-latest-cargo-
+
+      - name: Generate Rust documentation
+        run: |
+          cd rust
+          cargo doc --no-deps
+
+      - name: Check Go documentation
+        run: |
+          go doc -all ./... > /dev/null
+
+  # Final status check
+  ci-success:
+    name: CI Success
+    if: always()
+    needs: [format-check, build-test, build-examples, security, docs]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check all jobs status
+        run: |
+          if [[ "${{ needs.format-check.result }}" != "success" ]]; then
+            echo "Format check failed"
+            exit 1
+          fi
+          if [[ "${{ needs.build-test.result }}" != "success" ]]; then
+            echo "Build and test failed"
+            exit 1
+          fi
+          if [[ "${{ needs.build-examples.result }}" != "success" ]]; then
+            echo "Build examples failed"
+            exit 1
+          fi
+          if [[ "${{ needs.security.result }}" != "success" ]]; then
+            echo "Security scan failed"
+            exit 1
+          fi
+          if [[ "${{ needs.docs.result }}" != "success" ]]; then
+            echo "Documentation check failed"
+            exit 1
+          fi
+          echo "All CI jobs completed successfully!"

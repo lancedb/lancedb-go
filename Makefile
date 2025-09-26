@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-.PHONY: all build test clean install-deps fmt lint lint-rust lint-go lint-go-fix lint-report examples docs release
+.PHONY: all build test clean install-deps install-act fmt lint lint-rust lint-go lint-go-fix lint-report examples docs release ci-local ci-format ci-build ci-security ci-docs ci-examples
 
 # Default target
 all: build test
@@ -48,6 +48,32 @@ install-deps:
 	@which golangci-lint > /dev/null || (echo "Installing golangci-lint..." && \
 		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell go env GOPATH)/bin v1.55.2)
 	@echo "Development dependencies installed successfully!"
+
+# Install act (GitHub Actions local runner)
+install-act:
+	@echo "Installing act (GitHub Actions local runner)..."
+	@which act > /dev/null || ( \
+		if [ "$$(uname)" = "Darwin" ]; then \
+			echo "Installing act via Homebrew..."; \
+			brew install act; \
+		elif [ "$$(uname)" = "Linux" ]; then \
+			echo "Installing act via script..."; \
+			curl https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash; \
+		else \
+			echo "Please install act manually from https://github.com/nektos/act"; \
+			exit 1; \
+		fi \
+	)
+	@echo "Configuring act for Apple Silicon compatibility..."
+	@mkdir -p "$$HOME/Library/Application Support/act"
+	@if [ ! -f "$$HOME/Library/Application Support/act/actrc" ]; then \
+		echo "Creating act configuration..."; \
+		echo "-P ubuntu-latest=catthehacker/ubuntu:act-latest" > "$$HOME/Library/Application Support/act/actrc"; \
+		echo "-P macos-latest=catthehacker/ubuntu:act-latest" >> "$$HOME/Library/Application Support/act/actrc"; \
+		echo "-P macos-13=catthehacker/ubuntu:act-latest" >> "$$HOME/Library/Application Support/act/actrc"; \
+		echo "--container-architecture linux/amd64" >> "$$HOME/Library/Application Support/act/actrc"; \
+	fi
+	@echo "✅ act installed and configured successfully!"
 
 # Format code
 fmt:
@@ -154,8 +180,14 @@ install-hooks:
 	@echo "Pre-commit hooks installed"
 
 # Development setup
-dev-setup: install-deps install-hooks
+dev-setup: install-deps install-act install-hooks
 	@echo "Development environment setup complete"
+	@echo ""
+	@echo "✅ Your development environment is ready!"
+	@echo "💡 Try these commands to get started:"
+	@echo "   make ci-quick      # Quick local validation"
+	@echo "   make ci-format     # Test with exact GitHub Actions environment"
+	@echo "   make help          # See all available commands"
 
 # Check if required tools are installed
 check-tools:
@@ -164,26 +196,96 @@ check-tools:
 	@command -v cbindgen >/dev/null 2>&1 || { echo "cbindgen is required. Install with: cargo install cbindgen"; exit 1; }
 	@echo "All required tools are installed"
 
+# === Local CI Testing with act ===
+
+# Run complete local CI pipeline (all jobs)
+ci-local: install-act
+	@echo "🚀 Running complete CI pipeline locally..."
+	@echo "This will run all GitHub Actions jobs locally using act"
+	act
+
+# Run format check locally (fast)
+ci-format: install-act
+	@echo "🔍 Running format check locally..."
+	act -j format-check
+
+# Run build and test matrix locally (slower, requires Docker)
+ci-build: install-act
+	@echo "🔨 Running build and test jobs locally..."
+	@echo "⚠️  Note: This downloads large Docker images and may take several minutes on first run"
+	act -j build-test
+
+# Run security scan locally
+ci-security: install-act
+	@echo "🔒 Running security scan locally..."
+	act -j security
+
+# Run documentation check locally
+ci-docs: install-act
+	@echo "📚 Running documentation check locally..."
+	act -j docs
+
+# Run examples build locally
+ci-examples: install-act
+	@echo "⚡ Running examples build locally..."
+	act -j build-examples
+
+# Quick local validation (format + lint, no Docker required)
+ci-quick: check-fmt lint
+	@echo "✅ Quick local validation completed!"
+	@echo "   • Code formatting: ✓"
+	@echo "   • Linting: ✓"
+	@echo ""
+	@echo "💡 Run 'make ci-format' to test with the exact same environment as GitHub Actions"
+
+# List all available CI jobs
+ci-list: install-act
+	@echo "📋 Available GitHub Actions jobs:"
+	act --list
+
 # Show help
 help:
 	@echo "Available targets:"
+	@echo ""
+	@echo "=== Build & Test ==="
 	@echo "  all          - Build and test"
 	@echo "  build        - Build Rust library and Go bindings"
 	@echo "  test         - Run tests"
 	@echo "  bench        - Run benchmarks"
 	@echo "  clean        - Clean build artifacts"
-	@echo "  install-deps - Install development dependencies (including golangci-lint)"
+	@echo ""
+	@echo "=== Code Quality ==="
 	@echo "  fmt          - Format code"
+	@echo "  check-fmt    - Check code formatting"
 	@echo "  lint         - Lint all code (Rust + Go)"
 	@echo "  lint-rust    - Lint Rust code only"
 	@echo "  lint-go      - Lint Go code only"
 	@echo "  lint-go-fix  - Lint and fix Go code automatically"
 	@echo "  lint-report  - Generate detailed linting reports"
+	@echo ""
+	@echo "=== Local CI Testing ==="
+	@echo "  ci-quick     - Quick validation (format + lint, no Docker)"
+	@echo "  ci-format    - Run format check locally using act"
+	@echo "  ci-build     - Run build & test matrix locally (requires Docker)"
+	@echo "  ci-security  - Run security scan locally"
+	@echo "  ci-docs      - Run documentation check locally"
+	@echo "  ci-examples  - Run examples build locally"
+	@echo "  ci-local     - Run complete CI pipeline locally (all jobs)"
+	@echo "  ci-list      - List all available CI jobs"
+	@echo ""
+	@echo "=== Examples & Documentation ==="
 	@echo "  examples     - Build all examples"
 	@echo "  run-examples - Run all examples"
 	@echo "  docs         - Generate documentation"
-	@echo "  check-fmt    - Check code formatting"
-	@echo "  release      - Create release build"
+	@echo ""
+	@echo "=== Setup & Tools ==="
+	@echo "  install-deps - Install development dependencies"
+	@echo "  install-act  - Install act (GitHub Actions local runner)"
 	@echo "  dev-setup    - Setup development environment"
 	@echo "  check-tools  - Check if required tools are installed"
+	@echo ""
+	@echo "=== Release ==="
+	@echo "  release      - Create release build"
+	@echo ""
+	@echo "=== Help ==="
 	@echo "  help         - Show this help"
