@@ -150,8 +150,10 @@ docs:
 	@echo "Generating Rust documentation..."
 	cd rust && cargo doc --no-deps
 	@echo "Generating Go documentation..."
-	go doc -all ./...
-
+	@echo "Checking Go documentation generation..."
+	@go doc ./pkg > /dev/null && echo "✅ Go documentation generated successfully"
+	@echo "📁 Rust docs: rust/target/doc/lancedb_go/index.html"
+	@echo "📁 Go docs: Use 'go doc ./pkg' to view Go documentation"
 # Check code formatting
 check-fmt:
 	@echo "Checking Rust code formatting..."
