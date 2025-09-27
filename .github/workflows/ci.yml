@@ -176,6 +176,36 @@ jobs:
           name: build-${{ matrix.os == 'ubuntu-latest' && 'linux-x64' || 'macos-arm64' }}
           path: .
 
+      # Fix artifact directory structure (same as build-examples)
+      - name: Reorganize build artifacts to expected locations
+        run: |
+          echo "Moving artifacts to expected locations..."
+          
+          # Create the expected directory structure
+          mkdir -p rust/target/generated/include
+          mkdir -p rust/target/generated/lib
+          
+          # Move header file
+          if [ -f "generated/include/lancedb.h" ]; then
+            mv generated/include/lancedb.h rust/target/generated/include/
+            echo "✅ Moved lancedb.h to rust/target/generated/include/"
+          else
+            echo "❌ lancedb.h not found at generated/include/"
+            find . -name "lancedb.h" 2>/dev/null || echo "No lancedb.h found anywhere"
+            exit 1
+          fi
+          
+          # Move library files
+          if ls generated/lib/liblancedb_go.* >/dev/null 2>&1; then
+            mv generated/lib/liblancedb_go.* rust/target/generated/lib/
+            echo "✅ Moved library files to rust/target/generated/lib/"
+          else
+            echo "⚠️  Library files not found at generated/lib/, checking for alternatives..."
+            find . -name "liblancedb_go.*" -exec mv {} rust/target/generated/lib/ \;
+          fi
+          
+          echo "✅ Build artifacts reorganized for testing"
+
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v4
         with:
