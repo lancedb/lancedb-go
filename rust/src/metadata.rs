@@ -10,6 +10,7 @@ use std::os::raw::{c_char, c_void};
 
 /// Count rows in a table (simple version)
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_count_rows(
     table_handle: *mut c_void,
     count: *mut i64,
@@ -43,6 +44,7 @@ pub extern "C" fn simple_lancedb_table_count_rows(
 
 /// Get table version (simple version)
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_version(
     table_handle: *mut c_void,
     version: *mut i64,
@@ -76,6 +78,7 @@ pub extern "C" fn simple_lancedb_table_version(
 
 /// Get table schema as JSON (simple version)
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_schema(
     table_handle: *mut c_void,
     schema_json: *mut *mut c_char,
@@ -154,6 +157,7 @@ pub extern "C" fn simple_lancedb_table_schema(
 
 /// Get table schema as Arrow IPC binary format (more efficient than JSON)
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_schema_ipc(
     table_handle: *mut c_void,
     schema_ipc_data: *mut *mut u8,

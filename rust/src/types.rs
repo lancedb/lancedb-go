@@ -129,6 +129,7 @@ pub struct VersionInfo {
 
 /// Free a VersionInfo structure
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn lancedb_version_info_free(version: *mut VersionInfo) {
     if version.is_null() {
         return;

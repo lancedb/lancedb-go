@@ -179,6 +179,7 @@ pub extern "C" fn simple_lancedb_table_create_index(
 
 /// Get all indexes for a table (returns JSON string)
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_get_indexes(
     table_handle: *mut c_void,
     indexes_json: *mut *mut c_char,

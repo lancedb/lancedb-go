@@ -11,6 +11,7 @@ use std::ptr;
 
 /// Get table names
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_names(
     handle: *mut c_void,
     names: *mut *mut *mut c_char,
@@ -66,6 +67,7 @@ pub extern "C" fn simple_lancedb_table_names(
 
 /// Free table names array
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_free_table_names(names: *mut *mut c_char, count: c_int) {
     if names.is_null() {
         return;

@@ -10,6 +10,7 @@ use std::os::raw::{c_char, c_void};
 
 /// Connect to a LanceDB database (simple version)
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_connect(
     uri: *const c_char,
     handle: *mut *mut c_void,
@@ -48,6 +49,7 @@ pub extern "C" fn simple_lancedb_connect(
 
 /// Connect to a database with storage options
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_connect_with_options(
     uri: *const c_char,
     options_json: *const c_char,

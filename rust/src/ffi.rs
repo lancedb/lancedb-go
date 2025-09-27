@@ -33,6 +33,7 @@ impl SimpleResult {
 }
 
 /// Convert C string to Rust string
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn from_c_str(s: *const c_char) -> Result<String, Box<dyn std::error::Error>> {
     if s.is_null() {
         return Err("Null pointer".into());
@@ -51,6 +52,7 @@ pub extern "C" fn simple_lancedb_init() -> c_int {
 
 /// Free a SimpleResult
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_result_free(result: *mut SimpleResult) {
     if result.is_null() {
         return;
@@ -65,6 +67,7 @@ pub extern "C" fn simple_lancedb_result_free(result: *mut SimpleResult) {
 
 /// Free a C string allocated by the library
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_free_string(s: *mut c_char) {
     if s.is_null() {
         return;

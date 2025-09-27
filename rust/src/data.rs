@@ -10,6 +10,7 @@ use std::os::raw::{c_char, c_void};
 
 /// Delete rows from a table using SQL predicate (simple version)
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_delete(
     table_handle: *mut c_void,
     predicate: *const c_char,
@@ -132,6 +133,7 @@ pub extern "C" fn simple_lancedb_table_update(
 /// Add JSON data to a table (simple version)
 /// Converts JSON array of objects to Arrow RecordBatch and adds to table
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_add_json(
     table_handle: *mut c_void,
     json_data: *const c_char,
@@ -204,6 +206,7 @@ pub extern "C" fn simple_lancedb_table_add_json(
 /// Add data to a table using Arrow IPC format (more efficient than JSON)
 /// Accepts batch of records as Arrow IPC binary data
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_add_ipc(
     table_handle: *mut c_void,
     ipc_data: *const u8,

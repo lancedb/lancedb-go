@@ -13,6 +13,7 @@ use tokio_stream::StreamExt;
 
 /// Execute a select query with various predicates (vector search, filters, etc.)
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_select_query(
     table_handle: *mut c_void,
     query_config_json: *const c_char,

@@ -67,6 +67,7 @@ pub extern "C" fn simple_lancedb_create_table(
 
 /// Create a table with Arrow IPC schema (more efficient than JSON)
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_create_table_with_ipc(
     handle: *mut c_void,
     table_name: *const c_char,
@@ -154,6 +155,7 @@ pub extern "C" fn simple_lancedb_drop_table(
 
 /// Open a table from the database (simple version)
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_open_table(
     handle: *mut c_void,
     table_name: *const c_char,
