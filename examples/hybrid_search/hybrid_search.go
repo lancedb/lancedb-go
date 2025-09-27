@@ -16,8 +16,8 @@ package main
 import (
 	"context"
 	"fmt"
-	lancedb "github.com/lancedb/lancedb-go/pkg"
 	. "github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/lancedb"
 	"log"
 	"math"
 	"math/rand"

@@ -8,16 +8,16 @@
 // - Creating different types of indexes (vector, scalar, full-text)
 // - Index performance comparison
 // - Best practices for index selection
-// - Managing indexes throughout application lifecycle
-// - Query optimization with proper indexing
+// - Managing indexes throughout the application lifecycle-
+// Query optimization with proper indexing
 
 package main
 
 import (
 	"context"
 	"fmt"
-	lancedb "github.com/lancedb/lancedb-go/pkg"
 	. "github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/lancedb"
 	"log"
 	"math"
 	"math/rand"

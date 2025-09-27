@@ -1,9 +1,9 @@
 package lancedb
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../rust/target/generated/include
-#cgo darwin LDFLAGS: -L${SRCDIR}/../rust/target/generated/lib -llancedb_go -framework Security -framework CoreFoundation
-#cgo linux LDFLAGS: -L${SRCDIR}/../rust/target/generated/lib -llancedb_go
+#cgo CFLAGS: -I${SRCDIR}/../../rust/target/generated/include
+#cgo darwin LDFLAGS: -L${SRCDIR}/../../rust/target/generated/lib -llancedb_go -framework Security -framework CoreFoundation
+#cgo linux LDFLAGS: -L${SRCDIR}/../../rust/target/generated/lib -llancedb_go
 #include "lancedb.h"
 */
 import "C"

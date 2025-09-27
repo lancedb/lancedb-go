@@ -10,9 +10,9 @@ import (
 
 	"github.com/apache/arrow/go/v17/arrow"
 
-	lancedb "github.com/lancedb/lancedb-go/pkg"
 	"github.com/lancedb/lancedb-go/pkg/contracts"
 	"github.com/lancedb/lancedb-go/pkg/internal"
+	"github.com/lancedb/lancedb-go/pkg/lancedb"
 )
 
 // TestInsertUpdateDelete tests comprehensive data operations

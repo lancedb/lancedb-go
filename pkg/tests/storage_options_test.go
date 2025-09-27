@@ -8,8 +8,8 @@ import (
 	"os"
 	"testing"
 
-	lancedb "github.com/lancedb/lancedb-go/pkg"
 	"github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/lancedb"
 )
 
 func TestStorageOptionsBasic(t *testing.T) {
