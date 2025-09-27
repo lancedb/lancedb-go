@@ -13,7 +13,7 @@ go get github.com/lancedb/lancedb-go/pkg
 ### Basic Example
 
 ```go
-import lancedb "github.com/lancedb/lancedb-go/pkg"
+import "github.com/lancedb/lancedb-go/pkg/lancedb"
 
 // Connect to a database
 ctx := context.Background()

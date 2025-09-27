@@ -17,7 +17,8 @@ package main
 import (
 	"context"
 	"fmt"
-	lancedb "github.com/lancedb/lancedb-go/pkg"
+	. "github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/lancedb"
 	"log"
 	"math"
 	"math/rand"
@@ -123,7 +124,7 @@ func main() {
 	fmt.Println("==================================================")
 }
 
-func createBatchTable(conn *lancedb.Connection, ctx context.Context) (*lancedb.Table, *arrow.Schema, error) {
+func createBatchTable(conn IConnection, ctx context.Context) (ITable, *arrow.Schema, error) {
 	fields := []arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
 		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: false},
@@ -139,14 +140,14 @@ func createBatchTable(conn *lancedb.Connection, ctx context.Context) (*lancedb.T
 		return nil, nil, err
 	}
 
-	table, err := conn.CreateTable(ctx, "batch_data", *schema)
+	table, err := conn.CreateTable(ctx, "batch_data", schema)
 	if err != nil {
 		return nil, nil, err
 	}
 	return table, arrowSchema, nil
 }
 
-func demonstrateBatchInsert(table *lancedb.Table, schema *arrow.Schema) error {
+func demonstrateBatchInsert(table ITable, schema *arrow.Schema) error {
 	fmt.Println("  📥 Batch Insertion Strategies")
 
 	// Strategy 1: Single large batch
@@ -205,7 +206,7 @@ func demonstrateBatchInsert(table *lancedb.Table, schema *arrow.Schema) error {
 	fmt.Printf("    Small batch:  %.2f records/second\n", 5000.0/smallBatchTime.Seconds())
 
 	// Get final count
-	count, err := table.Count()
+	count, err := table.Count(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to get count: %w", err)
 	}
@@ -220,7 +221,7 @@ func demonstrateBatchInsert(table *lancedb.Table, schema *arrow.Schema) error {
 	return nil
 }
 
-func demonstrateBatchUpdate(table *lancedb.Table) error {
+func demonstrateBatchUpdate(table ITable) error {
 	fmt.Println("  ✏️ Batch Update Operations")
 
 	// Pattern 1: Category-based batch update
@@ -236,7 +237,7 @@ func demonstrateBatchUpdate(table *lancedb.Table) error {
 		}
 
 		predicate := fmt.Sprintf("category = '%s'", category)
-		err := table.Update(predicate, updates)
+		err := table.Update(context.Background(), predicate, updates)
 		updateTime := time.Since(start)
 
 		if err != nil {
@@ -245,7 +246,7 @@ func demonstrateBatchUpdate(table *lancedb.Table) error {
 		}
 
 		// Verify update
-		results, err := table.SelectWithFilter(predicate)
+		results, err := table.SelectWithFilter(context.Background(), predicate)
 		if err != nil {
 			fmt.Printf("    ⚠️ Verification for category '%s' failed: %v\n", category, err)
 			continue
@@ -274,7 +275,7 @@ func demonstrateBatchUpdate(table *lancedb.Table) error {
 			"value": update.newValue,
 		}
 
-		err := table.Update(update.condition, updates)
+		err := table.Update(context.Background(), update.condition, updates)
 		updateTime := time.Since(start)
 
 		if err != nil {
@@ -297,7 +298,7 @@ func demonstrateBatchUpdate(table *lancedb.Table) error {
 
 	// Update records with IDs in a specific range
 	predicate := "id BETWEEN 1000 AND 2000"
-	err := table.Update(predicate, updates)
+	err := table.Update(context.Background(), predicate, updates)
 	updateTime := time.Since(start)
 
 	if err != nil {
@@ -315,7 +316,7 @@ func demonstrateBatchUpdate(table *lancedb.Table) error {
 	return nil
 }
 
-func demonstrateMemoryEfficientProcessing(table *lancedb.Table, schema *arrow.Schema) error {
+func demonstrateMemoryEfficientProcessing(table ITable, schema *arrow.Schema) error {
 	fmt.Println("  🧠 Memory-Efficient Large Dataset Processing")
 
 	// Simulate processing a very large dataset in chunks
@@ -374,7 +375,7 @@ func demonstrateMemoryEfficientProcessing(table *lancedb.Table, schema *arrow.Sc
 	start = time.Now()
 
 	for {
-		results, err := table.SelectWithLimit(limit, offset)
+		results, err := table.SelectWithLimit(context.Background(), limit, offset)
 		if err != nil {
 			return fmt.Errorf("streaming query failed: %w", err)
 		}
@@ -409,7 +410,7 @@ func demonstrateMemoryEfficientProcessing(table *lancedb.Table, schema *arrow.Sc
 	return nil
 }
 
-func demonstrateConcurrentOperations(conn *lancedb.Connection, ctx context.Context) error {
+func demonstrateConcurrentOperations(conn IConnection, ctx context.Context) error {
 	fmt.Println("  🔄 Concurrent Batch Operations")
 
 	// Create separate table for concurrent operations
@@ -462,7 +463,7 @@ func demonstrateConcurrentOperations(conn *lancedb.Connection, ctx context.Conte
 		fmt.Printf("  ✅ All %d workers completed successfully in %v\n", numWorkers, concurrentInsertTime)
 
 		// Verify total count
-		count, err := table.Count()
+		count, err := table.Count(context.Background())
 		if err == nil {
 			fmt.Printf("    📊 Total records inserted: %d\n", count)
 		}
@@ -526,11 +527,11 @@ func demonstrateConcurrentOperations(conn *lancedb.Connection, ctx context.Conte
 	return nil
 }
 
-func demonstrateBatchDeletion(table *lancedb.Table) error {
+func demonstrateBatchDeletion(table ITable) error {
 	fmt.Println("  🗑️ Batch Deletion Strategies")
 
 	// Get initial count
-	initialCount, err := table.Count()
+	initialCount, err := table.Count(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to get initial count: %w", err)
 	}
@@ -545,7 +546,7 @@ func demonstrateBatchDeletion(table *lancedb.Table) error {
 		start := time.Now()
 
 		// First, count records to be deleted
-		results, err := table.SelectWithFilter(fmt.Sprintf("category = '%s'", category))
+		results, err := table.SelectWithFilter(context.Background(), fmt.Sprintf("category = '%s'", category))
 		if err != nil {
 			fmt.Printf("    ⚠️ Failed to count %s records: %v\n", category, err)
 			continue
@@ -554,7 +555,7 @@ func demonstrateBatchDeletion(table *lancedb.Table) error {
 		recordsToDelete := len(results)
 
 		// Delete the records
-		err = table.Delete(fmt.Sprintf("category = '%s'", category))
+		err = table.Delete(context.Background(), fmt.Sprintf("category = '%s'", category))
 		deleteTime := time.Since(start)
 
 		if err != nil {
@@ -579,7 +580,7 @@ func demonstrateBatchDeletion(table *lancedb.Table) error {
 	for _, rangeDelete := range rangesToDelete {
 		start := time.Now()
 
-		err := table.Delete(rangeDelete.condition)
+		err := table.Delete(context.Background(), rangeDelete.condition)
 		deleteTime := time.Since(start)
 
 		if err != nil {
@@ -594,7 +595,7 @@ func demonstrateBatchDeletion(table *lancedb.Table) error {
 	fmt.Println("\n  🔹 Strategy 3: ID-based cleanup (old records)")
 
 	start := time.Now()
-	err = table.Delete("id < 5000") // Delete first 5000 records
+	err = table.Delete(context.Background(), "id < 5000") // Delete first 5000 records
 	deleteTime := time.Since(start)
 
 	if err != nil {
@@ -604,7 +605,7 @@ func demonstrateBatchDeletion(table *lancedb.Table) error {
 	}
 
 	// Final count
-	finalCount, err := table.Count()
+	finalCount, err := table.Count(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to get final count: %w", err)
 	}
@@ -625,7 +626,7 @@ func demonstrateBatchDeletion(table *lancedb.Table) error {
 	return nil
 }
 
-func performanceAnalysis(table *lancedb.Table, schema *arrow.Schema) error {
+func performanceAnalysis(table ITable, schema *arrow.Schema) error {
 	fmt.Println("  ⚡ Performance Analysis and Optimization")
 
 	// Test different batch sizes
@@ -690,7 +691,7 @@ func performanceAnalysis(table *lancedb.Table, schema *arrow.Schema) error {
 
 	for _, limit := range queryLimits {
 		start := time.Now()
-		results, err := table.SelectWithLimit(limit, 0)
+		results, err := table.SelectWithLimit(context.Background(), limit, 0)
 		queryTime := time.Since(start)
 
 		if err != nil {
@@ -712,7 +713,7 @@ func performanceAnalysis(table *lancedb.Table, schema *arrow.Schema) error {
 	return nil
 }
 
-func errorHandlingPatterns(table *lancedb.Table, schema *arrow.Schema) error {
+func errorHandlingPatterns(table ITable, schema *arrow.Schema) error {
 	fmt.Println("  🛡️ Error Handling and Recovery Patterns")
 
 	// Pattern 1: Retry mechanism for transient failures
@@ -885,7 +886,7 @@ func generateRandomVector(dimensions int) []float32 {
 	return vector
 }
 
-func insertBatch(table *lancedb.Table, schema *arrow.Schema, data []BatchRecord) error {
+func insertBatch(table ITable, schema *arrow.Schema, data []BatchRecord) error {
 	if table == nil {
 		return fmt.Errorf("table is nil")
 	}
@@ -956,10 +957,10 @@ func insertBatch(table *lancedb.Table, schema *arrow.Schema, data []BatchRecord)
 	record := array.NewRecord(schema, columns, int64(len(data)))
 	defer record.Release()
 
-	return table.Add(record, nil)
+	return table.Add(context.Background(), record, nil)
 }
 
-func createConcurrentTable(conn *lancedb.Connection, ctx context.Context) (*lancedb.Table, *arrow.Schema, error) {
+func createConcurrentTable(conn IConnection, ctx context.Context) (ITable, *arrow.Schema, error) {
 	fields := []arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
 		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: false},
@@ -975,7 +976,7 @@ func createConcurrentTable(conn *lancedb.Connection, ctx context.Context) (*lanc
 		return nil, nil, err
 	}
 
-	table, err := conn.CreateTable(ctx, "concurrent_data", *schema)
+	table, err := conn.CreateTable(ctx, "concurrent_data", schema)
 	return table, arrowSchema, nil
 }
 

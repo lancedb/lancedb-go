@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-package lancedb
+package tests
 
 import (
 	"context"
@@ -9,6 +9,10 @@ import (
 	"testing"
 
 	"github.com/apache/arrow/go/v17/arrow"
+
+	"github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/internal"
+	"github.com/lancedb/lancedb-go/pkg/lancedb"
 )
 
 // TestInsertUpdateDelete tests comprehensive data operations
@@ -17,7 +21,7 @@ func TestInsertUpdateDelete(t *testing.T) {
 	dbPath := setupTestDB2(t)
 	defer cleanup(dbPath)
 
-	conn, err := Connect(context.Background(), dbPath, nil)
+	conn, err := lancedb.Connect(context.Background(), dbPath, nil)
 	if err != nil {
 		t.Fatalf("❌Failed to connect: %v", err)
 	}
@@ -52,13 +56,13 @@ func TestInsertUpdateDelete(t *testing.T) {
 		},
 	}
 	arrowSchema := arrow.NewSchema(fields, nil)
-	schema, err := NewSchema(arrowSchema)
+	schema, err := internal.NewSchema(arrowSchema)
 	if err != nil {
 		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	tableName := "test_data_operations"
-	table, err := conn.CreateTable(context.Background(), tableName, *schema)
+	table, err := conn.CreateTable(context.Background(), tableName, schema)
 	if err != nil {
 		t.Fatalf("❌Failed to create table: %v", err)
 	}
@@ -82,26 +86,20 @@ func TestInsertUpdateDelete(t *testing.T) {
 }
 
 // testTableAdd tests the Add functionality
-func testTableAdd(t *testing.T, table *Table) {
+func testTableAdd(t *testing.T, table contracts.ITable) {
 	// Note: Add method is not fully implemented yet, so we test the expected behavior
 	// This test demonstrates how Add should work when implemented
 
 	// TODO: Create Arrow Record with sample data
 	// For now, test that Add method returns the expected "not implemented" error
-	err := table.Add(nil, nil)
-	if err == nil {
-		t.Fatal("❌Expected Add to return error since it's not implemented")
-	}
-
-	expectedMsg := "data addition not yet implemented"
-	if err != nil && err.Error() != expectedMsg {
-		t.Logf("Add method returned: %v", err)
-		t.Log("This is expected until Add is fully implemented")
+	err := table.Add(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatal("❌Expected Add to return no error but throws error:", err)
 	}
 }
 
 // testTableUpdate tests the Update functionality
-func testTableUpdate(t *testing.T, table *Table) {
+func testTableUpdate(t *testing.T, table contracts.ITable) {
 	// Test basic update operation
 	updates := map[string]interface{}{
 		"age":    30,
@@ -110,7 +108,7 @@ func testTableUpdate(t *testing.T, table *Table) {
 	}
 
 	filter := "id = 1"
-	err := table.Update(filter, updates)
+	err := table.Update(context.Background(), filter, updates)
 	if err != nil {
 		t.Logf("Update failed: %v", err)
 		// This might fail if there's no data in the table yet, which is expected
@@ -121,10 +119,10 @@ func testTableUpdate(t *testing.T, table *Table) {
 }
 
 // testTableDelete tests the Delete functionality
-func testTableDelete(t *testing.T, table *Table) {
+func testTableDelete(t *testing.T, table contracts.ITable) {
 	// Test basic delete operation
 	filter := "age > 25"
-	err := table.Delete(filter)
+	err := table.Delete(context.Background(), filter)
 	if err != nil {
 		t.Logf("Delete failed: %v", err)
 		// This might fail if there's no data in the table yet, which is expected
@@ -135,7 +133,7 @@ func testTableDelete(t *testing.T, table *Table) {
 }
 
 // testTableDeleteComplex tests delete with more complex filters
-func testTableDeleteComplex(t *testing.T, table *Table) {
+func testTableDeleteComplex(t *testing.T, table contracts.ITable) {
 	testCases := []struct {
 		name   string
 		filter string
@@ -160,7 +158,7 @@ func testTableDeleteComplex(t *testing.T, table *Table) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := table.Delete(tc.filter)
+			err := table.Delete(context.Background(), tc.filter)
 			if err != nil {
 				t.Logf("Delete with filter '%s' failed: %v", tc.filter, err)
 				// Expected to fail if no data exists, but we're testing the API
@@ -177,7 +175,7 @@ func TestUpdateDataTypes(t *testing.T) {
 	dbPath := setupTestDB2(t)
 	defer cleanup(dbPath)
 
-	conn, err := Connect(context.Background(), dbPath, nil)
+	conn, err := lancedb.Connect(context.Background(), dbPath, nil)
 	if err != nil {
 		t.Fatalf("❌Failed to connect: %v", err)
 	}
@@ -191,12 +189,12 @@ func TestUpdateDataTypes(t *testing.T) {
 		{Name: "bool_field", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
 	}
 	arrowSchema := arrow.NewSchema(fields, nil)
-	schema, err := NewSchema(arrowSchema)
+	schema, err := internal.NewSchema(arrowSchema)
 	if err != nil {
 		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
-	table, err := conn.CreateTable(context.Background(), "test_types", *schema)
+	table, err := conn.CreateTable(context.Background(), "test_types", schema)
 	if err != nil {
 		t.Fatalf("❌Failed to create table: %v", err)
 	}
@@ -251,7 +249,7 @@ func TestUpdateDataTypes(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			filter := "int_field IS NOT NULL"
-			err := table.Update(filter, tc.updates)
+			err := table.Update(context.Background(), filter, tc.updates)
 			if err != nil {
 				t.Logf("Update failed: %v", err)
 				// Expected to fail if no data exists, but we're testing the API
@@ -268,7 +266,7 @@ func TestTableErrorHandling(t *testing.T) {
 	dbPath := setupTestDB2(t)
 	defer cleanup(dbPath)
 
-	conn, err := Connect(context.Background(), dbPath, nil)
+	conn, err := lancedb.Connect(context.Background(), dbPath, nil)
 	if err != nil {
 		t.Fatalf("❌Failed to connect: %v", err)
 	}
@@ -280,12 +278,12 @@ func TestTableErrorHandling(t *testing.T) {
 		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: false},
 	}
 	arrowSchema := arrow.NewSchema(fields, nil)
-	schema, err := NewSchema(arrowSchema)
+	schema, err := internal.NewSchema(arrowSchema)
 	if err != nil {
 		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
-	table, err := conn.CreateTable(context.Background(), "test_errors", *schema)
+	table, err := conn.CreateTable(context.Background(), "test_errors", schema)
 	if err != nil {
 		t.Fatalf("❌ Failed to create table: %v", err)
 	}
@@ -294,7 +292,7 @@ func TestTableErrorHandling(t *testing.T) {
 		updates := map[string]interface{}{
 			"name": "test",
 		}
-		err := table.Update("invalid filter syntax $$", updates)
+		err := table.Update(context.Background(), "invalid filter syntax $$", updates)
 		if err == nil {
 			t.Fatal("❌ Expected error for invalid filter syntax")
 		} else {
@@ -303,7 +301,7 @@ func TestTableErrorHandling(t *testing.T) {
 	})
 
 	t.Run("Test invalid delete syntax", func(t *testing.T) {
-		err := table.Delete("invalid filter syntax $$")
+		err := table.Delete(context.Background(), "invalid filter syntax $$")
 		if err == nil {
 			t.Fatal("❌Expected error for invalid filter syntax")
 		} else {
@@ -317,14 +315,14 @@ func TestTableErrorHandling(t *testing.T) {
 	t.Run("Test operations on closed table", func(t *testing.T) {
 		updates := map[string]interface{}{"name": "test"}
 
-		err := table.Update("id = 1", updates)
+		err := table.Update(context.Background(), "id = 1", updates)
 		if err == nil {
 			t.Fatal("❌Expected error for update on closed table")
 		} else {
 			t.Logf("✅ Got expected error for update on closed table: %v", err)
 		}
 
-		err = table.Delete("id = 1")
+		err = table.Delete(context.Background(), "id = 1")
 		if err == nil {
 			t.Fatal("❌Expected error for delete on closed table")
 		} else {
@@ -346,7 +344,3 @@ func setupTestDB2(t *testing.T) string {
 func cleanup(dbPath string) {
 	os.RemoveAll(dbPath)
 }
-
-// This file contains comprehensive tests for LanceDB data operations.
-// Run with: go test -v
-// To run this specific file: go test -v data_operations_test.go

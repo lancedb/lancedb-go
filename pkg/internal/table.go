@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-package lancedb
+package internal
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../rust/target/generated/include
@@ -12,28 +12,33 @@ package lancedb
 import "C"
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"runtime"
-	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
+	"github.com/apache/arrow/go/v17/arrow/ipc"
+
+	"github.com/lancedb/lancedb-go/pkg/contracts"
 )
 
-// AddDataOptions configures how data is added to a Table
-type AddDataOptions struct {
-	Mode WriteMode
+// Table represents a table in the LanceDB database
+type Table struct {
+	name       string
+	connection *Connection
+	// #nosec G103 - FFI handle for C interop with Rust library
+	handle unsafe.Pointer
+	mu     sync.RWMutex
+	closed bool
 }
 
-// WriteMode specifies how data should be written to a Table
-type WriteMode int
-
-const (
-	WriteModeAppend WriteMode = iota
-	WriteModeOverwrite
-)
+// Compile-time check to ensure Table implements ITable interface
+var _ contracts.ITable = (*Table)(nil)
 
 // Name returns the name of the Table
 func (t *Table) Name() string {
@@ -74,10 +79,10 @@ func (t *Table) Close() error {
 	return nil
 }
 
-// Schema returns the schema of the Table
+// Schema returns the schema of the Table using efficient Arrow IPC format
 //
 //nolint:gocritic
-func (t *Table) Schema() (*arrow.Schema, error) {
+func (t *Table) Schema(_ context.Context) (*arrow.Schema, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -85,8 +90,9 @@ func (t *Table) Schema() (*arrow.Schema, error) {
 		return nil, fmt.Errorf("table is closed")
 	}
 
-	var schemaJSON *C.char
-	result := C.simple_lancedb_table_schema(t.handle, &schemaJSON)
+	var schemaIPCData *C.uchar
+	var schemaIPCLen C.size_t
+	result := C.simple_lancedb_table_schema_ipc(t.handle, &schemaIPCData, &schemaIPCLen)
 	defer C.simple_lancedb_result_free(result)
 
 	if !result.SUCCESS {
@@ -97,44 +103,44 @@ func (t *Table) Schema() (*arrow.Schema, error) {
 		return nil, fmt.Errorf("failed to get table schema: unknown error")
 	}
 
-	if schemaJSON == nil {
-		return nil, fmt.Errorf("received null schema")
+	if schemaIPCData == nil {
+		return nil, fmt.Errorf("received null schema IPC data")
 	}
 
-	jsonStr := C.GoString(schemaJSON)
-	C.simple_lancedb_free_string(schemaJSON)
+	// Free the IPC data when we're done
+	defer C.simple_lancedb_free_ipc_data(schemaIPCData)
 
-	// Parse JSON schema and convert to Arrow schema
-	var schemaObj struct {
-		Fields []struct {
-			Name     string `json:"name"`
-			Type     string `json:"type"`
-			Nullable bool   `json:"nullable"`
-		} `json:"fields"`
+	// Convert C data to Go slice
+	// #nosec G103 - Safe conversion of C memory to Go bytes for Arrow IPC data
+	ipcBytes := C.GoBytes(unsafe.Pointer(schemaIPCData), C.int(schemaIPCLen))
+
+	// Create a reader from the IPC bytes
+	reader, err := ipc.NewFileReader(bytes.NewReader(ipcBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create IPC reader: %w", err)
+	}
+	defer reader.Close()
+
+	// Get the schema from the IPC reader
+	schema := reader.Schema()
+	if schema == nil {
+		return nil, fmt.Errorf("failed to read schema from IPC data")
 	}
 
-	if err := json.Unmarshal([]byte(jsonStr), &schemaObj); err != nil {
-		return nil, fmt.Errorf("failed to parse schema JSON: %w", err)
-	}
-
-	fields := make([]arrow.Field, 0, len(schemaObj.Fields))
-	for _, field := range schemaObj.Fields {
-		dataType, err := t.stringToArrowType(field.Type)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert field %s type %s: %w", field.Name, field.Type, err)
-		}
-		fields = append(fields, arrow.Field{
-			Name:     field.Name,
-			Type:     dataType,
-			Nullable: field.Nullable,
-		})
-	}
-
-	return arrow.NewSchema(fields, nil), nil
+	return schema, nil
 }
 
 // Add inserts data into the Table
-func (t *Table) Add(record arrow.Record, _ *AddDataOptions) error {
+func (t *Table) Add(ctx context.Context, record arrow.Record, _ *contracts.AddDataOptions) error {
+	var r []arrow.Record
+	if record != nil {
+		r = append(r, record)
+	}
+	return t.AddRecords(ctx, r, nil)
+}
+
+// AddRecords efficiently adds multiple records using Arrow IPC batch processing
+func (t *Table) AddRecords(_ context.Context, records []arrow.Record, _ *contracts.AddDataOptions) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -142,47 +148,85 @@ func (t *Table) Add(record arrow.Record, _ *AddDataOptions) error {
 		return fmt.Errorf("table is closed")
 	}
 
-	if record == nil {
-		return fmt.Errorf("record cannot be nil")
+	if len(records) == 0 {
+		return nil
 	}
 
-	// Convert Arrow Record to JSON
-	jsonData, err := t.recordToJSON(record)
+	// Convert records to Arrow RecordBatch using Arrow IPC format
+	var buf bytes.Buffer
+	seeker := &seekBuffer{&buf}
+	writer, err := ipc.NewFileWriter(seeker, ipc.WithSchema(records[0].Schema()))
 	if err != nil {
-		return fmt.Errorf("failed to convert record to JSON: %w", err)
+		return fmt.Errorf("failed to create IPC writer: %w", err)
 	}
 
-	// Call Rust binding
-	cJSONData := C.CString(jsonData)
-	defer C.free(unsafe.Pointer(cJSONData))
+	for _, record := range records {
+		if err := writer.Write(record); err != nil {
+			err := writer.Close()
+			if err != nil {
+				return fmt.Errorf("failed to close writer: %w", err)
+			}
+			return fmt.Errorf("failed to write record to IPC: %w", err)
+		}
+	}
 
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("failed to close IPC writer: %w", err)
+	}
+
+	// Get the IPC bytes
+	ipcBytes := buf.Bytes()
+	if len(ipcBytes) == 0 {
+		return fmt.Errorf("no IPC data generated")
+	}
+
+	// Call the Rust function with IPC binary data
 	var addedCount C.int64_t
-	result := C.simple_lancedb_table_add_json(t.handle, cJSONData, &addedCount)
+	result := C.simple_lancedb_table_add_ipc(
+		t.handle,
+		// #nosec G103 - Safe conversion of Go slice to C array pointer for FFI
+		(*C.uchar)(unsafe.Pointer(&ipcBytes[0])),
+		C.ulong(len(ipcBytes)),
+		&addedCount,
+	)
 	defer C.simple_lancedb_result_free(result)
 
 	if !result.SUCCESS {
 		if result.ERROR_MESSAGE != nil {
 			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("failed to add data: %s", errorMsg)
+			return fmt.Errorf("failed to add records: %s", errorMsg)
 		}
-		return fmt.Errorf("failed to add data: unknown error")
+		return fmt.Errorf("failed to add records: unknown error")
 	}
 
 	return nil
 }
 
-// AddRecords is a convenience method to add multiple records
-func (t *Table) AddRecords(records []arrow.Record, options *AddDataOptions) error {
-	for _, record := range records {
-		if err := t.Add(record, options); err != nil {
-			return err
+// seekBuffer wraps a bytes.Buffer to implement io.WriteSeeker
+type seekBuffer struct {
+	*bytes.Buffer
+}
+
+func (sb *seekBuffer) Seek(offset int64, whence int) (int64, error) {
+	// For simplicity, we only support seeking to the end for append operations
+	switch whence {
+	case 2: // io.SeekEnd
+		return int64(sb.Len()), nil
+	case 0: // io.SeekStart
+		if offset == 0 {
+			sb.Reset()
+			return 0, nil
 		}
+		return 0, fmt.Errorf("seeking to non-zero position not supported")
+	case 1: // io.SeekCurrent
+		return int64(sb.Len()), nil
+	default:
+		return 0, fmt.Errorf("unsupported whence value")
 	}
-	return nil
 }
 
 // Query creates a new query builder for this Table
-func (t *Table) Query() *QueryBuilder {
+func (t *Table) Query() contracts.IQueryBuilder {
 	return &QueryBuilder{
 		table:   t,
 		filters: make([]string, 0),
@@ -191,7 +235,7 @@ func (t *Table) Query() *QueryBuilder {
 }
 
 // Count returns the number of rows in the Table
-func (t *Table) Count() (int64, error) {
+func (t *Table) Count(_ context.Context) (int64, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -215,7 +259,7 @@ func (t *Table) Count() (int64, error) {
 }
 
 // Version returns the current version of the Table
-func (t *Table) Version() (int, error) {
+func (t *Table) Version(_ context.Context) (int, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -239,7 +283,7 @@ func (t *Table) Version() (int, error) {
 }
 
 // Update updates records in the Table based on a filter
-func (t *Table) Update(filter string, updates map[string]interface{}) error {
+func (t *Table) Update(_ context.Context, filter string, updates map[string]interface{}) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -254,9 +298,11 @@ func (t *Table) Update(filter string, updates map[string]interface{}) error {
 	}
 
 	cFilter := C.CString(filter)
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cFilter))
 
 	cUpdatesJSON := C.CString(string(updatesJSON))
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cUpdatesJSON))
 
 	result := C.simple_lancedb_table_update(t.handle, cFilter, cUpdatesJSON)
@@ -274,7 +320,7 @@ func (t *Table) Update(filter string, updates map[string]interface{}) error {
 }
 
 // Delete deletes records from the Table based on a filter
-func (t *Table) Delete(filter string) error {
+func (t *Table) Delete(_ context.Context, filter string) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -283,6 +329,7 @@ func (t *Table) Delete(filter string) error {
 	}
 
 	cFilter := C.CString(filter)
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cFilter))
 
 	var deletedCount C.int64_t
@@ -303,12 +350,12 @@ func (t *Table) Delete(filter string) error {
 }
 
 // CreateIndex creates an index on the specified columns
-func (t *Table) CreateIndex(columns []string, indexType IndexType) error {
-	return t.CreateIndexWithName(columns, indexType, "")
+func (t *Table) CreateIndex(ctx context.Context, columns []string, indexType contracts.IndexType) error {
+	return t.CreateIndexWithName(ctx, columns, indexType, "")
 }
 
 // CreateIndexWithName creates an index on the specified columns with an optional name
-func (t *Table) CreateIndexWithName(columns []string, indexType IndexType, name string) error {
+func (t *Table) CreateIndexWithName(_ context.Context, columns []string, indexType contracts.IndexType, name string) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -330,14 +377,17 @@ func (t *Table) CreateIndexWithName(columns []string, indexType IndexType, name 
 	indexTypeStr := t.indexTypeToString(indexType)
 
 	cColumnsJSON := C.CString(string(columnsJSON))
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cColumnsJSON))
 
 	cIndexType := C.CString(indexTypeStr)
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cIndexType))
 
 	var cIndexName *C.char
 	if name != "" {
 		cIndexName = C.CString(name)
+		// #nosec G103 - Required for freeing C allocated string memory
 		defer C.free(unsafe.Pointer(cIndexName))
 	}
 
@@ -358,7 +408,7 @@ func (t *Table) CreateIndexWithName(columns []string, indexType IndexType, name 
 // GetAllIndexes returns information about all indexes created on this table
 //
 //nolint:gocritic
-func (t *Table) GetAllIndexes() ([]IndexInfo, error) {
+func (t *Table) GetAllIndexes(_ context.Context) ([]contracts.IndexInfo, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -379,14 +429,14 @@ func (t *Table) GetAllIndexes() ([]IndexInfo, error) {
 	}
 
 	if indexesJSON == nil {
-		return []IndexInfo{}, nil // Return empty slice if no indexes
+		return []contracts.IndexInfo{}, nil // Return empty slice if no indexes
 	}
 
 	jsonStr := C.GoString(indexesJSON)
 	C.simple_lancedb_free_string(indexesJSON)
 
 	// Parse JSON response
-	var indexes []IndexInfo
+	var indexes []contracts.IndexInfo
 	if err := json.Unmarshal([]byte(jsonStr), &indexes); err != nil {
 		return nil, fmt.Errorf("failed to parse indexes JSON: %w", err)
 	}
@@ -397,7 +447,7 @@ func (t *Table) GetAllIndexes() ([]IndexInfo, error) {
 // Select executes a select query with various predicates (vector search, filters, etc.)
 //
 //nolint:gocritic
-func (t *Table) Select(config QueryConfig) ([]map[string]interface{}, error) {
+func (t *Table) Select(_ context.Context, config contracts.QueryConfig) ([]map[string]interface{}, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -405,13 +455,14 @@ func (t *Table) Select(config QueryConfig) ([]map[string]interface{}, error) {
 		return nil, fmt.Errorf("table is closed")
 	}
 
-	// Convert QueryConfig to JSON
+	// Convert lancedb.QueryConfig to JSON
 	configJSON, err := json.Marshal(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal query config to JSON: %w", err)
 	}
 
 	cConfigJSON := C.CString(string(configJSON))
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cConfigJSON))
 
 	var resultJSON *C.char
@@ -443,23 +494,23 @@ func (t *Table) Select(config QueryConfig) ([]map[string]interface{}, error) {
 }
 
 // SelectWithColumns is a convenience method for selecting specific columns
-func (t *Table) SelectWithColumns(columns []string) ([]map[string]interface{}, error) {
-	return t.Select(QueryConfig{
+func (t *Table) SelectWithColumns(ctx context.Context, columns []string) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{
 		Columns: columns,
 	})
 }
 
 // SelectWithFilter is a convenience method for selecting with a WHERE filter
-func (t *Table) SelectWithFilter(filter string) ([]map[string]interface{}, error) {
-	return t.Select(QueryConfig{
+func (t *Table) SelectWithFilter(ctx context.Context, filter string) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{
 		Where: filter,
 	})
 }
 
 // VectorSearch is a convenience method for vector similarity search
-func (t *Table) VectorSearch(column string, vector []float32, k int) ([]map[string]interface{}, error) {
-	return t.Select(QueryConfig{
-		VectorSearch: &VectorSearch{
+func (t *Table) VectorSearch(ctx context.Context, column string, vector []float32, k int) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{
+		VectorSearch: &contracts.VectorSearch{
 			Column: column,
 			Vector: vector,
 			K:      k,
@@ -468,9 +519,9 @@ func (t *Table) VectorSearch(column string, vector []float32, k int) ([]map[stri
 }
 
 // VectorSearchWithFilter combines vector search with additional filtering
-func (t *Table) VectorSearchWithFilter(column string, vector []float32, k int, filter string) ([]map[string]interface{}, error) {
-	return t.Select(QueryConfig{
-		VectorSearch: &VectorSearch{
+func (t *Table) VectorSearchWithFilter(ctx context.Context, column string, vector []float32, k int, filter string) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{
+		VectorSearch: &contracts.VectorSearch{
 			Column: column,
 			Vector: vector,
 			K:      k,
@@ -480,9 +531,9 @@ func (t *Table) VectorSearchWithFilter(column string, vector []float32, k int, f
 }
 
 // FullTextSearch is a convenience method for full-text search
-func (t *Table) FullTextSearch(column string, query string) ([]map[string]interface{}, error) {
-	return t.Select(QueryConfig{
-		FTSSearch: &FTSSearch{
+func (t *Table) FullTextSearch(ctx context.Context, column string, query string) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{
+		FTSSearch: &contracts.FTSSearch{
 			Column: column,
 			Query:  query,
 		},
@@ -490,9 +541,9 @@ func (t *Table) FullTextSearch(column string, query string) ([]map[string]interf
 }
 
 // FullTextSearchWithFilter combines full-text search with additional filtering
-func (t *Table) FullTextSearchWithFilter(column string, query string, filter string) ([]map[string]interface{}, error) {
-	return t.Select(QueryConfig{
-		FTSSearch: &FTSSearch{
+func (t *Table) FullTextSearchWithFilter(ctx context.Context, column string, query string, filter string) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{
+		FTSSearch: &contracts.FTSSearch{
 			Column: column,
 			Query:  query,
 		},
@@ -501,120 +552,36 @@ func (t *Table) FullTextSearchWithFilter(column string, query string, filter str
 }
 
 // SelectWithLimit is a convenience method for selecting with limit and offset
-func (t *Table) SelectWithLimit(limit int, offset int) ([]map[string]interface{}, error) {
-	return t.Select(QueryConfig{
+func (t *Table) SelectWithLimit(ctx context.Context, limit int, offset int) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{
 		Limit:  &limit,
 		Offset: &offset,
 	})
 }
 
-// IndexType represents the type of index to create
-type IndexType int
-
-const (
-	IndexTypeAuto IndexType = iota
-	IndexTypeIvfPq
-	IndexTypeIvfFlat
-	IndexTypeHnswPq
-	IndexTypeHnswSq
-	IndexTypeBTree
-	IndexTypeBitmap
-	IndexTypeLabelList
-	IndexTypeFts
-)
-
-// IndexInfo represents information about an index on a table
-type IndexInfo struct {
-	Name      string   `json:"name"`
-	Columns   []string `json:"columns"`
-	IndexType string   `json:"index_type"`
-}
-
-// QueryConfig represents the configuration for a select query
-type QueryConfig struct {
-	Columns      []string      `json:"columns,omitempty"`
-	Where        string        `json:"where,omitempty"`
-	Limit        *int          `json:"limit,omitempty"`
-	Offset       *int          `json:"offset,omitempty"`
-	VectorSearch *VectorSearch `json:"vector_search,omitempty"`
-	FTSSearch    *FTSSearch    `json:"fts_search,omitempty"`
-}
-
-// VectorSearch represents vector similarity search parameters
-type VectorSearch struct {
-	Column string    `json:"column"`
-	Vector []float32 `json:"vector"`
-	K      int       `json:"k"`
-}
-
-// FTSSearch represents full-text search parameters
-type FTSSearch struct {
-	Column string `json:"column"`
-	Query  string `json:"query"`
-}
-
-// QueryResult represents the result of a select query
-type QueryResult struct {
-	Rows []map[string]interface{} `json:"rows"`
-}
-
 // indexTypeToString converts IndexType enum to string representation
-func (t *Table) indexTypeToString(indexType IndexType) string {
+func (t *Table) indexTypeToString(indexType contracts.IndexType) string {
 	switch indexType {
-	case IndexTypeAuto:
+	case contracts.IndexTypeAuto:
 		return "vector" // Default to vector index for auto
-	case IndexTypeIvfPq:
+	case contracts.IndexTypeIvfPq:
 		return "ivf_pq"
-	case IndexTypeIvfFlat:
+	case contracts.IndexTypeIvfFlat:
 		return "ivf_flat"
-	case IndexTypeHnswPq:
+	case contracts.IndexTypeHnswPq:
 		return "hnsw_pq"
-	case IndexTypeHnswSq:
+	case contracts.IndexTypeHnswSq:
 		return "hnsw_sq"
-	case IndexTypeBTree:
+	case contracts.IndexTypeBTree:
 		return "btree"
-	case IndexTypeBitmap:
+	case contracts.IndexTypeBitmap:
 		return "bitmap"
-	case IndexTypeLabelList:
+	case contracts.IndexTypeLabelList:
 		return "label_list"
-	case IndexTypeFts:
+	case contracts.IndexTypeFts:
 		return "fts"
 	default:
 		return "vector" // Default fallback
-	}
-}
-
-// stringToArrowType converts string type representation to Arrow DataType
-func (t *Table) stringToArrowType(typeStr string) (arrow.DataType, error) {
-	switch typeStr {
-	case "int32":
-		return arrow.PrimitiveTypes.Int32, nil
-	case "int64":
-		return arrow.PrimitiveTypes.Int64, nil
-	case "float32":
-		return arrow.PrimitiveTypes.Float32, nil
-	case "float64":
-		return arrow.PrimitiveTypes.Float64, nil
-	case "string":
-		return arrow.BinaryTypes.String, nil
-	case "binary":
-		return arrow.BinaryTypes.Binary, nil
-	case "boolean":
-		return arrow.FixedWidthTypes.Boolean, nil
-	default:
-		// Check for vector type (fixed_size_list[float32;N])
-		prefix := "fixed_size_list[float32;"
-		if strings.HasPrefix(typeStr, prefix) && strings.HasSuffix(typeStr, "]") {
-			// Extract dimension from "fixed_size_list[float32;128]"
-			dimStr := typeStr[len(prefix) : len(typeStr)-1] // Remove prefix and "]"
-			var dimension int32
-			_, err := fmt.Sscanf(dimStr, "%d", &dimension)
-			if err != nil {
-				return nil, fmt.Errorf("invalid vector dimension: %s", dimStr)
-			}
-			return arrow.FixedSizeListOf(dimension, arrow.PrimitiveTypes.Float32), nil
-		}
-		return nil, fmt.Errorf("unsupported type: %s", typeStr)
 	}
 }
 
