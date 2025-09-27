@@ -263,20 +263,38 @@ jobs:
           ls -la rust/target/generated/ 2>/dev/null || echo "❌ rust/target/generated directory missing"
           ls -la rust/target/generated/include/ 2>/dev/null || echo "❌ Include directory missing"
 
-      # Ensure the correct directory structure exists
-      - name: Verify build artifacts structure
+      # Fix artifact directory structure
+      - name: Reorganize build artifacts to expected locations
         run: |
-          if [ ! -f "rust/target/generated/include/lancedb.h" ]; then
-            echo "❌ Critical: lancedb.h not found at expected location"
-            echo "Available files:"
-            find . -name "*.h" 2>/dev/null || echo "No header files found"
+          echo "Moving artifacts to expected locations..."
+          
+          # Create the expected directory structure
+          mkdir -p rust/target/generated/include
+          mkdir -p rust/target/generated/lib
+          
+          # Move header file
+          if [ -f "generated/include/lancedb.h" ]; then
+            mv generated/include/lancedb.h rust/target/generated/include/
+            echo "✅ Moved lancedb.h to rust/target/generated/include/"
+          else
+            echo "❌ lancedb.h not found at generated/include/"
+            find . -name "lancedb.h" 2>/dev/null || echo "No lancedb.h found anywhere"
             exit 1
           fi
-          if [ ! -f "rust/target/generated/lib/liblancedb_go.a" ]; then
-            echo "❌ Warning: Static library not found at expected location"
-            find . -name "liblancedb_go.*" 2>/dev/null || echo "No library files found"
+          
+          # Move library files
+          if ls generated/lib/liblancedb_go.* >/dev/null 2>&1; then
+            mv generated/lib/liblancedb_go.* rust/target/generated/lib/
+            echo "✅ Moved library files to rust/target/generated/lib/"
+          else
+            echo "⚠️  Library files not found at generated/lib/, checking for alternatives..."
+            find . -name "liblancedb_go.*" -exec mv {} rust/target/generated/lib/ \;
           fi
-          echo "✅ Build artifacts verified successfully"
+          
+          # Verify final structure
+          ls -la rust/target/generated/include/
+          ls -la rust/target/generated/lib/
+          echo "✅ Build artifacts reorganized successfully"
 
       - name: Build examples (using pre-built artifacts)
         run: |
