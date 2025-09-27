@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-use std::os::raw::{c_char, c_float, c_int, c_void};
+use std::os::raw::{c_char, c_int};
 
 /// Distance metrics for vector search
 #[repr(C)]

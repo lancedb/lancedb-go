@@ -115,13 +115,13 @@ Add records to tables using Apache Arrow records:
 
 	// Create sample data as Arrow record
 	pool := memory.NewGoAllocator()
-	
+
 	// Build the record with your data
 	record := // ... create arrow.Record with your data
-	
+
 	// Add single record
 	err = table.Add(record, nil)
-	
+
 	// Add multiple records
 	records := []arrow.Record{record1, record2, record3}
 	err = table.AddRecords(records, nil)
@@ -132,16 +132,16 @@ Various query operations available:
 
 	// Basic select with limit
 	results, err := table.SelectWithLimit(100, 0)
-	
+
 	// Select with filter
 	results, err := table.SelectWithFilter("score > 0.8")
-	
+
 	// Select specific columns
 	results, err := table.SelectWithColumns([]string{"id", "text", "score"})
-	
+
 	// Full-text search
 	results, err := table.FullTextSearch("text", "search query")
-	
+
 	// Full-text search with filter
 	results, err := table.FullTextSearchWithFilter("text", "search query", "score > 0.5")
 
@@ -151,14 +151,14 @@ Create and manage indexes for better query performance:
 
 	// Create a vector index
 	err = table.CreateIndex([]string{"embedding"}, lancedb.IndexTypeIvfPq)
-	
+
 	// Create a named index
 	err = table.CreateIndexWithName([]string{"text"}, lancedb.IndexTypeFts, "text_search_idx")
-	
+
 	// Create other index types
 	err = table.CreateIndex([]string{"id"}, lancedb.IndexTypeBTree)      // BTree for scalars
 	err = table.CreateIndex([]string{"category"}, lancedb.IndexTypeBitmap) // Bitmap for low cardinality
-	
+
 	// List all indexes
 	indexes, err := table.GetAllIndexes()
 	for _, idx := range indexes {
@@ -184,14 +184,14 @@ Create and manage indexes for better query performance:
 	count, err := table.Count()
 	version, err := table.Version()
 	schema, err := table.Schema()
-	
+
 	// Update records
 	updates := map[string]interface{}{
 		"score": 0.95,
 		"updated_at": time.Now(),
 	}
 	err = table.Update("id = 123", updates)
-	
+
 	// Delete records
 	err = table.Delete("score < 0.1")
 
