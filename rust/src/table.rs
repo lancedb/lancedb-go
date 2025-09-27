@@ -6,7 +6,6 @@
 use crate::ffi::{from_c_str, SimpleResult};
 use crate::runtime::get_simple_runtime;
 use crate::schema::create_arrow_schema_from_json;
-use lancedb::query::ExecutableQuery;
 use std::os::raw::{c_char, c_void};
 use std::sync::Arc;
 

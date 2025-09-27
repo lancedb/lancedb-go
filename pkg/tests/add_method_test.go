@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-package lancedb
+package tests
 
 import (
 	"context"
@@ -11,6 +11,9 @@ import (
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/memory"
+
+	lancedb "github.com/lancedb/lancedb-go/pkg"
+	"github.com/lancedb/lancedb-go/pkg/internal"
 )
 
 func TestAddMethod(t *testing.T) {
@@ -22,7 +25,7 @@ func TestAddMethod(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	// Connect to database
-	conn, err := Connect(context.Background(), tempDir, nil)
+	conn, err := lancedb.Connect(context.Background(), tempDir, nil)
 	if err != nil {
 		t.Fatalf("❌Failed to connect: %v", err)
 	}
@@ -35,13 +38,13 @@ func TestAddMethod(t *testing.T) {
 		{Name: "score", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
 	}
 	arrowSchema := arrow.NewSchema(fields, nil)
-	schema, err := NewSchema(arrowSchema)
+	schema, err := internal.NewSchema(arrowSchema)
 	if err != nil {
 		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	// Create table
-	table, err := conn.CreateTable(context.Background(), "test_add", *schema)
+	table, err := conn.CreateTable(context.Background(), "test_add", schema)
 	if err != nil {
 		t.Fatalf("❌Failed to create table: %v", err)
 	}
@@ -77,7 +80,7 @@ func TestAddMethod(t *testing.T) {
 	t.Logf("Adding record with %d rows\n", record.NumRows())
 
 	// Test the Add method
-	err = table.Add(record, nil)
+	err = table.Add(context.Background(), record, nil)
 	if err != nil {
 		t.Fatalf("❌Failed to add data: %v", err)
 	}
@@ -85,7 +88,7 @@ func TestAddMethod(t *testing.T) {
 	t.Log("✅Successfully added data to table! \n")
 
 	// Verify data was added by checking row count
-	count, err := table.Count()
+	count, err := table.Count(context.Background())
 	if err != nil {
 		t.Fatalf("❌Failed to get row count: %v", err)
 	}
@@ -115,13 +118,13 @@ func TestAddMethod(t *testing.T) {
 	record2 := array.NewRecord(arrowSchema, columns2, 2)
 	defer record2.Release()
 
-	err = table.Add(record2, nil)
+	err = table.Add(context.Background(), record2, nil)
 	if err != nil {
 		t.Fatalf("❌Failed to add second batch: %v", err)
 	}
 
 	// Check final count
-	finalCount, err := table.Count()
+	finalCount, err := table.Count(context.Background())
 	if err != nil {
 		t.Fatalf("❌Failed to get final row count: %v", err)
 	}

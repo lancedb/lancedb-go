@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	lancedb "github.com/lancedb/lancedb-go/pkg"
+	. "github.com/lancedb/lancedb-go/pkg/contracts"
 	"log"
 	"os"
 
@@ -70,7 +71,7 @@ func main() {
 
 	// Step 3: Create table
 	fmt.Println("\n📋 Step 3: Creating table 'users'...")
-	table, err := conn.CreateTable(ctx, "users", *schema)
+	table, err := conn.CreateTable(ctx, "users", schema)
 	if err != nil {
 		log.Fatalf("Failed to create table: %v", err)
 	}
@@ -104,7 +105,7 @@ func main() {
 
 	// Step 8: Final verification
 	fmt.Println("\n📋 Step 8: Final verification...")
-	count, err := table.Count()
+	count, err := table.Count(context.Background())
 	if err != nil {
 		log.Fatalf("Failed to get final count: %v", err)
 	}
@@ -114,7 +115,7 @@ func main() {
 	fmt.Println("==================================================")
 }
 
-func insertInitialData(table *lancedb.Table, schema *arrow.Schema) error {
+func insertInitialData(table ITable, schema *arrow.Schema) error {
 	pool := memory.NewGoAllocator()
 
 	// Create sample data
@@ -153,12 +154,12 @@ func insertInitialData(table *lancedb.Table, schema *arrow.Schema) error {
 	record := array.NewRecord(schema, columns, 5)
 	defer record.Release()
 
-	return table.Add(record, nil)
+	return table.AddRecords(context.Background(), []arrow.Record{record}, nil)
 }
 
-func demonstrateRead(table *lancedb.Table) error {
+func demonstrateRead(table ITable) error {
 	fmt.Println("  📖 Reading all records...")
-	results, err := table.Select(lancedb.QueryConfig{})
+	results, err := table.Select(context.Background(), QueryConfig{})
 	if err != nil {
 		return fmt.Errorf("failed to select all records: %w", err)
 	}
@@ -170,7 +171,7 @@ func demonstrateRead(table *lancedb.Table) error {
 	}
 
 	fmt.Println("\n  📖 Reading filtered records (score > 85)...")
-	results, err = table.SelectWithFilter("score > 85")
+	results, err = table.SelectWithFilter(context.Background(), "score > 85")
 	if err != nil {
 		return fmt.Errorf("failed to select filtered records: %w", err)
 	}
@@ -181,7 +182,7 @@ func demonstrateRead(table *lancedb.Table) error {
 	}
 
 	fmt.Println("\n  📖 Reading specific columns...")
-	results, err = table.SelectWithColumns([]string{"id", "name", "score"})
+	results, err = table.SelectWithColumns(context.Background(), []string{"id", "name", "score"})
 	if err != nil {
 		return fmt.Errorf("failed to select specific columns: %w", err)
 	}
@@ -194,14 +195,14 @@ func demonstrateRead(table *lancedb.Table) error {
 	return nil
 }
 
-func demonstrateUpdate(table *lancedb.Table) error {
+func demonstrateUpdate(table ITable) error {
 	fmt.Println("  ✏️ Updating score for user with ID = 1...")
 	updates := map[string]interface{}{
 		"score":  95.0,
 		"active": true,
 	}
 
-	if err := table.Update("id = 1", updates); err != nil {
+	if err := table.Update(context.Background(), "id = 1", updates); err != nil {
 		return fmt.Errorf("failed to update record: %w", err)
 	}
 	fmt.Println("  ✅ Successfully updated user ID = 1")
@@ -211,7 +212,7 @@ func demonstrateUpdate(table *lancedb.Table) error {
 		"age": "age + 1", // This would need to be supported by the SQL engine
 	}
 
-	if err := table.Update("active = true", bulkUpdates); err != nil {
+	if err := table.Update(context.Background(), "active = true", bulkUpdates); err != nil {
 		// Note: This might not work depending on SQL expression support
 		fmt.Printf("  ⚠️ Bulk update failed (expected): %v\n", err)
 		fmt.Println("  💡 Individual updates would be needed for complex expressions")
@@ -221,7 +222,7 @@ func demonstrateUpdate(table *lancedb.Table) error {
 
 	// Verify update
 	fmt.Println("\n  📖 Verifying updates...")
-	results, err := table.SelectWithFilter("id = 1")
+	results, err := table.SelectWithFilter(context.Background(), "id = 1")
 	if err != nil {
 		return fmt.Errorf("failed to verify update: %w", err)
 	}
@@ -234,30 +235,30 @@ func demonstrateUpdate(table *lancedb.Table) error {
 	return nil
 }
 
-func demonstrateDelete(table *lancedb.Table) error {
+func demonstrateDelete(table ITable) error {
 	fmt.Println("  🗑️ Deleting inactive users...")
 
 	// First, check how many inactive users we have
-	results, err := table.SelectWithFilter("active = false")
+	results, err := table.SelectWithFilter(context.Background(), "active = false")
 	if err != nil {
 		return fmt.Errorf("failed to count inactive users: %w", err)
 	}
 	fmt.Printf("  📊 Found %d inactive users to delete\n", len(results))
 
 	// Delete inactive users
-	if err := table.Delete("active = false"); err != nil {
+	if err := table.Delete(context.Background(), "active = false"); err != nil {
 		return fmt.Errorf("failed to delete inactive users: %w", err)
 	}
 	fmt.Println("  ✅ Successfully deleted inactive users")
 
 	fmt.Println("\n  🗑️ Deleting user with specific condition...")
-	if err := table.Delete("score < 80"); err != nil {
+	if err := table.Delete(context.Background(), "score < 80"); err != nil {
 		return fmt.Errorf("failed to delete low-score users: %w", err)
 	}
 	fmt.Println("  ✅ Successfully deleted users with score < 80")
 
 	// Verify deletion
-	count, err := table.Count()
+	count, err := table.Count(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to get count after deletion: %w", err)
 	}
@@ -265,7 +266,7 @@ func demonstrateDelete(table *lancedb.Table) error {
 
 	// Show remaining records
 	fmt.Println("\n  📖 Remaining records after deletion...")
-	results, err = table.Select(lancedb.QueryConfig{})
+	results, err = table.Select(context.Background(), QueryConfig{})
 	if err != nil {
 		return fmt.Errorf("failed to select remaining records: %w", err)
 	}

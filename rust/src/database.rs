@@ -5,7 +5,6 @@
 
 use crate::ffi::SimpleResult;
 use crate::runtime::get_simple_runtime;
-use lancedb::query::ExecutableQuery;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;

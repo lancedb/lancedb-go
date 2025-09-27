@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-package lancedb
+package tests
 
 import (
 	"context"
@@ -12,6 +12,10 @@ import (
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/memory"
+
+	lancedb "github.com/lancedb/lancedb-go/pkg"
+	"github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/internal"
 )
 
 // Helper function to check if a string contains a substring
@@ -37,7 +41,7 @@ func TestSelectQueries(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	// Connect to database
-	conn, err := Connect(context.Background(), tempDir, nil)
+	conn, err := lancedb.Connect(context.Background(), tempDir, nil)
 	if err != nil {
 		t.Fatalf("❌Failed to connect: %v", err)
 	}
@@ -52,13 +56,13 @@ func TestSelectQueries(t *testing.T) {
 		{Name: "embedding", Type: arrow.FixedSizeListOf(128, arrow.PrimitiveTypes.Float32), Nullable: false},
 	}
 	arrowSchema := arrow.NewSchema(fields, nil)
-	schema, err := NewSchema(arrowSchema)
+	schema, err := internal.NewSchema(arrowSchema)
 	if err != nil {
 		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	// Create table
-	table, err := conn.CreateTable(context.Background(), "test_select", *schema)
+	table, err := conn.CreateTable(context.Background(), "test_select", schema)
 	if err != nil {
 		t.Fatalf("❌Failed to create table: %v", err)
 	}
@@ -117,14 +121,14 @@ func TestSelectQueries(t *testing.T) {
 	defer record.Release()
 
 	// Add data to table
-	err = table.Add(record, nil)
+	err = table.Add(context.Background(), record, nil)
 	if err != nil {
 		t.Fatalf("❌Failed to add data: %v", err)
 	}
 	t.Log("✅ Sample data added successfully")
 
 	t.Run("Select All Records", func(t *testing.T) {
-		results, err := table.Select(QueryConfig{})
+		results, err := table.Select(context.Background(), contracts.QueryConfig{})
 		if err != nil {
 			t.Fatalf("❌Failed to select all records: %v", err)
 		}
@@ -140,7 +144,7 @@ func TestSelectQueries(t *testing.T) {
 	})
 
 	t.Run("Select Specific Columns", func(t *testing.T) {
-		results, err := table.SelectWithColumns([]string{"id", "name"})
+		results, err := table.SelectWithColumns(context.Background(), []string{"id", "name"})
 		if err != nil {
 			t.Fatalf("❌Failed to select specific columns: %v", err)
 		}
@@ -168,7 +172,7 @@ func TestSelectQueries(t *testing.T) {
 	})
 
 	t.Run("Select with Filter", func(t *testing.T) {
-		results, err := table.SelectWithFilter("score > 90")
+		results, err := table.SelectWithFilter(context.Background(), "score > 90")
 		if err != nil {
 			t.Fatalf("❌Failed to select with filter: %v", err)
 		}
@@ -193,7 +197,7 @@ func TestSelectQueries(t *testing.T) {
 
 	t.Run("Select with Limit", func(t *testing.T) {
 		limit := 3
-		results, err := table.SelectWithLimit(limit, 0)
+		results, err := table.SelectWithLimit(context.Background(), limit, 0)
 		if err != nil {
 			t.Fatalf("❌Failed to select with limit: %v", err)
 		}
@@ -211,7 +215,7 @@ func TestSelectQueries(t *testing.T) {
 			queryVector[j] = float32(0)*0.1 + float32(j)*0.001 // Similar to record 0
 		}
 
-		results, err := table.VectorSearch("embedding", queryVector, 3)
+		results, err := table.VectorSearch(context.Background(), "embedding", queryVector, 3)
 		if err != nil {
 			t.Fatalf("❌Failed to perform vector search: %v", err)
 		}
@@ -233,7 +237,7 @@ func TestSelectQueries(t *testing.T) {
 			queryVector[j] = float32(0)*0.1 + float32(j)*0.001
 		}
 
-		results, err := table.VectorSearchWithFilter("embedding", queryVector, 5, "category = 'A'")
+		results, err := table.VectorSearchWithFilter(context.Background(), "embedding", queryVector, 5, "category = 'A'")
 		if err != nil {
 			t.Fatalf("❌Failed to perform vector search with filter: %v", err)
 		}
@@ -243,7 +247,6 @@ func TestSelectQueries(t *testing.T) {
 			category, ok := row["category"].(string)
 			if !ok {
 				t.Fatal("Category should be string")
-				continue
 			}
 			if category != "A" {
 				t.Fatalf("❌Found record with category '%s', expected 'A'", category)
@@ -259,18 +262,18 @@ func TestSelectQueries(t *testing.T) {
 		}
 
 		limit := 2
-		config := QueryConfig{
+		config := contracts.QueryConfig{
 			Columns: []string{"id", "name", "score"},
 			Where:   "score > 85",
 			Limit:   &limit,
-			VectorSearch: &VectorSearch{
+			VectorSearch: &contracts.VectorSearch{
 				Column: "embedding",
 				Vector: queryVector,
 				K:      5,
 			},
 		}
 
-		results, err := table.Select(config)
+		results, err := table.Select(context.Background(), config)
 		if err != nil {
 			t.Fatalf("❌Failed to perform complex query: %v", err)
 		}
@@ -307,14 +310,14 @@ func TestSelectQueries(t *testing.T) {
 	})
 
 	t.Run("Full-Text Search (Should Return Error)", func(t *testing.T) {
-		config := QueryConfig{
-			FTSSearch: &FTSSearch{
+		config := contracts.QueryConfig{
+			FTSSearch: &contracts.FTSSearch{
 				Column: "name",
 				Query:  "Alice",
 			},
 		}
 
-		_, err := table.Select(config)
+		_, err := table.Select(context.Background(), config)
 		if err == nil {
 			t.Fatal("❌Expected error for FTS search, but got none")
 		} else if !contains(err.Error(), "Full-text search is not currently supported") {
@@ -325,7 +328,7 @@ func TestSelectQueries(t *testing.T) {
 
 	t.Run("Error Handling - Closed Table", func(t *testing.T) {
 		table.Close()
-		_, err := table.Select(QueryConfig{})
+		_, err := table.Select(context.Background(), contracts.QueryConfig{})
 		if err == nil {
 			t.Fatal("❌Expected error when querying closed table")
 		}
@@ -336,7 +339,7 @@ func TestSelectQueries(t *testing.T) {
 	})
 }
 
-func TestConvenienceMethods(t *testing.T) {
+func TestSelectConvenienceMethods(t *testing.T) {
 	// Setup test database
 	tempDir, err := os.MkdirTemp("", "lancedb_test_convenience_")
 	if err != nil {
@@ -345,7 +348,7 @@ func TestConvenienceMethods(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	// Connect to database
-	conn, err := Connect(context.Background(), tempDir, nil)
+	conn, err := lancedb.Connect(context.Background(), tempDir, nil)
 	if err != nil {
 		t.Fatalf("❌Failed to connect: %v", err)
 	}
@@ -358,13 +361,13 @@ func TestConvenienceMethods(t *testing.T) {
 		{Name: "score", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
 	}
 	arrowSchema := arrow.NewSchema(fields, nil)
-	schema, err := NewSchema(arrowSchema)
+	schema, err := internal.NewSchema(arrowSchema)
 	if err != nil {
 		t.Fatalf("❌Failed to create schema: %v", err)
 	}
 
 	// Create table
-	table, err := conn.CreateTable(context.Background(), "test_convenience", *schema)
+	table, err := conn.CreateTable(context.Background(), "test_convenience", schema)
 	if err != nil {
 		t.Fatalf("❌Failed to create table: %v", err)
 	}
@@ -391,13 +394,13 @@ func TestConvenienceMethods(t *testing.T) {
 	record := array.NewRecord(arrowSchema, columns, 3)
 	defer record.Release()
 
-	err = table.Add(record, nil)
+	err = table.Add(context.Background(), record, nil)
 	if err != nil {
 		t.Fatalf("❌Failed to add data: %v", err)
 	}
 
 	t.Run("SelectWithColumns", func(t *testing.T) {
-		results, err := table.SelectWithColumns([]string{"name", "score"})
+		results, err := table.SelectWithColumns(context.Background(), []string{"name", "score"})
 		if err != nil {
 			t.Fatalf("SelectWithColumns failed: %v", err)
 		}
@@ -408,7 +411,7 @@ func TestConvenienceMethods(t *testing.T) {
 	})
 
 	t.Run("SelectWithFilter", func(t *testing.T) {
-		results, err := table.SelectWithFilter("score > 90")
+		results, err := table.SelectWithFilter(context.Background(), "score > 90")
 		if err != nil {
 			t.Fatalf("SelectWithFilter failed: %v", err)
 		}
@@ -419,7 +422,7 @@ func TestConvenienceMethods(t *testing.T) {
 	})
 
 	t.Run("SelectWithLimit", func(t *testing.T) {
-		results, err := table.SelectWithLimit(2, 1)
+		results, err := table.SelectWithLimit(context.Background(), 2, 1)
 		if err != nil {
 			t.Fatalf("SelectWithLimit failed: %v", err)
 		}

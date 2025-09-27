@@ -6,7 +6,6 @@
 use crate::ffi::{from_c_str, SimpleResult};
 use crate::runtime::get_simple_runtime;
 use lancedb::connect;
-use lancedb::query::ExecutableQuery;
 use std::os::raw::{c_char, c_void};
 
 /// Connect to a LanceDB database (simple version)

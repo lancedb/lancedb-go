@@ -200,3 +200,102 @@ pub extern "C" fn simple_lancedb_table_add_json(
         ))),
     }
 }
+
+/// Add data to a table using Arrow IPC format (more efficient than JSON)
+/// Accepts batch of records as Arrow IPC binary data
+#[no_mangle]
+pub extern "C" fn simple_lancedb_table_add_ipc(
+    table_handle: *mut c_void,
+    ipc_data: *const u8,
+    ipc_len: usize,
+    added_count: *mut i64,
+) -> *mut SimpleResult {
+    let result = std::panic::catch_unwind(|| -> SimpleResult {
+        if table_handle.is_null() || ipc_data.is_null() || added_count.is_null() {
+            return SimpleResult::error("Invalid null arguments".to_string());
+        }
+
+        if ipc_len == 0 {
+            unsafe {
+                *added_count = 0;
+            }
+            return SimpleResult::ok();
+        }
+
+        let table = unsafe { &*(table_handle as *const lancedb::Table) };
+        let rt = get_simple_runtime();
+
+        // Convert raw pointer to slice
+        let ipc_bytes = unsafe { std::slice::from_raw_parts(ipc_data, ipc_len) };
+
+        // Deserialize Arrow IPC data to RecordBatch(es)
+        match ipc_to_record_batches(ipc_bytes) {
+            Ok(record_batches) => {
+                if record_batches.is_empty() {
+                    unsafe {
+                        *added_count = 0;
+                    }
+                    return SimpleResult::ok();
+                }
+
+                // Calculate total rows across all batches
+                let total_rows: usize = record_batches.iter().map(|batch| batch.num_rows()).sum();
+
+                // Add the record batches to the table
+                match rt.block_on(async {
+                    use arrow_array::RecordBatchIterator;
+                    
+                    // Get schema from the first batch
+                    let schema = record_batches[0].schema();
+                    
+                    // Create iterator from record batches
+                    let batches: Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>> = 
+                        record_batches.into_iter().map(Ok).collect();
+                    let batch_iter = RecordBatchIterator::new(batches, schema);
+                    
+                    table.add(batch_iter).execute().await
+                }) {
+                    Ok(_) => {
+                        unsafe {
+                            *added_count = total_rows as i64;
+                        }
+                        SimpleResult::ok()
+                    }
+                    Err(e) => SimpleResult::error(format!("Failed to add data to table: {}", e)),
+                }
+            }
+            Err(e) => SimpleResult::error(format!("Failed to parse IPC data: {}", e)),
+        }
+    });
+
+    match result {
+        Ok(res) => Box::into_raw(Box::new(res)),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_add_ipc".to_string(),
+        ))),
+    }
+}
+
+/// Helper function to convert IPC bytes to RecordBatches
+fn ipc_to_record_batches(
+    ipc_bytes: &[u8],
+) -> Result<Vec<arrow_array::RecordBatch>, String> {
+    use arrow_ipc::reader::FileReader;
+    use std::io::Cursor;
+
+    // Create a reader from the IPC bytes
+    let cursor = Cursor::new(ipc_bytes);
+    let reader = FileReader::try_new(cursor, None)
+        .map_err(|e| format!("Failed to create IPC reader: {}", e))?;
+
+    // Collect all record batches
+    let mut record_batches = Vec::new();
+    for batch_result in reader {
+        match batch_result {
+            Ok(batch) => record_batches.push(batch),
+            Err(e) => return Err(format!("Failed to read record batch: {}", e)),
+        }
+    }
+
+    Ok(record_batches)
+}

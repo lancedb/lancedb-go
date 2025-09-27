@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	lancedb "github.com/lancedb/lancedb-go/pkg"
+	. "github.com/lancedb/lancedb-go/pkg/contracts"
 	"log"
 	"math"
 	"math/rand"
@@ -117,7 +118,7 @@ func main() {
 	fmt.Println("==================================================")
 }
 
-func createVectorTable(conn *lancedb.Connection, ctx context.Context) (*lancedb.Table, *arrow.Schema, error) {
+func createVectorTable(conn IConnection, ctx context.Context) (ITable, *arrow.Schema, error) {
 	fields := []arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
 		{Name: "title", Type: arrow.BinaryTypes.String, Nullable: false},
@@ -133,7 +134,7 @@ func createVectorTable(conn *lancedb.Connection, ctx context.Context) (*lancedb.
 		return nil, nil, err
 	}
 
-	table, err := conn.CreateTable(ctx, "documents", *schema)
+	table, err := conn.CreateTable(ctx, "documents", schema)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -141,7 +142,7 @@ func createVectorTable(conn *lancedb.Connection, ctx context.Context) (*lancedb.
 	return table, arrowSchema, nil
 }
 
-func insertSampleDocuments(table *lancedb.Table, schema *arrow.Schema) error {
+func insertSampleDocuments(table ITable, schema *arrow.Schema) error {
 	pool := memory.NewGoAllocator()
 	rand.Seed(time.Now().UnixNano())
 
@@ -208,7 +209,7 @@ func insertSampleDocuments(table *lancedb.Table, schema *arrow.Schema) error {
 	record := array.NewRecord(schema, columns, int64(len(documents)))
 	defer record.Release()
 
-	return table.Add(record, nil)
+	return table.Add(context.Background(), record, nil)
 }
 
 func generateSampleDocuments() []Document {
@@ -319,14 +320,14 @@ func normalizeVector(vector []float32) {
 	}
 }
 
-func basicVectorSearch(table *lancedb.Table) error {
+func basicVectorSearch(table ITable) error {
 	fmt.Println("  🔍 Performing basic vector similarity search...")
 
 	// Create a query vector (simulate search for "machine learning" content)
 	queryVector := generateEmbedding("Machine Learning", "artificial intelligence deep learning", "technology")
 
 	// Perform vector search
-	results, err := table.VectorSearch("vector", queryVector, 5)
+	results, err := table.VectorSearch(context.Background(), "vector", queryVector, 5)
 	if err != nil {
 		return fmt.Errorf("vector search failed: %w", err)
 	}
@@ -342,7 +343,7 @@ func basicVectorSearch(table *lancedb.Table) error {
 	return nil
 }
 
-func vectorSearchWithDifferentK(table *lancedb.Table) error {
+func vectorSearchWithDifferentK(table ITable) error {
 	fmt.Println("  🔢 Testing vector search with different K values...")
 
 	queryVector := generateEmbedding("Sports Analysis", "football basketball statistics", "sports")
@@ -353,7 +354,7 @@ func vectorSearchWithDifferentK(table *lancedb.Table) error {
 		fmt.Printf("  🔍 K = %d:\n", k)
 
 		start := time.Now()
-		results, err := table.VectorSearch("vector", queryVector, k)
+		results, err := table.VectorSearch(context.Background(), "vector", queryVector, k)
 		elapsed := time.Since(start)
 
 		if err != nil {
@@ -370,14 +371,14 @@ func vectorSearchWithDifferentK(table *lancedb.Table) error {
 	return nil
 }
 
-func vectorSearchWithFiltering(table *lancedb.Table) error {
+func vectorSearchWithFiltering(table ITable) error {
 	fmt.Println("  🎯 Vector search with metadata filtering...")
 
 	queryVector := generateEmbedding("Health Research", "medical studies wellness", "health")
 
 	// Search within specific category
 	fmt.Println("  🔍 Searching within 'health' category:")
-	results, err := table.VectorSearchWithFilter("vector", queryVector, 5, "category = 'health'")
+	results, err := table.VectorSearchWithFilter(context.Background(), "vector", queryVector, 5, "category = 'health'")
 	if err != nil {
 		return fmt.Errorf("filtered vector search failed: %w", err)
 	}
@@ -390,7 +391,7 @@ func vectorSearchWithFiltering(table *lancedb.Table) error {
 
 	// Search with multiple filters
 	fmt.Println("\n  🔍 Searching with multiple filters:")
-	results, err = table.VectorSearchWithFilter("vector", queryVector, 10,
+	results, err = table.VectorSearchWithFilter(context.Background(), "vector", queryVector, 10,
 		"category IN ('health', 'science') AND tags LIKE '%featured%'")
 	if err != nil {
 		return fmt.Errorf("multi-filtered vector search failed: %w", err)
@@ -405,7 +406,7 @@ func vectorSearchWithFiltering(table *lancedb.Table) error {
 	return nil
 }
 
-func advancedSearchConfigurations(table *lancedb.Table) error {
+func advancedSearchConfigurations(table ITable) error {
 	fmt.Println("  ⚙️ Advanced search configurations...")
 
 	queryVector := generateEmbedding("Technology Innovation", "startup artificial intelligence", "technology")
@@ -413,11 +414,11 @@ func advancedSearchConfigurations(table *lancedb.Table) error {
 	// Complex query with vector search, filtering, column selection, and limits
 	fmt.Println("  🔍 Complex query configuration:")
 	limit := 3
-	config := lancedb.QueryConfig{
+	config := QueryConfig{
 		Columns: []string{"id", "title", "category"},
 		Where:   "category IN ('technology', 'business')",
 		Limit:   &limit,
-		VectorSearch: &lancedb.VectorSearch{
+		VectorSearch: &VectorSearch{
 			Column: "vector",
 			Vector: queryVector,
 			K:      10, // Get top 10, then filter and limit to 3
@@ -425,7 +426,7 @@ func advancedSearchConfigurations(table *lancedb.Table) error {
 	}
 
 	start := time.Now()
-	results, err := table.Select(config)
+	results, err := table.Select(context.Background(), config)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -441,7 +442,7 @@ func advancedSearchConfigurations(table *lancedb.Table) error {
 	return nil
 }
 
-func performanceBenchmarks(table *lancedb.Table) error {
+func performanceBenchmarks(table ITable) error {
 	fmt.Println("  ⚡ Performance benchmarks...")
 
 	queryVectors := make([][]float32, 5)
@@ -460,7 +461,7 @@ func performanceBenchmarks(table *lancedb.Table) error {
 	for _, k := range kValues {
 		start := time.Now()
 		for i, queryVector := range queryVectors {
-			_, err := table.VectorSearch("vector", queryVector, k)
+			_, err := table.VectorSearch(context.Background(), "vector", queryVector, k)
 			if err != nil {
 				return fmt.Errorf("benchmark search %d failed: %w", i, err)
 			}
@@ -477,7 +478,7 @@ func performanceBenchmarks(table *lancedb.Table) error {
 	// Without filtering
 	start := time.Now()
 	for _, queryVector := range queryVectors {
-		_, err := table.VectorSearch("vector", queryVector, 5)
+		_, err := table.VectorSearch(context.Background(), "vector", queryVector, 5)
 		if err != nil {
 			return fmt.Errorf("benchmark without filter failed: %w", err)
 		}
@@ -487,7 +488,7 @@ func performanceBenchmarks(table *lancedb.Table) error {
 	// With filtering
 	start = time.Now()
 	for _, queryVector := range queryVectors {
-		_, err := table.VectorSearchWithFilter("vector", queryVector, 5, "category = 'technology'")
+		_, err := table.VectorSearchWithFilter(context.Background(), "vector", queryVector, 5, "category = 'technology'")
 		if err != nil {
 			return fmt.Errorf("benchmark with filter failed: %w", err)
 		}
