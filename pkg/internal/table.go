@@ -31,9 +31,10 @@ import (
 type Table struct {
 	name       string
 	connection *Connection
-	handle     unsafe.Pointer
-	mu         sync.RWMutex
-	closed     bool
+	// #nosec G103 - FFI handle for C interop with Rust library
+	handle unsafe.Pointer
+	mu     sync.RWMutex
+	closed bool
 }
 
 // Compile-time check to ensure Table implements ITable interface
@@ -110,6 +111,7 @@ func (t *Table) Schema(_ context.Context) (*arrow.Schema, error) {
 	defer C.simple_lancedb_free_ipc_data(schemaIPCData)
 
 	// Convert C data to Go slice
+	// #nosec G103 - Safe conversion of C memory to Go bytes for Arrow IPC data
 	ipcBytes := C.GoBytes(unsafe.Pointer(schemaIPCData), C.int(schemaIPCLen))
 
 	// Create a reader from the IPC bytes
@@ -160,7 +162,10 @@ func (t *Table) AddRecords(_ context.Context, records []arrow.Record, _ *contrac
 
 	for _, record := range records {
 		if err := writer.Write(record); err != nil {
-			writer.Close()
+			err := writer.Close()
+			if err != nil {
+				return fmt.Errorf("failed to close writer: %w", err)
+			}
 			return fmt.Errorf("failed to write record to IPC: %w", err)
 		}
 	}
@@ -179,6 +184,7 @@ func (t *Table) AddRecords(_ context.Context, records []arrow.Record, _ *contrac
 	var addedCount C.int64_t
 	result := C.simple_lancedb_table_add_ipc(
 		t.handle,
+		// #nosec G103 - Safe conversion of Go slice to C array pointer for FFI
 		(*C.uchar)(unsafe.Pointer(&ipcBytes[0])),
 		C.ulong(len(ipcBytes)),
 		&addedCount,
@@ -292,9 +298,11 @@ func (t *Table) Update(_ context.Context, filter string, updates map[string]inte
 	}
 
 	cFilter := C.CString(filter)
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cFilter))
 
 	cUpdatesJSON := C.CString(string(updatesJSON))
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cUpdatesJSON))
 
 	result := C.simple_lancedb_table_update(t.handle, cFilter, cUpdatesJSON)
@@ -321,6 +329,7 @@ func (t *Table) Delete(_ context.Context, filter string) error {
 	}
 
 	cFilter := C.CString(filter)
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cFilter))
 
 	var deletedCount C.int64_t
@@ -368,14 +377,17 @@ func (t *Table) CreateIndexWithName(_ context.Context, columns []string, indexTy
 	indexTypeStr := t.indexTypeToString(indexType)
 
 	cColumnsJSON := C.CString(string(columnsJSON))
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cColumnsJSON))
 
 	cIndexType := C.CString(indexTypeStr)
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cIndexType))
 
 	var cIndexName *C.char
 	if name != "" {
 		cIndexName = C.CString(name)
+		// #nosec G103 - Required for freeing C allocated string memory
 		defer C.free(unsafe.Pointer(cIndexName))
 	}
 
@@ -450,6 +462,7 @@ func (t *Table) Select(_ context.Context, config contracts.QueryConfig) ([]map[s
 	}
 
 	cConfigJSON := C.CString(string(configJSON))
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cConfigJSON))
 
 	var resultJSON *C.char

@@ -28,8 +28,10 @@ func Connect(_ context.Context, uri string, options *contracts.ConnectionOptions
 	C.simple_lancedb_init()
 
 	cURI := C.CString(uri)
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cURI))
 
+	// #nosec G103 - FFI handle for C interop with Rust library
 	var handle unsafe.Pointer
 	var result *C.SimpleResult
 
@@ -42,6 +44,7 @@ func Connect(_ context.Context, uri string, options *contracts.ConnectionOptions
 		}
 
 		cOptions := C.CString(string(optionsJSON))
+		// #nosec G103 - Required for freeing C allocated string memory
 		defer C.free(unsafe.Pointer(cOptions))
 
 		result = C.simple_lancedb_connect_with_options(cURI, cOptions, &handle)

@@ -29,11 +29,13 @@ import (
 
 // Connection represents a connection to a LanceDB database
 type Connection struct {
+	// #nosec G103 - FFI handle for C interop with Rust library
 	handle unsafe.Pointer
 	mu     sync.RWMutex
 	closed bool
 }
 
+// #nosec G103 - Function parameter for FFI handle from C interop
 func NewConnection(handle unsafe.Pointer, closed bool) *Connection {
 	return &Connection{
 		handle: handle,
@@ -107,6 +109,7 @@ func (c *Connection) TableNames(_ context.Context) ([]string, error) {
 
 	// Convert C string array to Go string slice
 	tableNames := make([]string, int(count))
+	// #nosec G103 - Safe conversion of C array pointer to Go slice with known bounds
 	cNamesSlice := (*[1 << 20]*C.char)(unsafe.Pointer(cNames))[:count:count]
 	for i, cName := range cNamesSlice {
 		tableNames[i] = C.GoString(cName)
@@ -130,8 +133,10 @@ func (c *Connection) OpenTable(_ context.Context, name string) (contracts.ITable
 	}
 
 	cName := C.CString(name)
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cName))
 
+	// #nosec G103 - FFI handle for table from C interop
 	var tableHandle unsafe.Pointer
 	result := C.simple_lancedb_open_table(c.handle, cName, &tableHandle)
 	defer C.simple_lancedb_result_free(result)
@@ -173,11 +178,13 @@ func (c *Connection) CreateTable(ctx context.Context, name string, schema contra
 	}
 
 	cName := C.CString(name)
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cName))
 
 	// Convert Go bytes to C pointers
 	var cSchemaPtr *C.uchar
 	if len(schemaIPC) > 0 {
+		// #nosec G103 - Safe conversion of Go slice to C pointer for FFI
 		cSchemaPtr = (*C.uchar)(unsafe.Pointer(&schemaIPC[0]))
 	}
 
@@ -211,6 +218,7 @@ func (c *Connection) DropTable(_ context.Context, name string) error {
 	}
 
 	cName := C.CString(name)
+	// #nosec G103 - Required for freeing C allocated string memory
 	defer C.free(unsafe.Pointer(cName))
 
 	result := C.simple_lancedb_drop_table(c.handle, cName)
