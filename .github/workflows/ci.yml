@@ -215,11 +215,26 @@ jobs:
       - name: Run Go linting
         run: golangci-lint run --config .golangci.yml
 
+      # Debug: Check library files before running tests
+      - name: Debug - Verify library files for tests
+        run: |
+          echo "Checking library files for runtime..."
+          ls -la rust/target/generated/lib/
+          find rust/target/generated/lib -name "liblancedb_go.*" -exec file {} \;
+          echo "PWD: $(pwd)"
+          echo "Absolute path: $(realpath rust/target/generated/lib)"
+
       - name: Run tests with race detection
-        run: go test -v -race ./...
+        run: |
+          export LD_LIBRARY_PATH="$(pwd)/rust/target/generated/lib:${LD_LIBRARY_PATH:-}"
+          echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+          ldd rust/target/generated/lib/liblancedb_go.so 2>/dev/null || echo "ldd check failed"
+          go test -v -race ./...
 
       - name: Run benchmarks
-        run: go test -bench=. -benchmem ./...
+        run: |
+          export LD_LIBRARY_PATH="$(pwd)/rust/target/generated/lib:${LD_LIBRARY_PATH:-}"
+          go test -bench=. -benchmem ./...
 
   # 🔒 Security scanning (lightweight, no rebuild)
   security:
