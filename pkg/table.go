@@ -12,14 +12,15 @@ package lancedb
 import "C"
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"runtime"
-	"strings"
 	"unsafe"
 
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
+	"github.com/apache/arrow/go/v17/arrow/ipc"
 )
 
 // AddDataOptions configures how data is added to a Table
@@ -74,7 +75,7 @@ func (t *Table) Close() error {
 	return nil
 }
 
-// Schema returns the schema of the Table
+// Schema returns the schema of the Table using efficient Arrow IPC format
 //
 //nolint:gocritic
 func (t *Table) Schema() (*arrow.Schema, error) {
@@ -85,8 +86,9 @@ func (t *Table) Schema() (*arrow.Schema, error) {
 		return nil, fmt.Errorf("table is closed")
 	}
 
-	var schemaJSON *C.char
-	result := C.simple_lancedb_table_schema(t.handle, &schemaJSON)
+	var schemaIPCData *C.uchar
+	var schemaIPCLen C.size_t
+	result := C.simple_lancedb_table_schema_ipc(t.handle, &schemaIPCData, &schemaIPCLen)
 	defer C.simple_lancedb_result_free(result)
 
 	if !result.SUCCESS {
@@ -97,40 +99,30 @@ func (t *Table) Schema() (*arrow.Schema, error) {
 		return nil, fmt.Errorf("failed to get table schema: unknown error")
 	}
 
-	if schemaJSON == nil {
-		return nil, fmt.Errorf("received null schema")
+	if schemaIPCData == nil {
+		return nil, fmt.Errorf("received null schema IPC data")
 	}
 
-	jsonStr := C.GoString(schemaJSON)
-	C.simple_lancedb_free_string(schemaJSON)
+	// Free the IPC data when we're done
+	defer C.simple_lancedb_free_ipc_data(schemaIPCData)
 
-	// Parse JSON schema and convert to Arrow schema
-	var schemaObj struct {
-		Fields []struct {
-			Name     string `json:"name"`
-			Type     string `json:"type"`
-			Nullable bool   `json:"nullable"`
-		} `json:"fields"`
+	// Convert C data to Go slice
+	ipcBytes := C.GoBytes(unsafe.Pointer(schemaIPCData), C.int(schemaIPCLen))
+
+	// Create a reader from the IPC bytes
+	reader, err := ipc.NewFileReader(bytes.NewReader(ipcBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create IPC reader: %w", err)
+	}
+	defer reader.Close()
+
+	// Get the schema from the IPC reader
+	schema := reader.Schema()
+	if schema == nil {
+		return nil, fmt.Errorf("failed to read schema from IPC data")
 	}
 
-	if err := json.Unmarshal([]byte(jsonStr), &schemaObj); err != nil {
-		return nil, fmt.Errorf("failed to parse schema JSON: %w", err)
-	}
-
-	fields := make([]arrow.Field, 0, len(schemaObj.Fields))
-	for _, field := range schemaObj.Fields {
-		dataType, err := t.stringToArrowType(field.Type)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert field %s type %s: %w", field.Name, field.Type, err)
-		}
-		fields = append(fields, arrow.Field{
-			Name:     field.Name,
-			Type:     dataType,
-			Nullable: field.Nullable,
-		})
-	}
-
-	return arrow.NewSchema(fields, nil), nil
+	return schema, nil
 }
 
 // Add inserts data into the Table
@@ -581,40 +573,6 @@ func (t *Table) indexTypeToString(indexType IndexType) string {
 		return "fts"
 	default:
 		return "vector" // Default fallback
-	}
-}
-
-// stringToArrowType converts string type representation to Arrow DataType
-func (t *Table) stringToArrowType(typeStr string) (arrow.DataType, error) {
-	switch typeStr {
-	case "int32":
-		return arrow.PrimitiveTypes.Int32, nil
-	case "int64":
-		return arrow.PrimitiveTypes.Int64, nil
-	case "float32":
-		return arrow.PrimitiveTypes.Float32, nil
-	case "float64":
-		return arrow.PrimitiveTypes.Float64, nil
-	case "string":
-		return arrow.BinaryTypes.String, nil
-	case "binary":
-		return arrow.BinaryTypes.Binary, nil
-	case "boolean":
-		return arrow.FixedWidthTypes.Boolean, nil
-	default:
-		// Check for vector type (fixed_size_list[float32;N])
-		prefix := "fixed_size_list[float32;"
-		if strings.HasPrefix(typeStr, prefix) && strings.HasSuffix(typeStr, "]") {
-			// Extract dimension from "fixed_size_list[float32;128]"
-			dimStr := typeStr[len(prefix) : len(typeStr)-1] // Remove prefix and "]"
-			var dimension int32
-			_, err := fmt.Sscanf(dimStr, "%d", &dimension)
-			if err != nil {
-				return nil, fmt.Errorf("invalid vector dimension: %s", dimStr)
-			}
-			return arrow.FixedSizeListOf(dimension, arrow.PrimitiveTypes.Float32), nil
-		}
-		return nil, fmt.Errorf("unsupported type: %s", typeStr)
 	}
 }
 

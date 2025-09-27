@@ -151,3 +151,85 @@ pub extern "C" fn simple_lancedb_table_schema(
         ))),
     }
 }
+
+/// Get table schema as Arrow IPC binary format (more efficient than JSON)
+#[no_mangle]
+pub extern "C" fn simple_lancedb_table_schema_ipc(
+    table_handle: *mut c_void,
+    schema_ipc_data: *mut *mut u8,
+    schema_ipc_len: *mut usize,
+) -> *mut SimpleResult {
+    let result = std::panic::catch_unwind(|| -> SimpleResult {
+        if table_handle.is_null() || schema_ipc_data.is_null() || schema_ipc_len.is_null() {
+            return SimpleResult::error("Invalid null arguments".to_string());
+        }
+
+        let table = unsafe { &*(table_handle as *const lancedb::Table) };
+        let rt = get_simple_runtime();
+
+        match rt.block_on(async { table.schema().await }) {
+            Ok(arrow_schema) => {
+                // Convert Arrow schema to IPC format
+                match schema_to_ipc_bytes(&arrow_schema) {
+                    Ok(ipc_bytes) => {
+                        let len = ipc_bytes.len();
+                        
+                        // Allocate memory for the IPC data
+                        let data_ptr = unsafe { libc::malloc(len) as *mut u8 };
+                        if data_ptr.is_null() {
+                            return SimpleResult::error("Failed to allocate memory for IPC data".to_string());
+                        }
+
+                        // Copy the IPC bytes to the allocated memory
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(ipc_bytes.as_ptr(), data_ptr, len);
+                            *schema_ipc_data = data_ptr;
+                            *schema_ipc_len = len;
+                        }
+
+                        SimpleResult::ok()
+                    }
+                    Err(e) => SimpleResult::error(format!("Failed to serialize schema to IPC: {}", e)),
+                }
+            }
+            Err(e) => SimpleResult::error(format!("Failed to get table schema: {}", e)),
+        }
+    });
+
+    match result {
+        Ok(res) => Box::into_raw(Box::new(res)),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_schema_ipc".to_string(),
+        ))),
+    }
+}
+
+/// Free IPC schema data allocated by simple_lancedb_table_schema_ipc
+#[no_mangle]
+pub extern "C" fn simple_lancedb_free_ipc_data(data: *mut u8) {
+    if data.is_null() {
+        return;
+    }
+    unsafe {
+        libc::free(data as *mut std::ffi::c_void);
+    }
+}
+
+/// Helper function to convert Arrow schema to IPC bytes
+fn schema_to_ipc_bytes(schema: &arrow_schema::Schema) -> Result<Vec<u8>, String> {
+    use arrow_ipc::writer::FileWriter;
+    use std::io::Cursor;
+
+    // Create a buffer to write IPC data to
+    let mut buffer = Cursor::new(Vec::new());
+    
+    // Create an Arrow IPC FileWriter
+    let mut writer = FileWriter::try_new(&mut buffer, schema)
+        .map_err(|e| format!("Failed to create IPC writer: {}", e))?;
+        
+    // Finish the writer to ensure the schema is written
+    writer.finish()
+        .map_err(|e| format!("Failed to finish IPC writer: {}", e))?;
+    
+    Ok(buffer.into_inner())
+}
