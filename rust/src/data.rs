@@ -244,15 +244,15 @@ pub extern "C" fn simple_lancedb_table_add_ipc(
                 // Add the record batches to the table
                 match rt.block_on(async {
                     use arrow_array::RecordBatchIterator;
-                    
+
                     // Get schema from the first batch
                     let schema = record_batches[0].schema();
-                    
+
                     // Create iterator from record batches
-                    let batches: Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>> = 
+                    let batches: Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>> =
                         record_batches.into_iter().map(Ok).collect();
                     let batch_iter = RecordBatchIterator::new(batches, schema);
-                    
+
                     table.add(batch_iter).execute().await
                 }) {
                     Ok(_) => {
@@ -277,9 +277,7 @@ pub extern "C" fn simple_lancedb_table_add_ipc(
 }
 
 /// Helper function to convert IPC bytes to RecordBatches
-fn ipc_to_record_batches(
-    ipc_bytes: &[u8],
-) -> Result<Vec<arrow_array::RecordBatch>, String> {
+fn ipc_to_record_batches(ipc_bytes: &[u8]) -> Result<Vec<arrow_array::RecordBatch>, String> {
     use arrow_ipc::reader::FileReader;
     use std::io::Cursor;
 

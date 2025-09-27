@@ -4,8 +4,8 @@
 //! Data type conversion utilities
 
 use arrow_array::{
-    ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, Float64Array, Int32Array,
-    Int64Array, StringArray,
+    ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array,
+    StringArray,
 };
 use arrow_schema::DataType;
 use std::sync::Arc;

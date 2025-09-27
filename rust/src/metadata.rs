@@ -3,7 +3,7 @@
 
 //! Table metadata operations
 
-use crate::ffi::{SimpleResult};
+use crate::ffi::SimpleResult;
 use crate::runtime::get_simple_runtime;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
@@ -173,11 +173,13 @@ pub extern "C" fn simple_lancedb_table_schema_ipc(
                 match schema_to_ipc_bytes(&arrow_schema) {
                     Ok(ipc_bytes) => {
                         let len = ipc_bytes.len();
-                        
+
                         // Allocate memory for the IPC data
                         let data_ptr = unsafe { libc::malloc(len) as *mut u8 };
                         if data_ptr.is_null() {
-                            return SimpleResult::error("Failed to allocate memory for IPC data".to_string());
+                            return SimpleResult::error(
+                                "Failed to allocate memory for IPC data".to_string(),
+                            );
                         }
 
                         // Copy the IPC bytes to the allocated memory
@@ -189,7 +191,9 @@ pub extern "C" fn simple_lancedb_table_schema_ipc(
 
                         SimpleResult::ok()
                     }
-                    Err(e) => SimpleResult::error(format!("Failed to serialize schema to IPC: {}", e)),
+                    Err(e) => {
+                        SimpleResult::error(format!("Failed to serialize schema to IPC: {}", e))
+                    }
                 }
             }
             Err(e) => SimpleResult::error(format!("Failed to get table schema: {}", e)),
@@ -222,14 +226,15 @@ fn schema_to_ipc_bytes(schema: &arrow_schema::Schema) -> Result<Vec<u8>, String>
 
     // Create a buffer to write IPC data to
     let mut buffer = Cursor::new(Vec::new());
-    
+
     // Create an Arrow IPC FileWriter
     let mut writer = FileWriter::try_new(&mut buffer, schema)
         .map_err(|e| format!("Failed to create IPC writer: {}", e))?;
-        
+
     // Finish the writer to ensure the schema is written
-    writer.finish()
+    writer
+        .finish()
         .map_err(|e| format!("Failed to finish IPC writer: {}", e))?;
-    
+
     Ok(buffer.into_inner())
 }
