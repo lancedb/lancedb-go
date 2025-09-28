@@ -2,9 +2,15 @@ name: CI (Optimized)
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main ]
+    paths-ignore:
+      - '**/*.md'
+      - 'LICENSE'
   workflow_dispatch:
 
 env:
