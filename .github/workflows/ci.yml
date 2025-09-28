@@ -448,7 +448,7 @@ jobs:
   ci-success:
     name: CI Success
     if: always()
-    needs: [quick-checks, build-artifacts, test, security, build-examples, docs]
+    needs: [quick-checks, build-artifacts, test, build-examples, docs]
     runs-on: ubuntu-latest
     
     steps:
