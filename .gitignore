@@ -48,3 +48,5 @@ Thumbs.db
 # VSCode (if someone opens with it)
 # -----------------------
 .vscode/
+
+tmp/

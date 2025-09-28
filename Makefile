@@ -36,6 +36,12 @@ clean:
 	go clean ./...
 	rm -rf rust/target/
 
+# Clean binary distribution files
+clean-dist:
+	@echo "Cleaning binary distribution files..."
+	rm -rf lib/
+	rm -rf include/
+
 # Install development dependencies
 install-deps:
 	@echo "Installing Rust dependencies..."
@@ -161,17 +167,24 @@ check-fmt:
 	@echo "Checking Go code formatting..."
 	test -z "$$(gofmt -l .)"
 
-# Create a release build
-release: clean
-	@echo "Creating release build..."
-	cd rust && cargo build --release --features remote
-	@echo "Generating C headers..."
-	mkdir -p rust/target/generated/include
-	cd rust && cbindgen --config cbindgen.toml --crate lancedb-go --output target/generated/include/lancedb.h
-	@echo "Copying library files..."
-	mkdir -p rust/target/generated/lib
-	cp rust/target/release/liblancedb_go.a rust/target/generated/lib/
-	@echo "Release build complete"
+# Build native libraries for current platform
+build-native:
+	@echo "Building native libraries for current platform..."
+	./scripts/build-native.sh
+
+# Build native libraries for all supported platforms
+build-all-platforms:
+	@echo "Building native libraries for all platforms..."
+	./scripts/build-all-platforms.sh
+
+# Test binary distribution
+test-dist: build-native
+	@echo "Testing binary distribution..."
+	./scripts/test-binary-distribution.sh
+
+# Create a release build (legacy - use build-native instead)
+release: clean build-native
+	@echo "Release build complete (using binary distribution)"
 
 # Install pre-commit hooks
 install-hooks:
@@ -203,11 +216,15 @@ help:
 	@echo "Available targets:"
 	@echo ""
 	@echo "=== Build & Test ==="
-	@echo "  all          - Build and test"
-	@echo "  build        - Build Rust library and Go bindings"
-	@echo "  test         - Run tests"
-	@echo "  bench        - Run benchmarks"
-	@echo "  clean        - Clean build artifacts"
+	@echo "  all               - Build and test"
+	@echo "  build             - Build Rust library and Go bindings (legacy)"
+	@echo "  build-native      - Build native libraries for current platform"
+	@echo "  build-all-platforms - Build native libraries for all platforms"
+	@echo "  test              - Run tests"
+	@echo "  test-dist         - Test binary distribution"
+	@echo "  bench             - Run benchmarks"
+	@echo "  clean             - Clean build artifacts"
+	@echo "  clean-dist        - Clean binary distribution files"
 	@echo ""
 	@echo "=== Code Quality ==="
 	@echo "  fmt          - Format code"

@@ -75,19 +75,6 @@ go run batch_operations.go
 go run storage_configuration.go
 ```
 
-### 7. Cloud Deployment (`cloud_deployment.go`)
-**Demonstrates:** Production-ready cloud deployment patterns
-- Production AWS S3 configurations with security best practices
-- Multi-environment deployment strategies (dev/staging/prod)
-- High-availability and disaster recovery patterns
-- Security and compliance configurations
-- Cost optimization strategies
-- Monitoring and observability setup
-- Deployment automation patterns
-
-```bash
-go run cloud_deployment.go
-```
 
 ## 🚀 Getting Started
 
@@ -139,8 +126,6 @@ go run examples/batch_operations.go
 # Storage configuration
 go run examples/storage_configuration.go
 
-# Cloud deployment patterns
-go run examples/cloud_deployment.go
 ```
 
 ## 🔧 Configuration
@@ -278,23 +263,6 @@ docker run -p 9000:9000 -p 9001:9001 \
 • Multi-environment deployment
 ```
 
-### Cloud Deployment (`cloud_deployment.go`)
-```
-📊 Features:
-• Production AWS configurations
-• Multi-environment strategies
-• Security and compliance setup
-• Cost optimization techniques
-• Monitoring and observability
-• Deployment automation patterns
-
-🎯 Use Cases:
-• Production deployments
-• Enterprise applications
-• Compliance requirements
-• Cost management
-• Operational excellence
-```
 
 ## 🛠 Development Tips
 
@@ -335,8 +303,7 @@ go run -pprof examples/batch_operations.go
 3. **Explore `hybrid_search.go`** - See real-world patterns
 4. **Study `index_management.go`** - Optimize performance
 5. **Practice `batch_operations.go`** - Handle large datasets
-6. **Configure `storage_configuration.go`** - Set up storage
-7. **Deploy with `cloud_deployment.go`** - Go to production
+6. **Configure `storage_configuration.go`** - Set up storage for different environments
 
 ## 🔍 Troubleshooting
 
