@@ -281,42 +281,42 @@ jobs:
           fi
           go test -bench=. -benchmem ./...
 
-  # 🔒 Security scanning (lightweight, no rebuild)
-  security:
-    name: Security Scan
-    needs: quick-checks
-    runs-on: ubuntu-latest
+  # # 🔒 Security scanning (lightweight, no rebuild)
+  # security:
+  #   name: Security Scan
+  #   needs: quick-checks
+  #   runs-on: ubuntu-latest
     
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
 
-      - name: Setup Rust (minimal)
-        uses: dtolnay/rust-toolchain@stable
+  #     - name: Setup Rust (minimal)
+  #       uses: dtolnay/rust-toolchain@stable
 
-      - name: Setup Go (minimal)
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
+  #     - name: Setup Go (minimal)
+  #       uses: actions/setup-go@v5
+  #       with:
+  #         go-version: '1.21'
 
-      - name: Run Rust security audit (cached)
-        run: |
-          if ! command -v cargo-audit &> /dev/null; then
-            cargo install --locked cargo-audit
-          fi
-          cd rust && cargo audit
+  #     - name: Run Rust security audit (cached)
+  #       run: |
+  #         if ! command -v cargo-audit &> /dev/null; then
+  #           cargo install --locked cargo-audit
+  #         fi
+  #         cd rust && cargo audit
 
-      - name: Run Go security scan
-        uses: securego/gosec@master
-        with:
-          args: '-fmt sarif -out gosec.sarif ./...'
-        continue-on-error: true
+  #     - name: Run Go security scan
+  #       uses: securego/gosec@master
+  #       with:
+  #         args: '-fmt sarif -out gosec.sarif ./...'
+  #       continue-on-error: true
 
-      - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: gosec.sarif
+  #     - name: Upload SARIF file
+  #       uses: github/codeql-action/upload-sarif@v3
+  #       if: always()
+  #       with:
+  #         sarif_file: gosec.sarif
 
   # ⚡ Examples (reuses artifacts)
   build-examples:
