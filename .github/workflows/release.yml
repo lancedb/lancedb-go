@@ -1,0 +1,336 @@
+name: Build and Release Native Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual triggering
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+        default: 'v0.1.0'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Build matrix for different platforms
+  build-native:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS builds
+          - platform: darwin
+            arch: amd64
+            runner: macos-latest
+            rust_target: x86_64-apple-darwin
+            
+          - platform: darwin
+            arch: arm64
+            runner: macos-latest
+            rust_target: aarch64-apple-darwin
+          
+          # Linux builds
+          - platform: linux
+            arch: amd64
+            runner: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            
+          - platform: linux
+            arch: arm64
+            runner: ubuntu-latest
+            rust_target: aarch64-unknown-linux-gnu
+            
+          # Windows builds
+          - platform: windows
+            arch: amd64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+          components: rustfmt, clippy
+
+      - name: Install cbindgen
+        run: cargo install cbindgen --force
+
+      # Linux cross-compilation setup
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.platform == 'linux' && matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      # Cache Rust dependencies
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust -> target"
+          key: ${{ matrix.platform }}-${{ matrix.arch }}
+
+      - name: Create directories
+        run: |
+          mkdir -p lib/${{ matrix.platform }}_${{ matrix.arch }}
+          mkdir -p include
+
+      - name: Build native library
+        run: |
+          cd rust
+          cargo build --release --target ${{ matrix.rust_target }}
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+
+      - name: Generate C header
+        if: matrix.platform == 'darwin' && matrix.arch == 'amd64'  # Generate header only once
+        run: |
+          cd rust
+          cbindgen --config cbindgen.toml --crate lancedb-go --output ../include/lancedb.h
+
+      # Copy libraries - macOS/Linux
+      - name: Copy libraries (Unix)
+        if: matrix.platform != 'windows'
+        run: |
+          cd rust/target/${{ matrix.rust_target }}/release
+          cp liblancedb_go.a ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+          # Copy dynamic library if it exists
+          if [ -f liblancedb_go.dylib ]; then
+            cp liblancedb_go.dylib ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+          fi
+          if [ -f liblancedb_go.so ]; then
+            cp liblancedb_go.so ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+          fi
+
+      # Copy libraries - Windows
+      - name: Copy libraries (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          cd rust/target/${{ matrix.rust_target }}/release
+          Copy-Item lancedb_go.lib ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+          Copy-Item lancedb_go.dll ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+
+      # Upload artifacts for each platform
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lancedb-go-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            lib/${{ matrix.platform }}_${{ matrix.arch }}/
+            include/
+          retention-days: 7
+
+  # Create release with all binaries
+  create-release:
+    name: Create Release
+    needs: build-native
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Download all build artifacts
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      # Verify all expected files exist
+      - name: Verify binaries
+        run: |
+          echo "🔍 Verifying binary files..."
+          find lib/ -name "*.a" -o -name "*.so" -o -name "*.dylib" -o -name "*.lib" -o -name "*.dll" | sort
+          
+          echo "📝 Verifying header files..."
+          ls -la include/
+          
+          # Check that we have binaries for all expected platforms
+          expected_platforms="darwin_amd64 darwin_arm64 linux_amd64 linux_arm64 windows_amd64"
+          for platform in $expected_platforms; do
+            if [ ! -d "lib/$platform" ]; then
+              echo "❌ Missing binaries for platform: $platform"
+              exit 1
+            fi
+            echo "✅ Found binaries for platform: $platform"
+          done
+
+      # Create archive with all binaries
+      - name: Create release archive
+        run: |
+          echo "📦 Creating release archive..."
+          
+          # Create a comprehensive README for the release
+          cat > RELEASE_NOTES.md << 'EOF'
+          # LanceDB Go SDK - Native Binaries Release
+          
+          This release contains pre-built native libraries for the LanceDB Go SDK.
+          
+          ## Installation
+          
+          ```bash
+          go get github.com/lancedb/lancedb-go
+          ```
+          
+          No additional build steps required! The native libraries are included.
+          
+          ## Supported Platforms
+          
+          - **macOS**: Intel (amd64) and Apple Silicon (arm64)
+          - **Linux**: Intel/AMD (amd64) and ARM (arm64)  
+          - **Windows**: Intel/AMD (amd64)
+          
+          ## Files Included
+          
+          - `include/lancedb.h` - C header file
+          - `lib/darwin_amd64/` - macOS Intel binaries
+          - `lib/darwin_arm64/` - macOS Apple Silicon binaries  
+          - `lib/linux_amd64/` - Linux AMD64 binaries
+          - `lib/linux_arm64/` - Linux ARM64 binaries
+          - `lib/windows_amd64/` - Windows AMD64 binaries
+          
+          ## Usage
+          
+          See the examples in the `examples/` directory for usage patterns.
+          EOF
+          
+          # Create archive
+          tar -czf lancedb-go-native-binaries.tar.gz lib/ include/ RELEASE_NOTES.md
+          
+          echo "✅ Release archive created: lancedb-go-native-binaries.tar.gz"
+          tar -tzf lancedb-go-native-binaries.tar.gz | head -20
+
+      # Get version from tag or input
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION=${{ github.event.inputs.version }}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📋 Release version: $VERSION"
+
+      # Commit and push the binary files to the repository
+      - name: Commit binary files
+        run: |
+          echo "📝 Configuring git..."
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          echo "➕ Adding binary files to repository..."
+          git add lib/ include/
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "ℹ️ No changes to commit"
+          else
+            echo "💾 Committing binary files..."
+            git commit -m "Add pre-built native binaries for ${{ steps.get_version.outputs.version }}"
+            
+            echo "🚀 Pushing to repository..."
+            git push origin HEAD:main
+          fi
+
+      # Create GitHub release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: LanceDB Go SDK ${{ steps.get_version.outputs.version }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            lancedb-go-native-binaries.tar.gz
+          draft: false
+          prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') || contains(steps.get_version.outputs.version, 'rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Test the release by trying to use it
+      - name: Test release installation
+        run: |
+          echo "🧪 Testing release installation..."
+          
+          # Create a temporary Go module to test installation
+          cd /tmp
+          mkdir lancedb-test
+          cd lancedb-test
+          
+          go mod init lancedb-test
+          go get github.com/lancedb/lancedb-go@${{ steps.get_version.outputs.version }}
+          
+          echo "✅ Release installation test passed!"
+
+  # Update documentation after successful release
+  update-docs:
+    name: Update Documentation
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update README with installation instructions
+        run: |
+          echo "📝 Updating README with new installation instructions..."
+          
+          # Update installation section to emphasize that it now works with go get
+          sed -i '/## Installation/,/```/ {
+            /## Installation/!d
+          }' README.md
+          
+          cat >> README_TEMP.md << 'EOF'
+          ## Installation
+          
+          ✨ **Now works out of the box with `go get`!** No build dependencies required.
+          
+          ```bash
+          go get github.com/lancedb/lancedb-go
+          ```
+          
+          The native libraries are pre-built and included in the module.
+          
+          ### Supported Platforms
+          
+          - **macOS**: Intel (amd64) and Apple Silicon (arm64)
+          - **Linux**: Intel/AMD (amd64) and ARM (arm64)
+          - **Windows**: Intel/AMD (amd64)
+          
+          ### Quick Test
+          
+          ```bash
+          # Test installation by running an example
+          go run github.com/lancedb/lancedb-go/examples/basic_crud
+          ```
+          EOF
+          
+          # Insert the new installation section
+          awk '/^## Installation/{while(getline && $0 !~ /^## /){} print "## Installation\n\n✨ **Now works out of the box with `go get`!** No build dependencies required.\n\n```bash\ngo get github.com/lancedb/lancedb-go\n```\n\nThe native libraries are pre-built and included in the module.\n\n### Supported Platforms\n\n- **macOS**: Intel (amd64) and Apple Silicon (arm64)\n- **Linux**: Intel/AMD (amd64) and ARM (arm64)\n- **Windows**: Intel/AMD (amd64)\n\n### Quick Test\n\n```bash\n# Test installation by running an example\ngo run github.com/lancedb/lancedb-go/examples/basic_crud\n```\n"} $0 !~ /^## Installation/{print}' README.md > README_NEW.md
+          
+          mv README_NEW.md README.md
+
+      - name: Commit documentation updates
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          if git diff --quiet README.md; then
+            echo "ℹ️ No documentation changes to commit"
+          else
+            git add README.md
+            git commit -m "Update documentation for binary distribution"
+            git push origin HEAD:main
+          fi

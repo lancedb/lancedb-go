@@ -1,14 +1,16 @@
 package lancedb
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../rust/target/generated/include
-#cgo darwin LDFLAGS: -L${SRCDIR}/../../rust/target/generated/lib -llancedb_go -framework Security -framework CoreFoundation
-#cgo linux LDFLAGS: -L${SRCDIR}/../../rust/target/generated/lib -llancedb_go
+#cgo CFLAGS: -I${SRCDIR}/../../include
+#cgo darwin,amd64 LDFLAGS: ${SRCDIR}/../../lib/darwin_amd64/liblancedb_go.a -framework Security -framework CoreFoundation
+#cgo darwin,arm64 LDFLAGS: ${SRCDIR}/../../lib/darwin_arm64/liblancedb_go.a -framework Security -framework CoreFoundation
+#cgo linux,amd64 LDFLAGS: ${SRCDIR}/../../lib/linux_amd64/liblancedb_go.a
+#cgo linux,arm64 LDFLAGS: ${SRCDIR}/../../lib/linux_arm64/liblancedb_go.a
+#cgo windows,amd64 LDFLAGS: ${SRCDIR}/../../lib/windows_amd64/liblancedb_go.a
 #include "lancedb.h"
 */
 import "C"
 
-import "C"
 import (
 	"context"
 	"encoding/json"
