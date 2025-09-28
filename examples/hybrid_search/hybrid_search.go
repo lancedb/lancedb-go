@@ -16,7 +16,8 @@ package main
 import (
 	"context"
 	"fmt"
-	lancedb "github.com/lancedb/lancedb-go/pkg"
+	. "github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/lancedb"
 	"log"
 	"math"
 	"math/rand"
@@ -114,7 +115,7 @@ func main() {
 	fmt.Println("==================================================")
 }
 
-func createProductTable(conn *lancedb.Connection, ctx context.Context) (*lancedb.Table, *arrow.Schema, error) {
+func createProductTable(conn IConnection, ctx context.Context) (ITable, *arrow.Schema, error) {
 	fields := []arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
 		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: false},
@@ -134,11 +135,11 @@ func createProductTable(conn *lancedb.Connection, ctx context.Context) (*lancedb
 		return nil, nil, err
 	}
 
-	table, err := conn.CreateTable(ctx, "products", *schema)
+	table, err := conn.CreateTable(ctx, "products", schema)
 	return table, arrowSchema, nil
 }
 
-func insertProductCatalog(table *lancedb.Table, schema *arrow.Schema) error {
+func insertProductCatalog(table ITable, schema *arrow.Schema) error {
 	pool := memory.NewGoAllocator()
 	rand.Seed(time.Now().UnixNano())
 
@@ -234,7 +235,7 @@ func insertProductCatalog(table *lancedb.Table, schema *arrow.Schema) error {
 	record := array.NewRecord(schema, columns, int64(len(products)))
 	defer record.Release()
 
-	return table.Add(record, nil)
+	return table.Add(context.Background(), record, nil)
 }
 
 func generateProductCatalog() []Product {
@@ -408,7 +409,7 @@ func normalizeVector(vector []float32) {
 	}
 }
 
-func basicHybridSearch(table *lancedb.Table) error {
+func basicHybridSearch(table ITable) error {
 	fmt.Println("  🔍 Basic hybrid search: Vector similarity + metadata filters")
 
 	// Search for "smartphone" with price and availability filters
@@ -416,7 +417,7 @@ func basicHybridSearch(table *lancedb.Table) error {
 
 	// Vector search with price filter
 	fmt.Println("  📱 Searching for smartphones under $1000 that are in stock...")
-	results, err := table.VectorSearchWithFilter("vector", queryVector, 5,
+	results, err := table.VectorSearchWithFilter(context.Background(), "vector", queryVector, 5,
 		"price < 1000 AND in_stock = true")
 	if err != nil {
 		return fmt.Errorf("hybrid search failed: %w", err)
@@ -433,14 +434,14 @@ func basicHybridSearch(table *lancedb.Table) error {
 	return nil
 }
 
-func ecommerceSearchScenarios(table *lancedb.Table) error {
+func ecommerceSearchScenarios(table ITable) error {
 	fmt.Println("  🛒 E-commerce search scenarios")
 
 	// Scenario 1: Budget-conscious shopper
 	fmt.Println("  💰 Scenario 1: Budget shopper looking for running shoes under $100")
 	queryVector := generateProductEmbedding("running shoes", "athletic footwear sports", "Sports", "Nike")
 
-	results, err := table.VectorSearchWithFilter("vector", queryVector, 5,
+	results, err := table.VectorSearchWithFilter(context.Background(), "vector", queryVector, 5,
 		"price < 100 AND category = 'Sports' AND rating >= 4.0")
 	if err != nil {
 		return fmt.Errorf("budget search failed: %w", err)
@@ -456,7 +457,7 @@ func ecommerceSearchScenarios(table *lancedb.Table) error {
 	fmt.Println("\n  👕 Scenario 2: Looking for Nike clothing items, any price")
 	queryVector = generateProductEmbedding("clothing apparel", "fashion wear style", "Clothing", "Nike")
 
-	results, err = table.VectorSearchWithFilter("vector", queryVector, 5,
+	results, err = table.VectorSearchWithFilter(context.Background(), "vector", queryVector, 5,
 		"brand = 'Nike' AND category = 'Clothing'")
 	if err != nil {
 		return fmt.Errorf("brand search failed: %w", err)
@@ -471,7 +472,7 @@ func ecommerceSearchScenarios(table *lancedb.Table) error {
 	fmt.Println("\n  💎 Scenario 3: Premium electronics with excellent ratings")
 	queryVector = generateProductEmbedding("premium electronics", "high-end technology device", "Electronics", "Apple")
 
-	results, err = table.VectorSearchWithFilter("vector", queryVector, 5,
+	results, err = table.VectorSearchWithFilter(context.Background(), "vector", queryVector, 5,
 		"price > 500 AND rating >= 4.5 AND category = 'Electronics'")
 	if err != nil {
 		return fmt.Errorf("premium search failed: %w", err)
@@ -486,7 +487,7 @@ func ecommerceSearchScenarios(table *lancedb.Table) error {
 	return nil
 }
 
-func advancedMultiModalQueries(table *lancedb.Table) error {
+func advancedMultiModalQueries(table ITable) error {
 	fmt.Println("  🧠 Advanced multi-modal queries")
 
 	// Complex query with multiple conditions
@@ -494,18 +495,18 @@ func advancedMultiModalQueries(table *lancedb.Table) error {
 	queryVector := generateProductEmbedding("home furniture", "comfortable living room", "Home", "IKEA")
 
 	limit := 3
-	config := lancedb.QueryConfig{
+	config := QueryConfig{
 		Columns: []string{"id", "name", "brand", "price", "rating", "category"},
 		Where:   "price BETWEEN 200 AND 1000 AND rating >= 4.0 AND in_stock = true",
 		Limit:   &limit,
-		VectorSearch: &lancedb.VectorSearch{
+		VectorSearch: &VectorSearch{
 			Column: "vector",
 			Vector: queryVector,
 			K:      15, // Get more candidates, then filter
 		},
 	}
 
-	results, err := table.Select(config)
+	results, err := table.Select(context.Background(), config)
 	if err != nil {
 		return fmt.Errorf("multi-modal query failed: %w", err)
 	}
@@ -521,7 +522,7 @@ func advancedMultiModalQueries(table *lancedb.Table) error {
 	fmt.Println("\n  🏷️ Tag-based semantic search")
 	queryVector = generateProductEmbedding("trending fashion", "popular style wear", "Clothing", "Zara")
 
-	results, err = table.VectorSearchWithFilter("vector", queryVector, 5,
+	results, err = table.VectorSearchWithFilter(context.Background(), "vector", queryVector, 5,
 		"tags LIKE '%trending%' OR tags LIKE '%popular%'")
 	if err != nil {
 		return fmt.Errorf("tag-based search failed: %w", err)
@@ -535,14 +536,14 @@ func advancedMultiModalQueries(table *lancedb.Table) error {
 	return nil
 }
 
-func performanceComparison(table *lancedb.Table) error {
+func performanceComparison(table ITable) error {
 	fmt.Println("  ⚡ Performance comparison: Vector vs Hybrid vs Traditional")
 
 	queryVector := generateProductEmbedding("smartphone", "mobile device", "Electronics", "Samsung")
 
 	// Pure vector search
 	start := time.Now()
-	vectorResults, err := table.VectorSearch("vector", queryVector, 10)
+	vectorResults, err := table.VectorSearch(context.Background(), "vector", queryVector, 10)
 	vectorTime := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("vector search failed: %w", err)
@@ -550,7 +551,7 @@ func performanceComparison(table *lancedb.Table) error {
 
 	// Hybrid search
 	start = time.Now()
-	hybridResults, err := table.VectorSearchWithFilter("vector", queryVector, 10,
+	hybridResults, err := table.VectorSearchWithFilter(context.Background(), "vector", queryVector, 10,
 		"price < 800 AND rating >= 4.0")
 	hybridTime := time.Since(start)
 	if err != nil {
@@ -559,7 +560,7 @@ func performanceComparison(table *lancedb.Table) error {
 
 	// Traditional filter search
 	start = time.Now()
-	traditionalResults, err := table.SelectWithFilter(
+	traditionalResults, err := table.SelectWithFilter(context.Background(),
 		"category = 'Electronics' AND price < 800 AND rating >= 4.0")
 	traditionalTime := time.Since(start)
 	if err != nil {
@@ -574,14 +575,14 @@ func performanceComparison(table *lancedb.Table) error {
 	return nil
 }
 
-func recommendationPatterns(table *lancedb.Table) error {
+func recommendationPatterns(table ITable) error {
 	fmt.Println("  🎯 Recommendation system patterns")
 
 	// "Customers who bought this also bought" pattern
 	fmt.Println("  🛍️ Similar product recommendations")
 
 	// Simulate a user's purchase (ID = 100)
-	purchasedResults, err := table.SelectWithFilter("id = 100")
+	purchasedResults, err := table.SelectWithFilter(context.Background(), "id = 100")
 	if err != nil {
 		return fmt.Errorf("failed to get purchased item: %w", err)
 	}
@@ -606,7 +607,7 @@ func recommendationPatterns(table *lancedb.Table) error {
 	)
 
 	// Find similar products (excluding the purchased item and out-of-stock items)
-	recommendations, err := table.VectorSearchWithFilter("vector", queryVector, 5,
+	recommendations, err := table.VectorSearchWithFilter(context.Background(), "vector", queryVector, 5,
 		fmt.Sprintf("id != %v AND in_stock = true", purchasedItem["id"]))
 	if err != nil {
 		return fmt.Errorf("recommendation search failed: %w", err)
@@ -621,7 +622,7 @@ func recommendationPatterns(table *lancedb.Table) error {
 
 	// Cross-category recommendations
 	fmt.Println("\n  🔄 Cross-category recommendations")
-	crossCatResults, err := table.VectorSearchWithFilter("vector", queryVector, 3,
+	crossCatResults, err := table.VectorSearchWithFilter(context.Background(), "vector", queryVector, 3,
 		fmt.Sprintf("category != '%v' AND in_stock = true", purchasedItem["category"]))
 	if err != nil {
 		return fmt.Errorf("cross-category search failed: %w", err)

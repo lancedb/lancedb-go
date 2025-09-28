@@ -8,15 +8,16 @@
 // - Creating different types of indexes (vector, scalar, full-text)
 // - Index performance comparison
 // - Best practices for index selection
-// - Managing indexes throughout application lifecycle
-// - Query optimization with proper indexing
+// - Managing indexes throughout the application lifecycle-
+// Query optimization with proper indexing
 
 package main
 
 import (
 	"context"
 	"fmt"
-	lancedb "github.com/lancedb/lancedb-go/pkg"
+	. "github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/lancedb"
 	"log"
 	"math"
 	"math/rand"
@@ -117,7 +118,7 @@ func main() {
 	fmt.Println("==================================================")
 }
 
-func createComprehensiveTable(conn *lancedb.Connection, ctx context.Context) (*lancedb.Table, *arrow.Schema, error) {
+func createComprehensiveTable(conn IConnection, ctx context.Context) (ITable, *arrow.Schema, error) {
 	fields := []arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},                                                // Primary key
 		{Name: "title", Type: arrow.BinaryTypes.String, Nullable: false},                                               // Text search
@@ -136,14 +137,14 @@ func createComprehensiveTable(conn *lancedb.Connection, ctx context.Context) (*l
 		return nil, nil, err
 	}
 
-	table, err := conn.CreateTable(ctx, "indexed_docs", *schema)
+	table, err := conn.CreateTable(ctx, "indexed_docs", schema)
 	if err != nil {
 		return nil, nil, err
 	}
 	return table, arrowSchema, nil
 }
 
-func insertIndexedData(table *lancedb.Table, schema *arrow.Schema) error {
+func insertIndexedData(table ITable, schema *arrow.Schema) error {
 	pool := memory.NewGoAllocator()
 	rand.Seed(time.Now().UnixNano())
 
@@ -227,7 +228,7 @@ func insertIndexedData(table *lancedb.Table, schema *arrow.Schema) error {
 	record := array.NewRecord(schema, allArrays, int64(len(documents)))
 	defer record.Release()
 
-	return table.Add(record, nil)
+	return table.Add(context.Background(), record, nil)
 }
 
 func generateIndexedDocuments() []IndexedDocument {
@@ -374,7 +375,7 @@ func normalizeVector(vector []float32) {
 	}
 }
 
-func demonstrateVectorIndexes(table *lancedb.Table) error {
+func demonstrateVectorIndexes(table ITable) error {
 	fmt.Println("  🎯 Vector Index Types and Performance")
 
 	// Test without index (baseline)
@@ -382,7 +383,7 @@ func demonstrateVectorIndexes(table *lancedb.Table) error {
 	queryVector := generateDocumentEmbedding("AI technology", "machine learning artificial intelligence", "Technology")
 
 	start := time.Now()
-	results, err := table.VectorSearch("vector", queryVector, 5)
+	results, err := table.VectorSearch(context.Background(), "vector", queryVector, 5)
 	baselineTime := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("baseline vector search failed: %w", err)
@@ -391,7 +392,7 @@ func demonstrateVectorIndexes(table *lancedb.Table) error {
 
 	// Create IVF-PQ index (good for large datasets)
 	fmt.Println("\n  🔧 Creating IVF-PQ index for large-scale similarity search...")
-	err = table.CreateIndexWithName([]string{"vector"}, lancedb.IndexTypeIvfPq, "vector_ivf_pq_idx")
+	err = table.CreateIndexWithName(context.Background(), []string{"vector"}, IndexTypeIvfPq, "vector_ivf_pq_idx")
 	if err != nil {
 		return fmt.Errorf("failed to create IVF-PQ index: %w", err)
 	}
@@ -399,7 +400,7 @@ func demonstrateVectorIndexes(table *lancedb.Table) error {
 
 	// Test with IVF-PQ index
 	start = time.Now()
-	results, err = table.VectorSearch("vector", queryVector, 5)
+	results, err = table.VectorSearch(context.Background(), "vector", queryVector, 5)
 	ivfPqTime := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("IVF-PQ vector search failed: %w", err)
@@ -411,7 +412,7 @@ func demonstrateVectorIndexes(table *lancedb.Table) error {
 
 	// Create IVF-Flat index (better accuracy, more memory)
 	fmt.Println("\n  🔧 Creating IVF-Flat index for high-accuracy search...")
-	err = table.CreateIndexWithName([]string{"vector"}, lancedb.IndexTypeIvfFlat, "vector_ivf_flat_idx")
+	err = table.CreateIndexWithName(context.Background(), []string{"vector"}, IndexTypeIvfFlat, "vector_ivf_flat_idx")
 	if err != nil {
 		return fmt.Errorf("failed to create IVF-Flat index: %w", err)
 	}
@@ -419,7 +420,7 @@ func demonstrateVectorIndexes(table *lancedb.Table) error {
 
 	// Test with IVF-Flat index
 	start = time.Now()
-	results, err = table.VectorSearch("vector", queryVector, 5)
+	results, err = table.VectorSearch(context.Background(), "vector", queryVector, 5)
 	ivfFlatTime := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("IVF-Flat vector search failed: %w", err)
@@ -431,7 +432,7 @@ func demonstrateVectorIndexes(table *lancedb.Table) error {
 
 	// Create HNSW-PQ index (very fast queries)
 	fmt.Println("\n  🔧 Creating HNSW-PQ index for ultra-fast queries...")
-	err = table.CreateIndexWithName([]string{"vector"}, lancedb.IndexTypeHnswPq, "vector_hnsw_pq_idx")
+	err = table.CreateIndexWithName(context.Background(), []string{"vector"}, IndexTypeHnswPq, "vector_hnsw_pq_idx")
 	if err != nil {
 		return fmt.Errorf("failed to create HNSW-PQ index: %w", err)
 	}
@@ -439,7 +440,7 @@ func demonstrateVectorIndexes(table *lancedb.Table) error {
 
 	// Test with HNSW-PQ index
 	start = time.Now()
-	results, err = table.VectorSearch("vector", queryVector, 5)
+	results, err = table.VectorSearch(context.Background(), "vector", queryVector, 5)
 	hnswPqTime := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("HNSW-PQ vector search failed: %w", err)
@@ -457,21 +458,21 @@ func demonstrateVectorIndexes(table *lancedb.Table) error {
 	return nil
 }
 
-func demonstrateScalarIndexes(table *lancedb.Table) error {
+func demonstrateScalarIndexes(table ITable) error {
 	fmt.Println("  📊 Scalar Index Types for Structured Data")
 
 	// BTree index for range queries
 	fmt.Println("  🌳 Creating BTree indexes for range queries...")
 
 	// Price index for range queries
-	err := table.CreateIndexWithName([]string{"price"}, lancedb.IndexTypeBTree, "price_btree_idx")
+	err := table.CreateIndexWithName(context.Background(), []string{"price"}, IndexTypeBTree, "price_btree_idx")
 	if err != nil {
 		return fmt.Errorf("failed to create price BTree index: %w", err)
 	}
 	fmt.Println("  ✅ Price BTree index created")
 
 	// Rating index for discrete values
-	err = table.CreateIndexWithName([]string{"rating"}, lancedb.IndexTypeBTree, "rating_btree_idx")
+	err = table.CreateIndexWithName(context.Background(), []string{"rating"}, IndexTypeBTree, "rating_btree_idx")
 	if err != nil {
 		return fmt.Errorf("failed to create rating BTree index: %w", err)
 	}
@@ -482,7 +483,7 @@ func demonstrateScalarIndexes(table *lancedb.Table) error {
 
 	// Price range query
 	start := time.Now()
-	results, err := table.SelectWithFilter("price BETWEEN 100 AND 500")
+	results, err := table.SelectWithFilter(context.Background(), "price BETWEEN 100 AND 500")
 	priceQueryTime := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("price range query failed: %w", err)
@@ -491,7 +492,7 @@ func demonstrateScalarIndexes(table *lancedb.Table) error {
 
 	// Rating query
 	start = time.Now()
-	results, err = table.SelectWithFilter("rating >= 4")
+	results, err = table.SelectWithFilter(context.Background(), "rating >= 4")
 	ratingQueryTime := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("rating query failed: %w", err)
@@ -502,14 +503,14 @@ func demonstrateScalarIndexes(table *lancedb.Table) error {
 	fmt.Println("\n  🗂️ Creating Bitmap indexes for categorical data...")
 
 	// Category bitmap index
-	err = table.CreateIndexWithName([]string{"category"}, lancedb.IndexTypeBitmap, "category_bitmap_idx")
+	err = table.CreateIndexWithName(context.Background(), []string{"category"}, IndexTypeBitmap, "category_bitmap_idx")
 	if err != nil {
 		return fmt.Errorf("failed to create category bitmap index: %w", err)
 	}
 	fmt.Println("  ✅ Category Bitmap index created")
 
 	// Status bitmap index
-	err = table.CreateIndexWithName([]string{"status"}, lancedb.IndexTypeBitmap, "status_bitmap_idx")
+	err = table.CreateIndexWithName(context.Background(), []string{"status"}, IndexTypeBitmap, "status_bitmap_idx")
 	if err != nil {
 		return fmt.Errorf("failed to create status bitmap index: %w", err)
 	}
@@ -519,7 +520,7 @@ func demonstrateScalarIndexes(table *lancedb.Table) error {
 	fmt.Println("\n  🔍 Testing Bitmap index performance on categorical queries...")
 
 	start = time.Now()
-	results, err = table.SelectWithFilter("category = 'Technology'")
+	results, err = table.SelectWithFilter(context.Background(), "category = 'Technology'")
 	categoryQueryTime := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("category query failed: %w", err)
@@ -527,7 +528,7 @@ func demonstrateScalarIndexes(table *lancedb.Table) error {
 	fmt.Printf("    💻 Technology category: %v (%d results)\n", categoryQueryTime, len(results))
 
 	start = time.Now()
-	results, err = table.SelectWithFilter("status IN ('published', 'featured')")
+	results, err = table.SelectWithFilter(context.Background(), "status IN ('published', 'featured')")
 	statusQueryTime := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("status query failed: %w", err)
@@ -540,7 +541,7 @@ func demonstrateScalarIndexes(table *lancedb.Table) error {
 	fmt.Println("      For tag queries, use string filters with LIKE patterns:")
 
 	start = time.Now()
-	results, err = table.SelectWithFilter("tags LIKE '%trending%'")
+	results, err = table.SelectWithFilter(context.Background(), "tags LIKE '%trending%'")
 	tagsQueryTime := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("tags query failed: %w", err)
@@ -555,21 +556,21 @@ func demonstrateScalarIndexes(table *lancedb.Table) error {
 	return nil
 }
 
-func demonstrateFullTextIndexes(table *lancedb.Table) error {
+func demonstrateFullTextIndexes(table ITable) error {
 	fmt.Println("  📝 Full-Text Search Indexes")
 
 	// Create FTS indexes on text fields
 	fmt.Println("  🔧 Creating Full-Text Search indexes...")
 
 	// Title FTS index
-	err := table.CreateIndexWithName([]string{"title"}, lancedb.IndexTypeFts, "title_fts_idx")
+	err := table.CreateIndexWithName(context.Background(), []string{"title"}, IndexTypeFts, "title_fts_idx")
 	if err != nil {
 		return fmt.Errorf("failed to create title FTS index: %w", err)
 	}
 	fmt.Println("  ✅ Title FTS index created")
 
 	// Content FTS index
-	err = table.CreateIndexWithName([]string{"content"}, lancedb.IndexTypeFts, "content_fts_idx")
+	err = table.CreateIndexWithName(context.Background(), []string{"content"}, IndexTypeFts, "content_fts_idx")
 	if err != nil {
 		return fmt.Errorf("failed to create content FTS index: %w", err)
 	}
@@ -590,7 +591,7 @@ func demonstrateFullTextIndexes(table *lancedb.Table) error {
 
 		// Search in titles
 		start := time.Now()
-		results, err := table.SelectWithFilter(fmt.Sprintf("title LIKE '%%%s%%'", query))
+		results, err := table.SelectWithFilter(context.Background(), fmt.Sprintf("title LIKE '%%%s%%'", query))
 		titleSearchTime := time.Since(start)
 		if err != nil {
 			fmt.Printf("    ⚠️ Title search failed: %v\n", err)
@@ -599,7 +600,7 @@ func demonstrateFullTextIndexes(table *lancedb.Table) error {
 
 		// Search in content
 		start = time.Now()
-		contentResults, err := table.SelectWithFilter(fmt.Sprintf("content LIKE '%%%s%%'", query))
+		contentResults, err := table.SelectWithFilter(context.Background(), fmt.Sprintf("content LIKE '%%%s%%'", query))
 		contentSearchTime := time.Since(start)
 		if err != nil {
 			fmt.Printf("    ⚠️ Content search failed: %v\n", err)
@@ -624,7 +625,7 @@ func demonstrateFullTextIndexes(table *lancedb.Table) error {
 	return nil
 }
 
-func performanceComparison(table *lancedb.Table) error {
+func performanceComparison(table ITable) error {
 	fmt.Println("  ⚡ Index Performance Comparison")
 
 	queryVector := generateDocumentEmbedding("performance test", "benchmark query example", "Technology")
@@ -635,7 +636,7 @@ func performanceComparison(table *lancedb.Table) error {
 	vectorQueries := 5
 	start := time.Now()
 	for i := 0; i < vectorQueries; i++ {
-		_, err := table.VectorSearch("vector", queryVector, 10)
+		_, err := table.VectorSearch(context.Background(), "vector", queryVector, 10)
 		if err != nil {
 			return fmt.Errorf("vector search benchmark failed: %w", err)
 		}
@@ -659,7 +660,7 @@ func performanceComparison(table *lancedb.Table) error {
 
 	for _, query := range scalarQueries {
 		start = time.Now()
-		results, err := table.SelectWithFilter(query.filter)
+		results, err := table.SelectWithFilter(context.Background(), query.filter)
 		queryTime := time.Since(start)
 		if err != nil {
 			fmt.Printf("    ⚠️ %s failed: %v\n", query.name, err)
@@ -671,11 +672,11 @@ func performanceComparison(table *lancedb.Table) error {
 	// Hybrid query performance
 	fmt.Println("\n  🔀 Hybrid Query Performance:")
 	limit := 5
-	config := lancedb.QueryConfig{
+	config := QueryConfig{
 		Columns: []string{"id", "title", "category", "price", "rating"},
 		Where:   "category = 'Technology' AND price < 500 AND rating >= 4",
 		Limit:   &limit,
-		VectorSearch: &lancedb.VectorSearch{
+		VectorSearch: &VectorSearch{
 			Column: "vector",
 			Vector: queryVector,
 			K:      20,
@@ -683,7 +684,7 @@ func performanceComparison(table *lancedb.Table) error {
 	}
 
 	start = time.Now()
-	results, err := table.Select(config)
+	results, err := table.Select(context.Background(), config)
 	hybridTime := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("hybrid query failed: %w", err)
@@ -693,12 +694,12 @@ func performanceComparison(table *lancedb.Table) error {
 	return nil
 }
 
-func indexManagementOperations(table *lancedb.Table) error {
+func indexManagementOperations(table ITable) error {
 	fmt.Println("  🛠️ Index Management Operations")
 
 	// List all indexes
 	fmt.Println("  📋 Current indexes on table:")
-	indexes, err := table.GetAllIndexes()
+	indexes, err := table.GetAllIndexes(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to get indexes: %w", err)
 	}
@@ -724,7 +725,7 @@ func indexManagementOperations(table *lancedb.Table) error {
 		"title_fts_idx":       {"title"},
 	}
 
-	indexMap := make(map[string]lancedb.IndexInfo)
+	indexMap := make(map[string]IndexInfo)
 	for _, idx := range indexes {
 		indexMap[idx.Name] = idx
 	}
@@ -740,7 +741,7 @@ func indexManagementOperations(table *lancedb.Table) error {
 	return nil
 }
 
-func bestPracticesDemo(table *lancedb.Table) error {
+func bestPracticesDemo(table ITable) error {
 	fmt.Println("  💡 Index Best Practices Demonstration")
 
 	fmt.Println("  📋 Index Selection Guidelines:")
@@ -784,7 +785,7 @@ func bestPracticesDemo(table *lancedb.Table) error {
 	start := time.Now()
 
 	// First get by category
-	techDocs, err := table.SelectWithFilter("category = 'Technology'")
+	techDocs, err := table.SelectWithFilter(context.Background(), "category = 'Technology'")
 	if err != nil {
 		return fmt.Errorf("category filter failed: %w", err)
 	}
@@ -801,7 +802,7 @@ func bestPracticesDemo(table *lancedb.Table) error {
 	// Efficient query pattern
 	fmt.Println("  ✅ Efficient: Combined filter query")
 	start = time.Now()
-	efficientResults, err := table.SelectWithFilter("category = 'Technology' AND price > 500")
+	efficientResults, err := table.SelectWithFilter(context.Background(), "category = 'Technology' AND price > 500")
 	if err != nil {
 		return fmt.Errorf("combined filter failed: %w", err)
 	}

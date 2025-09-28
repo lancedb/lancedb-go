@@ -17,7 +17,8 @@ package main
 import (
 	"context"
 	"fmt"
-	lancedb "github.com/lancedb/lancedb-go/pkg"
+	. "github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/lancedb"
 	"log"
 	"math"
 	"math/rand"
@@ -124,9 +125,9 @@ func demonstrateLocalStorage(ctx context.Context) error {
 	maxRetries := 3
 	connectTimeout := 10
 
-	localOptions := &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
-			LocalConfig: &lancedb.LocalConfig{
+	localOptions := &ConnectionOptions{
+		StorageOptions: &StorageOptions{
+			LocalConfig: &LocalConfig{
 				CreateDirIfNotExists: &createDirs,
 				UseMemoryMap:         &useMemoryMap,
 				SyncWrites:           &syncWrites,
@@ -201,9 +202,9 @@ func demonstrateS3Storage(ctx context.Context) error {
 	secretKey := "secret..." // Would be actual secret key
 	region := "us-east-1"
 
-	s3Options1 := &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
-			S3Config: &lancedb.S3Config{
+	s3Options1 := &ConnectionOptions{
+		StorageOptions: &StorageOptions{
+			S3Config: &S3Config{
 				AccessKeyID:     &accessKey,
 				SecretAccessKey: &secretKey,
 				Region:          &region,
@@ -218,9 +219,9 @@ func demonstrateS3Storage(ctx context.Context) error {
 	fmt.Println("\n  🔹 S3 configuration with temporary credentials (STS)")
 
 	sessionToken := "session..." // Would be actual session token
-	s3Options2 := &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
-			S3Config: &lancedb.S3Config{
+	s3Options2 := &ConnectionOptions{
+		StorageOptions: &StorageOptions{
+			S3Config: &S3Config{
 				AccessKeyID:     &accessKey,
 				SecretAccessKey: &secretKey,
 				SessionToken:    &sessionToken,
@@ -235,9 +236,9 @@ func demonstrateS3Storage(ctx context.Context) error {
 	fmt.Println("\n  🔹 S3 configuration with AWS profile")
 
 	profile := "production"
-	s3Options3 := &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
-			S3Config: &lancedb.S3Config{
+	s3Options3 := &ConnectionOptions{
+		StorageOptions: &StorageOptions{
+			S3Config: &S3Config{
 				Profile: &profile,
 				Region:  &region,
 			},
@@ -256,9 +257,9 @@ func demonstrateS3Storage(ctx context.Context) error {
 	timeout := 30
 	connectTimeout := 10
 
-	s3Options4 := &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
-			S3Config: &lancedb.S3Config{
+	s3Options4 := &ConnectionOptions{
+		StorageOptions: &StorageOptions{
+			S3Config: &S3Config{
 				AccessKeyID:       &accessKey,
 				SecretAccessKey:   &secretKey,
 				Region:            &region,
@@ -278,9 +279,9 @@ func demonstrateS3Storage(ctx context.Context) error {
 	fmt.Println("\n  🔹 Anonymous S3 access for public buckets")
 
 	anonymous := true
-	s3Options5 := &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
-			S3Config: &lancedb.S3Config{
+	s3Options5 := &ConnectionOptions{
+		StorageOptions: &StorageOptions{
+			S3Config: &S3Config{
 				AnonymousAccess: &anonymous,
 				Region:          &region,
 			},
@@ -322,9 +323,9 @@ func demonstrateMinIOStorage(ctx context.Context) error {
 	maxRetries := 5
 	timeout := 30
 
-	minioOptions := &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
-			S3Config: &lancedb.S3Config{
+	minioOptions := &ConnectionOptions{
+		StorageOptions: &StorageOptions{
+			S3Config: &S3Config{
 				Endpoint:        &endpoint,
 				AccessKeyID:     &accessKey,
 				SecretAccessKey: &secretKey,
@@ -369,9 +370,9 @@ func demonstrateMinIOStorage(ctx context.Context) error {
 	customAccessKey := "custom-access-key"
 	customSecretKey := "custom-secret-key"
 
-	_ = &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
-			S3Config: &lancedb.S3Config{
+	_ = &ConnectionOptions{
+		StorageOptions: &StorageOptions{
+			S3Config: &S3Config{
 				Endpoint:        &customEndpoint,
 				AccessKeyID:     &customAccessKey,
 				SecretAccessKey: &customSecretKey,
@@ -401,7 +402,7 @@ func performStorageComparison(ctx context.Context) error {
 
 	// Create test configurations
 	configs := make(map[string]struct {
-		conn    *lancedb.Connection
+		conn    IConnection
 		cleanup func()
 	})
 
@@ -418,7 +419,7 @@ func performStorageComparison(ctx context.Context) error {
 	}
 
 	configs["Local Basic"] = struct {
-		conn    *lancedb.Connection
+		conn    IConnection
 		cleanup func()
 	}{
 		conn: conn1,
@@ -439,9 +440,9 @@ func performStorageComparison(ctx context.Context) error {
 	useMemoryMap := true
 	syncWrites := false
 
-	optimizedOptions := &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
-			LocalConfig: &lancedb.LocalConfig{
+	optimizedOptions := &ConnectionOptions{
+		StorageOptions: &StorageOptions{
+			LocalConfig: &LocalConfig{
 				CreateDirIfNotExists: &createDirs,
 				UseMemoryMap:         &useMemoryMap,
 				SyncWrites:           &syncWrites,
@@ -458,7 +459,7 @@ func performStorageComparison(ctx context.Context) error {
 	}
 
 	configs["Local Optimized"] = struct {
-		conn    *lancedb.Connection
+		conn    IConnection
 		cleanup func()
 	}{
 		conn: conn2,
@@ -476,7 +477,7 @@ func performStorageComparison(ctx context.Context) error {
 	}()
 
 	// Performance test function
-	performanceTest := func(name string, conn *lancedb.Connection) (time.Duration, error) {
+	performanceTest := func(name string, conn IConnection) (time.Duration, error) {
 		start := time.Now()
 
 		// Create table
@@ -495,7 +496,7 @@ func performStorageComparison(ctx context.Context) error {
 		// Perform some queries
 		for i := 0; i < 5; i++ {
 			queryVector := generateRandomVector(VectorDim)
-			_, err := table.VectorSearch("vector", queryVector, 10)
+			_, err := table.VectorSearch(context.Background(), "vector", queryVector, 10)
 			if err != nil {
 				return 0, err
 			}
@@ -568,9 +569,9 @@ func demonstrateAdvancedConfigurations(ctx context.Context) error {
 	}
 	defer os.RemoveAll(hotDir)
 
-	hotConfig := &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
-			LocalConfig: &lancedb.LocalConfig{
+	hotConfig := &ConnectionOptions{
+		StorageOptions: &StorageOptions{
+			LocalConfig: &LocalConfig{
 				UseMemoryMap: &[]bool{true}[0],
 				SyncWrites:   &[]bool{false}[0],
 			},
@@ -593,9 +594,9 @@ func demonstrateAdvancedConfigurations(ctx context.Context) error {
 	}
 	defer os.RemoveAll(coldDir)
 
-	coldConfig := &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
-			LocalConfig: &lancedb.LocalConfig{
+	coldConfig := &ConnectionOptions{
+		StorageOptions: &StorageOptions{
+			LocalConfig: &LocalConfig{
 				UseMemoryMap: &[]bool{false}[0], // Less memory usage
 				SyncWrites:   &[]bool{true}[0],  // Ensure durability
 			},
@@ -614,23 +615,23 @@ func demonstrateAdvancedConfigurations(ctx context.Context) error {
 	// Configuration 2: Environment-specific configurations
 	fmt.Println("\n  🔹 Environment-specific configurations")
 
-	environments := map[string]*lancedb.ConnectionOptions{
+	environments := map[string]*ConnectionOptions{
 		"Development": {
-			StorageOptions: &lancedb.StorageOptions{
+			StorageOptions: &StorageOptions{
 				MaxRetries:     &[]int{1}[0], // Fail fast in development
 				Timeout:        &[]int{5}[0], // Short timeout
 				ConnectTimeout: &[]int{3}[0], // Quick connection timeout
 			},
 		},
 		"Staging": {
-			StorageOptions: &lancedb.StorageOptions{
+			StorageOptions: &StorageOptions{
 				MaxRetries:     &[]int{3}[0],  // Some resilience
 				Timeout:        &[]int{15}[0], // Medium timeout
 				ConnectTimeout: &[]int{5}[0],  // Medium connection timeout
 			},
 		},
 		"Production": {
-			StorageOptions: &lancedb.StorageOptions{
+			StorageOptions: &StorageOptions{
 				MaxRetries:     &[]int{5}[0],               // High resilience
 				Timeout:        &[]int{30}[0],              // Longer timeout
 				ConnectTimeout: &[]int{10}[0],              // Patient connection
@@ -657,8 +658,8 @@ func demonstrateAdvancedConfigurations(ctx context.Context) error {
 	readTimeout := 30
 	poolIdleTimeout := 300
 	poolMaxIdlePerHost := 10
-	networkOptimized := &lancedb.ConnectionOptions{
-		StorageOptions: &lancedb.StorageOptions{
+	networkOptimized := &ConnectionOptions{
+		StorageOptions: &StorageOptions{
 			MaxRetries:         &maxRetries,
 			Timeout:            &timeout,            // Longer timeout for network operations
 			ConnectTimeout:     &connectTimeout,     // Patient connection for network
@@ -694,15 +695,15 @@ func demonstrateErrorHandling(ctx context.Context) error {
 
 	storageBackends := []struct {
 		name   string
-		config *lancedb.ConnectionOptions
+		config *ConnectionOptions
 		uri    string
 	}{
 		{
 			name: "Primary S3",
 			uri:  "s3://primary-bucket/lancedb",
-			config: &lancedb.ConnectionOptions{
-				StorageOptions: &lancedb.StorageOptions{
-					S3Config: &lancedb.S3Config{
+			config: &ConnectionOptions{
+				StorageOptions: &StorageOptions{
+					S3Config: &S3Config{
 						Region: &[]string{"us-east-1"}[0],
 					},
 				},
@@ -711,9 +712,9 @@ func demonstrateErrorHandling(ctx context.Context) error {
 		{
 			name: "Backup S3",
 			uri:  "s3://backup-bucket/lancedb",
-			config: &lancedb.ConnectionOptions{
-				StorageOptions: &lancedb.StorageOptions{
-					S3Config: &lancedb.S3Config{
+			config: &ConnectionOptions{
+				StorageOptions: &StorageOptions{
+					S3Config: &S3Config{
 						Region: &[]string{"us-west-2"}[0],
 					},
 				},
@@ -730,7 +731,7 @@ func demonstrateErrorHandling(ctx context.Context) error {
 
 	storageBackends = append(storageBackends, struct {
 		name   string
-		config *lancedb.ConnectionOptions
+		config *ConnectionOptions
 		uri    string
 	}{
 		name:   "Local Fallback",
@@ -739,7 +740,7 @@ func demonstrateErrorHandling(ctx context.Context) error {
 	})
 
 	// Try each backend in order
-	var conn *lancedb.Connection
+	var conn IConnection
 	var successfulBackend string
 
 	for _, backend := range storageBackends {
@@ -781,9 +782,9 @@ func demonstrateErrorHandling(ctx context.Context) error {
 			fmt.Printf("    🔄 Connection attempt %d/%d...\n", attempt, maxRetries)
 
 			// Simulate connection attempt (will fail for S3 without credentials)
-			_, err := lancedb.Connect(ctx, "s3://test-bucket/lancedb", &lancedb.ConnectionOptions{
-				StorageOptions: &lancedb.StorageOptions{
-					S3Config: &lancedb.S3Config{
+			_, err := lancedb.Connect(ctx, "s3://test-bucket/lancedb", &ConnectionOptions{
+				StorageOptions: &StorageOptions{
+					S3Config: &S3Config{
 						Region: &[]string{"us-east-1"}[0],
 					},
 				},
@@ -895,7 +896,7 @@ func demonstrateErrorHandling(ctx context.Context) error {
 
 // Helper functions
 
-func testStorageConfiguration(name string, conn *lancedb.Connection, ctx context.Context) error {
+func testStorageConfiguration(name string, conn IConnection, ctx context.Context) error {
 	// Create a simple table and test basic operations
 	table, schema, err := createTestTable(conn, ctx, fmt.Sprintf("test_%s", name))
 	if err != nil {
@@ -911,7 +912,7 @@ func testStorageConfiguration(name string, conn *lancedb.Connection, ctx context
 
 	// Perform a simple query
 	queryVector := generateRandomVector(VectorDim)
-	results, err := table.VectorSearch("vector", queryVector, 5)
+	results, err := table.VectorSearch(context.Background(), "vector", queryVector, 5)
 	if err != nil {
 		return err
 	}
@@ -922,7 +923,7 @@ func testStorageConfiguration(name string, conn *lancedb.Connection, ctx context
 	return nil
 }
 
-func createTestTable(conn *lancedb.Connection, ctx context.Context, tableName string) (*lancedb.Table, *arrow.Schema, error) {
+func createTestTable(conn IConnection, ctx context.Context, tableName string) (ITable, *arrow.Schema, error) {
 	fields := []arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
 		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: false},
@@ -935,7 +936,7 @@ func createTestTable(conn *lancedb.Connection, ctx context.Context, tableName st
 		return nil, nil, err
 	}
 
-	table, err := conn.CreateTable(ctx, tableName, *schema)
+	table, err := conn.CreateTable(ctx, tableName, schema)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -978,7 +979,7 @@ func generateRandomVector(dimensions int) []float32 {
 	return vector
 }
 
-func insertTestData(table *lancedb.Table, schema *arrow.Schema, data []StorageTestRecord) error {
+func insertTestData(table ITable, schema *arrow.Schema, data []StorageTestRecord) error {
 	pool := memory.NewGoAllocator()
 
 	// Prepare data
@@ -1021,10 +1022,10 @@ func insertTestData(table *lancedb.Table, schema *arrow.Schema, data []StorageTe
 	record := array.NewRecord(schema, columns, int64(len(data)))
 	defer record.Release()
 
-	return table.Add(record, nil)
+	return table.Add(context.Background(), record, nil)
 }
 
-func testConnection(conn *lancedb.Connection, ctx context.Context) (*lancedb.Table, error) {
+func testConnection(conn IConnection, ctx context.Context) (ITable, error) {
 	// Try to create a simple table to test the connection
 	table, _, err := createTestTable(conn, ctx, "connection_test")
 	if err != nil {
@@ -1033,7 +1034,7 @@ func testConnection(conn *lancedb.Connection, ctx context.Context) (*lancedb.Tab
 	return table, nil
 }
 
-func printS3Config(name string, config *lancedb.S3Config) {
+func printS3Config(name string, config *S3Config) {
 	fmt.Printf("    📝 %s:\n", name)
 	if config.AccessKeyID != nil {
 		fmt.Printf("      Access Key: %s...\n", (*config.AccessKeyID)[:min(len(*config.AccessKeyID), 8)])

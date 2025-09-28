@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-package lancedb
+package internal
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../rust/target/generated/include
@@ -14,6 +14,8 @@ import (
 	"fmt"
 
 	"github.com/apache/arrow/go/v17/arrow"
+
+	lancedb "github.com/lancedb/lancedb-go/pkg/contracts"
 )
 
 // QueryBuilder provides a fluent interface for building queries
@@ -23,30 +25,23 @@ type QueryBuilder struct {
 	limit   int
 }
 
+var _ lancedb.IQueryBuilder = (*QueryBuilder)(nil)
+var _ lancedb.IVectorQueryBuilder = (*VectorQueryBuilder)(nil)
+
 // VectorQueryBuilder extends QueryBuilder for vector similarity searches
 type VectorQueryBuilder struct {
 	QueryBuilder
 	vector []float32
 }
 
-// DistanceType represents vector distance metrics
-type DistanceType int
-
-const (
-	DistanceTypeL2 DistanceType = iota
-	DistanceTypeCosine
-	DistanceTypeDot
-	DistanceTypeHamming
-)
-
 // Filter adds a filter condition to the query
-func (q *QueryBuilder) Filter(condition string) *QueryBuilder {
+func (q *QueryBuilder) Filter(condition string) lancedb.IQueryBuilder {
 	q.filters = append(q.filters, condition)
 	return q
 }
 
 // Limit sets the maximum number of results to return
-func (q *QueryBuilder) Limit(limit int) *QueryBuilder {
+func (q *QueryBuilder) Limit(limit int) lancedb.IQueryBuilder {
 	q.limit = limit
 	return q
 }
@@ -63,19 +58,19 @@ func (q *QueryBuilder) Execute() ([]arrow.Record, error) {
 }
 
 // Filter adds a filter condition to the vector query
-func (vq *VectorQueryBuilder) Filter(condition string) *VectorQueryBuilder {
+func (vq *VectorQueryBuilder) Filter(condition string) lancedb.IVectorQueryBuilder {
 	vq.QueryBuilder.Filter(condition)
 	return vq
 }
 
 // Limit sets the maximum number of results to return
-func (vq *VectorQueryBuilder) Limit(limit int) *VectorQueryBuilder {
+func (vq *VectorQueryBuilder) Limit(limit int) lancedb.IVectorQueryBuilder {
 	vq.QueryBuilder.Limit(limit)
 	return vq
 }
 
 // DistanceType sets the distance metric for vector search
-func (vq *VectorQueryBuilder) DistanceType(_ DistanceType) *VectorQueryBuilder {
+func (vq *VectorQueryBuilder) DistanceType(_ lancedb.DistanceType) lancedb.IVectorQueryBuilder {
 	// Store distance type for later use
 	return vq
 }
@@ -133,15 +128,8 @@ func (vq *VectorQueryBuilder) ExecuteAsync() (<-chan []arrow.Record, <-chan erro
 	return resultChan, errorChan
 }
 
-// QueryOptions provides additional configuration for queries
-type QueryOptions struct {
-	MaxResults        int
-	UseFullPrecision  bool
-	BypassVectorIndex bool
-}
-
 // ApplyOptions applies query options to the builder
-func (q *QueryBuilder) ApplyOptions(options *QueryOptions) *QueryBuilder {
+func (q *QueryBuilder) ApplyOptions(options *lancedb.QueryOptions) lancedb.IQueryBuilder {
 	if options != nil {
 		if options.MaxResults > 0 {
 			q.Limit(options.MaxResults)
@@ -152,7 +140,7 @@ func (q *QueryBuilder) ApplyOptions(options *QueryOptions) *QueryBuilder {
 }
 
 // ApplyOptions applies query options to the vector query builder
-func (vq *VectorQueryBuilder) ApplyOptions(options *QueryOptions) *VectorQueryBuilder {
+func (vq *VectorQueryBuilder) ApplyOptions(options *lancedb.QueryOptions) lancedb.IVectorQueryBuilder {
 	vq.QueryBuilder.ApplyOptions(options)
 	return vq
 }

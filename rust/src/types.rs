@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-use std::os::raw::{c_char, c_float, c_int, c_void};
+use std::os::raw::{c_char, c_int};
 
 /// Distance metrics for vector search
 #[repr(C)]
@@ -129,6 +129,7 @@ pub struct VersionInfo {
 
 /// Free a VersionInfo structure
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn lancedb_version_info_free(version: *mut VersionInfo) {
     if version.is_null() {
         return;
