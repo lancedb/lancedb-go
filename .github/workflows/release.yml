@@ -73,48 +73,146 @@ jobs:
           sudo apt-get install -y protobuf-compiler
 
       - name: Install system dependencies (macOS)
-        if: startsWith(matrix.os, 'macos')
+        if: matrix.platform == 'darwin'
         run: |
-          brew install protobuf
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            echo "🍺 Installing protobuf on macOS..."
+            
+            # Update Homebrew to ensure we get the latest formulas
+            brew update || true
+            
+            # Install protobuf with verbose output
+            brew install protobuf
+            
+            # Verify installation
+            echo "🔍 Verifying protoc installation..."
+            which protoc || echo "❌ protoc not found in PATH"
+            protoc --version || echo "❌ protoc version check failed"
+            
+            # Add common protoc paths to PATH as fallback
+            echo "🔧 Ensuring protoc is in PATH..."
+            export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+            echo "/opt/homebrew/bin" >> $GITHUB_PATH
+            echo "/usr/local/bin" >> $GITHUB_PATH
+            
+            # Set PROTOC environment variable explicitly
+            PROTOC_PATH=$(which protoc)
+            echo "PROTOC=$PROTOC_PATH" >> $GITHUB_ENV
+            export PROTOC="$PROTOC_PATH"
+            
+            # Final verification
+            echo "✅ Final protoc check:"
+            echo "protoc path: $PROTOC_PATH"
+            echo "PROTOC env var: $PROTOC"
+            which protoc
+            protoc --version
+            
+          else
+            echo "⚠️ Cannot build macOS target on $RUNNER_OS runner"
+            echo "This requires an actual macOS runner (normal when using 'act')"
+            echo "Skipping macOS build..."
+            exit 78  # Neutral exit code
+          fi
 
       - name: Install system dependencies (Windows)
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Try multiple methods to install protoc on Windows
-          Write-Host "Installing protobuf compiler for Windows..."
+          Write-Host "🏗️ Installing protobuf compiler for Windows..."
+          $installed = $false
           
-          # Method 1: Try winget
-          try {
-            winget install --id Google.ProtocolBuffers --silent --accept-package-agreements --accept-source-agreements
-            Write-Host "✅ Protobuf installed via winget"
-          }
-          catch {
-            Write-Host "⚠️ Winget failed, trying chocolatey..."
-            
-            # Method 2: Try chocolatey 
-            try {
-              choco install protoc --yes
-              Write-Host "✅ Protobuf installed via chocolatey"
+          # Method 1: Try winget with correct package ID
+          Write-Host "📦 Method 1: Trying winget..."
+          # Try different potential package IDs
+          $winget_packages = @("protocolbuffers.protobuf", "Google.ProtocolBuffers", "protobuf")
+          foreach ($pkg in $winget_packages) {
+            Write-Host "Trying package ID: $pkg"
+            $result = winget install --id $pkg --accept-package-agreements --accept-source-agreements --disable-interactivity 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "✅ Protobuf installed via winget (package: $pkg)"
+              $installed = $true
+              break
+            } else {
+              Write-Host "❌ Failed with package ID: $pkg"
+              Write-Host $result
             }
-            catch {
-              Write-Host "⚠️ Chocolatey failed, downloading manually..."
-              
-              # Method 3: Manual download
+          }
+          
+          # Method 2: Try chocolatey if winget failed
+          if (-not $installed) {
+            Write-Host "📦 Method 2: Trying chocolatey..."
+            $result = choco install protoc --yes 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "✅ Protobuf installed via chocolatey"
+              $installed = $true
+            } else {
+              Write-Host "❌ Chocolatey failed:"
+              Write-Host $result
+            }
+          }
+          
+          # Method 3: Manual download if both failed
+          if (-not $installed) {
+            Write-Host "📦 Method 3: Manual download..."
+            try {
               $protoc_url = "https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protoc-25.1-win64.zip"
               $protoc_zip = "$env:TEMP\protoc.zip"
               $protoc_dir = "$env:TEMP\protoc"
               
-              Invoke-WebRequest -Uri $protoc_url -OutFile $protoc_zip
+              Write-Host "Downloading from: $protoc_url"
+              Invoke-WebRequest -Uri $protoc_url -OutFile $protoc_zip -UseBasicParsing
+              
+              Write-Host "Extracting to: $protoc_dir"
+              if (Test-Path $protoc_dir) { Remove-Item $protoc_dir -Recurse -Force }
               Expand-Archive -Path $protoc_zip -DestinationPath $protoc_dir -Force
               
-              # Add to PATH
-              $env:PATH = "$protoc_dir\bin;$env:PATH"
-              echo "PATH=$protoc_dir\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+              # Add to PATH for current session and future steps
+              $protoc_bin = "$protoc_dir\bin"
+              $env:PATH = "$protoc_bin;$env:PATH"
+              Add-Content $env:GITHUB_PATH "$protoc_bin"
               
-              Write-Host "✅ Protobuf installed manually"
+              # Set PROTOC environment variable
+              $protoc_exe = "$protoc_bin\protoc.exe"
+              if (Test-Path $protoc_exe) {
+                $env:PROTOC = $protoc_exe
+                Add-Content $env:GITHUB_ENV "PROTOC=$protoc_exe"
+                Write-Host "✅ Protobuf installed manually"
+                Write-Host "protoc path: $protoc_exe"
+                $installed = $true
+              } else {
+                Write-Host "❌ Manual installation failed - protoc.exe not found"
+              }
+            }
+            catch {
+              Write-Host "❌ Manual download failed: $_"
             }
           }
+          
+          # Final verification
+          Write-Host "🔍 Verifying protoc installation..."
+          $protoc_path = Get-Command protoc -ErrorAction SilentlyContinue
+          if ($protoc_path) {
+            Write-Host "✅ protoc found at: $($protoc_path.Source)"
+            & protoc --version
+            
+            # Set PROTOC environment variable if not already set
+            if (-not $env:PROTOC) {
+              $env:PROTOC = $protoc_path.Source
+              Add-Content $env:GITHUB_ENV "PROTOC=$($protoc_path.Source)"
+            }
+          } else {
+            Write-Host "❌ protoc not found in PATH after installation attempts"
+            Write-Host "Current PATH: $env:PATH"
+            exit 1
+          }
+
+      - name: Skip Windows build on non-Windows runner
+        if: matrix.platform == 'windows' && runner.os != 'Windows'
+        run: |
+          echo "⚠️ Cannot build Windows target on $RUNNER_OS runner"
+          echo "This requires an actual Windows runner (normal when using 'act')"
+          echo "Skipping Windows build..."
+          exit 78  # Neutral exit code
 
       # Linux cross-compilation setup
       - name: Install cross-compilation tools (Linux ARM64)
@@ -135,27 +233,180 @@ jobs:
       - name: Create directories (Unix)
         if: matrix.platform != 'windows'
         run: |
-          mkdir -p lib/${{ matrix.platform }}_${{ matrix.arch }}
+          echo "📁 Creating directories for ${{ matrix.platform }}_${{ matrix.arch }}..."
+          TARGET_DIR="lib/${{ matrix.platform }}_${{ matrix.arch }}"
+          
+          # Create lib directory structure
+          mkdir -p "$TARGET_DIR"
           mkdir -p include
+          
+          # Verify directories were created
+          echo "✅ Created directories:"
+          echo "  - $TARGET_DIR: $(ls -ld "$TARGET_DIR" 2>/dev/null && echo "exists" || echo "failed")"
+          echo "  - include: $(ls -ld include 2>/dev/null && echo "exists" || echo "failed")"
+          
+          # Show overall structure
+          echo "🔍 Current directory structure:"
+          ls -la . || echo "Root directory listing failed"
+          ls -la lib/ || echo "lib directory not found or empty"
 
       # Create directories (Windows)
       - name: Create directories (Windows)
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path "lib/${{ matrix.platform }}_${{ matrix.arch }}" -Force
-          New-Item -ItemType Directory -Path "include" -Force
+          Write-Host "📁 Creating directories for ${{ matrix.platform }}_${{ matrix.arch }}..."
+          $targetDir = "lib/${{ matrix.platform }}_${{ matrix.arch }}"
+          
+          # Create directories with Force flag
+          New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+          New-Item -ItemType Directory -Path "include" -Force | Out-Null
+          
+          # Verify directories were created
+          Write-Host "✅ Created directories:"
+          if (Test-Path $targetDir) { 
+            Write-Host "  - $targetDir : exists" 
+          } else { 
+            Write-Host "  - $targetDir : failed" 
+          }
+          
+          if (Test-Path "include") { 
+            Write-Host "  - include : exists" 
+          } else { 
+            Write-Host "  - include : failed" 
+          }
+          
+          # Show overall structure
+          Write-Host "🔍 Current directory structure:"
+          Get-ChildItem -Name | Write-Host
+          Write-Host "lib directory contents:"
+          Get-ChildItem lib -Name -ErrorAction SilentlyContinue | Write-Host
 
-      - name: Build native library
+      - name: Verify protoc environment (Unix)
+        if: matrix.platform != 'windows'
         run: |
+          echo "🔍 Verifying protoc environment before build..."
+          echo "Current PATH: $PATH"
+          echo "PROTOC environment variable: ${PROTOC:-not set}"
+          echo "Searching for protoc in PATH:"
+          which protoc || echo "protoc not found in PATH"
+          echo "Manual check for protoc in common locations:"
+          ls -la /opt/homebrew/bin/protoc 2>/dev/null && echo "Found: /opt/homebrew/bin/protoc" || echo "Not found: /opt/homebrew/bin/protoc"
+          ls -la /usr/local/bin/protoc 2>/dev/null && echo "Found: /usr/local/bin/protoc" || echo "Not found: /usr/local/bin/protoc"
+          ls -la /usr/bin/protoc 2>/dev/null && echo "Found: /usr/bin/protoc" || echo "Not found: /usr/bin/protoc"
+
+      - name: Verify protoc environment (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          Write-Host "🔍 Verifying protoc environment before build..."
+          Write-Host "Current PATH: $env:PATH"
+          Write-Host "PROTOC environment variable: $env:PROTOC"
+          Write-Host "Searching for protoc in PATH:"
+          $protoc_cmd = Get-Command protoc -ErrorAction SilentlyContinue
+          if ($protoc_cmd) {
+            Write-Host "✅ protoc found at: $($protoc_cmd.Source)"
+            & protoc --version
+          } else {
+            Write-Host "❌ protoc not found in PATH"
+          }
+
+      - name: Build native library (Unix)
+        if: matrix.platform != 'windows'
+        run: |
+          # Check for cross-compilation issues
+          if [[ "${{ matrix.platform }}" == "darwin" && "$RUNNER_OS" != "macOS" ]]; then
+            echo "❌ Cannot cross-compile macOS targets on $RUNNER_OS"
+            echo "This requires an actual macOS runner"
+            exit 78  # Neutral exit to skip
+          fi
+          
+          echo "🔨 Building for ${{ matrix.platform }}-${{ matrix.arch }} on $RUNNER_OS..."
+          
+          # Debug environment for protoc issues
+          echo "🔍 Environment debug:"
+          echo "PATH: $PATH"
+          echo "PROTOC: ${PROTOC:-not set}"
+          
+          # Ensure protoc is available (fallback installation)
+          if ! which protoc >/dev/null 2>&1; then
+            echo "⚠️ protoc not found, attempting fallback installation..."
+            if [[ "$RUNNER_OS" == "macOS" ]]; then
+              echo "Installing protobuf via brew (fallback)..."
+              brew install protobuf || echo "❌ Brew installation failed"
+              # Add paths after installation
+              export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+            elif [[ "$RUNNER_OS" == "Linux" ]]; then
+              echo "Installing protobuf-compiler via apt (fallback)..."
+              sudo apt-get update && sudo apt-get install -y protobuf-compiler || echo "❌ Apt installation failed"
+            fi
+          fi
+          
+          # Final protoc verification and environment setup
+          PROTOC_PATH=$(which protoc)
+          if [[ -z "$PROTOC_PATH" ]]; then
+            echo "❌ protoc still not found after installation attempts"
+            echo "Checking common locations:"
+            ls -la /opt/homebrew/bin/protoc 2>/dev/null || echo "Not found: /opt/homebrew/bin/protoc"
+            ls -la /usr/local/bin/protoc 2>/dev/null || echo "Not found: /usr/local/bin/protoc"
+            ls -la /usr/bin/protoc 2>/dev/null || echo "Not found: /usr/bin/protoc"
+            exit 1
+          fi
+          
+          export PROTOC="$PROTOC_PATH"
+          echo "✅ protoc is ready for build"
+          echo "protoc path: $PROTOC_PATH"
+          echo "PROTOC env var: $PROTOC"
+          protoc --version
+          
           cd rust
           cargo build --release --target ${{ matrix.rust_target }}
         env:
           RUST_TARGET: ${{ matrix.rust_target }}
+          PROTOC: ${{ env.PROTOC }}
+
+      - name: Build native library (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          Write-Host "🔨 Building for ${{ matrix.platform }}-${{ matrix.arch }} on Windows..."
+          
+          # Debug environment for protoc issues
+          Write-Host "🔍 Environment debug:"
+          Write-Host "PATH: $env:PATH"
+          Write-Host "PROTOC: $env:PROTOC"
+          
+          # Ensure protoc is available
+          $protoc_cmd = Get-Command protoc -ErrorAction SilentlyContinue
+          if (-not $protoc_cmd) {
+            Write-Host "❌ protoc not found in PATH"
+            Write-Host "Current PATH: $env:PATH"
+            exit 1
+          }
+          
+          # Set PROTOC environment variable if not set
+          if (-not $env:PROTOC) {
+            $env:PROTOC = $protoc_cmd.Source
+          }
+          
+          Write-Host "✅ protoc is ready for build"
+          Write-Host "protoc path: $($protoc_cmd.Source)"
+          Write-Host "PROTOC env var: $env:PROTOC"
+          & protoc --version
+          
+          Set-Location rust
+          cargo build --release --target ${{ matrix.rust_target }}
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          PROTOC: ${{ env.PROTOC }}
 
       - name: Generate C header
         if: matrix.platform == 'darwin' && matrix.arch == 'amd64'  # Generate header only once
         run: |
+          if [[ "$RUNNER_OS" != "macOS" ]]; then
+            echo "⚠️ Skipping header generation on $RUNNER_OS (requires macOS)"
+            exit 78
+          fi
           cd rust
           cbindgen --config cbindgen.toml --crate lancedb-go --output ../include/lancedb.h
 
@@ -163,53 +414,200 @@ jobs:
       - name: Copy libraries (Unix)
         if: matrix.platform != 'windows'
         run: |
-          cd rust/target/${{ matrix.rust_target }}/release
-          cp liblancedb_go.a ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
-          # Copy dynamic library if it exists
+          # Skip if cross-compilation was skipped
+          if [[ "${{ matrix.platform }}" == "darwin" && "$RUNNER_OS" != "macOS" ]]; then
+            echo "⚠️ Skipping library copy (build was skipped)"
+            exit 78
+          fi
+          
+          echo "📂 Preparing to copy libraries for ${{ matrix.platform }}_${{ matrix.arch }}..."
+          
+          # Get absolute paths to avoid relative path issues
+          WORKSPACE_ROOT="$(pwd)"
+          TARGET_DIR="lib/${{ matrix.platform }}_${{ matrix.arch }}"
+          ABSOLUTE_TARGET_DIR="$WORKSPACE_ROOT/$TARGET_DIR"
+          RUST_BUILD_DIR="$WORKSPACE_ROOT/rust/target/${{ matrix.rust_target }}/release"
+          
+          echo "🔍 Path information:"
+          echo "  - Workspace root: $WORKSPACE_ROOT"
+          echo "  - Target directory: $TARGET_DIR"
+          echo "  - Absolute target: $ABSOLUTE_TARGET_DIR"
+          echo "  - Rust build dir: $RUST_BUILD_DIR"
+          
+          # Ensure target directory exists using absolute path
+          echo "📁 Creating target directory: $ABSOLUTE_TARGET_DIR"
+          mkdir -p "$ABSOLUTE_TARGET_DIR"
+          
+          # Verify directory was created
+          if [ -d "$ABSOLUTE_TARGET_DIR" ]; then
+            echo "✅ Target directory exists: $ABSOLUTE_TARGET_DIR"
+            ls -la "$ABSOLUTE_TARGET_DIR" || echo "Directory listing failed"
+          else
+            echo "❌ Failed to create target directory: $ABSOLUTE_TARGET_DIR"
+            exit 1
+          fi
+          
+          # Debug: Show current directory structure
+          echo "🔍 Current directory structure:"
+          ls -la . || echo "Root directory listing failed"
+          ls -la lib/ || echo "lib directory listing failed"
+          
+          # Check rust build directory
+          echo "📁 Checking build directory: $RUST_BUILD_DIR"
+          if [ ! -d "$RUST_BUILD_DIR" ]; then
+            echo "❌ Build directory not found: $RUST_BUILD_DIR"
+            exit 1
+          fi
+          
+          ls -la "$RUST_BUILD_DIR" || { echo "❌ Cannot list build directory"; exit 1; }
+          
+          cd "$RUST_BUILD_DIR"
+          echo "📋 Contents of build directory:"
+          ls -la *lancedb* || echo "No lancedb files found"
+          
+          # Copy static library (always present) using absolute path
+          if [ -f liblancedb_go.a ]; then
+            echo "📦 Copying static library: liblancedb_go.a"
+            echo "  From: $(pwd)/liblancedb_go.a"
+            echo "  To: $ABSOLUTE_TARGET_DIR/"
+            cp liblancedb_go.a "$ABSOLUTE_TARGET_DIR/"
+            echo "✅ Static library copied"
+          else
+            echo "❌ Static library liblancedb_go.a not found"
+            echo "Available files:"
+            ls -la . || echo "Cannot list current directory"
+            exit 1
+          fi
+          
+          # Copy dynamic library if it exists (platform-specific) using absolute path
           if [ -f liblancedb_go.dylib ]; then
-            cp liblancedb_go.dylib ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+            echo "📦 Copying macOS dynamic library: liblancedb_go.dylib"
+            echo "  From: $(pwd)/liblancedb_go.dylib"
+            echo "  To: $ABSOLUTE_TARGET_DIR/"
+            cp liblancedb_go.dylib "$ABSOLUTE_TARGET_DIR/"
+            echo "✅ macOS dynamic library copied"
           fi
+          
           if [ -f liblancedb_go.so ]; then
-            cp liblancedb_go.so ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+            echo "📦 Copying Linux dynamic library: liblancedb_go.so"
+            echo "  From: $(pwd)/liblancedb_go.so"
+            echo "  To: $ABSOLUTE_TARGET_DIR/"
+            cp liblancedb_go.so "$ABSOLUTE_TARGET_DIR/"
+            echo "✅ Linux dynamic library copied"
           fi
+          
+          # Verify files were copied successfully using absolute path
+          echo "🔍 Verifying copied files in: $ABSOLUTE_TARGET_DIR"
+          ls -la "$ABSOLUTE_TARGET_DIR/" || echo "Failed to list target directory"
 
       # Copy libraries - Windows
       - name: Copy libraries (Windows)
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          Set-Location rust/target/${{ matrix.rust_target }}/release
-          Write-Host "📂 Contents of release directory:"
-          Get-ChildItem -Name | Write-Host
+          # Skip if cross-compilation was skipped
+          if ($env:RUNNER_OS -ne "Windows") {
+            Write-Host "⚠️ Skipping library copy (build was skipped)"
+            exit 78
+          }
           
-          # Copy static library (.a is preferred for CGO compatibility)
-          if (Test-Path "liblancedb_go.a") {
-            Copy-Item liblancedb_go.a ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
-            Write-Host "✅ Copied liblancedb_go.a (static library for CGO)"
-          } elseif (Test-Path "lancedb_go.lib") {
-            Copy-Item lancedb_go.lib ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
-            Write-Host "✅ Copied lancedb_go.lib"
-          } elseif (Test-Path "liblancedb_go.lib") {
-            Copy-Item liblancedb_go.lib ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
-            Write-Host "✅ Copied liblancedb_go.lib"
+          Write-Host "📂 Preparing to copy libraries for ${{ matrix.platform }}_${{ matrix.arch }}..."
+          
+          # Get absolute paths to avoid relative path issues
+          $workspaceRoot = Get-Location
+          $targetDir = "lib/${{ matrix.platform }}_${{ matrix.arch }}"
+          $absoluteTargetDir = Join-Path $workspaceRoot $targetDir
+          $rustBuildDir = Join-Path $workspaceRoot "rust/target/${{ matrix.rust_target }}/release"
+          
+          Write-Host "🔍 Path information:"
+          Write-Host "  - Workspace root: $workspaceRoot"
+          Write-Host "  - Target directory: $targetDir"
+          Write-Host "  - Absolute target: $absoluteTargetDir"
+          Write-Host "  - Rust build dir: $rustBuildDir"
+          
+          # Ensure target directory exists using absolute path
+          Write-Host "📁 Creating target directory: $absoluteTargetDir"
+          New-Item -ItemType Directory -Path $absoluteTargetDir -Force | Out-Null
+          
+          # Verify directory was created
+          if (Test-Path $absoluteTargetDir) {
+            Write-Host "✅ Target directory exists: $absoluteTargetDir"
+            Get-ChildItem $absoluteTargetDir -ErrorAction SilentlyContinue | Write-Host
           } else {
-            Write-Host "❌ No static library found (.a, .lib)"
-            Write-Host "Available files:"
-            Get-ChildItem -Filter "*lancedb*" | Format-Table Name, Length
+            Write-Host "❌ Failed to create target directory: $absoluteTargetDir"
             exit 1
           }
           
-          # Copy dynamic library (.dll)
+          # Debug: Show current directory structure
+          Write-Host "🔍 Current directory structure:"
+          Get-ChildItem -Name | Write-Host
+          Write-Host "lib directory contents:"
+          Get-ChildItem lib -Name -ErrorAction SilentlyContinue | Write-Host
+          
+          # Check rust build directory
+          Write-Host "📁 Checking build directory: $rustBuildDir"
+          if (-not (Test-Path $rustBuildDir)) {
+            Write-Host "❌ Build directory not found: $rustBuildDir"
+            exit 1
+          }
+          
+          Set-Location $rustBuildDir
+          Write-Host "📋 Contents of build directory:"
+          Get-ChildItem -Filter "*lancedb*" | Format-Table Name, Length -AutoSize
+          
+          # Copy static library (.a is preferred for CGO compatibility) using absolute path
+          $staticCopied = $false
+          if (Test-Path "liblancedb_go.a") {
+            Write-Host "📦 Copying static library: liblancedb_go.a"
+            Write-Host "  From: $(Get-Location)\liblancedb_go.a"
+            Write-Host "  To: $absoluteTargetDir\"
+            Copy-Item liblancedb_go.a $absoluteTargetDir
+            Write-Host "✅ Static library copied (liblancedb_go.a)"
+            $staticCopied = $true
+          } elseif (Test-Path "lancedb_go.lib") {
+            Write-Host "📦 Copying static library: lancedb_go.lib"
+            Write-Host "  From: $(Get-Location)\lancedb_go.lib"
+            Write-Host "  To: $absoluteTargetDir\"
+            Copy-Item lancedb_go.lib $absoluteTargetDir
+            Write-Host "✅ Static library copied (lancedb_go.lib)"
+            $staticCopied = $true
+          } elseif (Test-Path "liblancedb_go.lib") {
+            Write-Host "📦 Copying static library: liblancedb_go.lib"
+            Write-Host "  From: $(Get-Location)\liblancedb_go.lib"
+            Write-Host "  To: $absoluteTargetDir\"
+            Copy-Item liblancedb_go.lib $absoluteTargetDir
+            Write-Host "✅ Static library copied (liblancedb_go.lib)"
+            $staticCopied = $true
+          }
+          
+          if (-not $staticCopied) {
+            Write-Host "❌ No static library found (.a, .lib)"
+            Write-Host "Available files:"
+            Get-ChildItem -Filter "*lancedb*" | Format-Table Name, Length -AutoSize
+            exit 1
+          }
+          
+          # Copy dynamic library (.dll) if it exists using absolute path
           if (Test-Path "lancedb_go.dll") {
-            Copy-Item lancedb_go.dll ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
-            Write-Host "✅ Copied lancedb_go.dll"
+            Write-Host "📦 Copying dynamic library: lancedb_go.dll"
+            Write-Host "  From: $(Get-Location)\lancedb_go.dll"
+            Write-Host "  To: $absoluteTargetDir\"
+            Copy-Item lancedb_go.dll $absoluteTargetDir
+            Write-Host "✅ Dynamic library copied (lancedb_go.dll)"
           } elseif (Test-Path "liblancedb_go.dll") {
-            Copy-Item liblancedb_go.dll ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
-            Write-Host "✅ Copied liblancedb_go.dll"
+            Write-Host "📦 Copying dynamic library: liblancedb_go.dll"
+            Write-Host "  From: $(Get-Location)\liblancedb_go.dll"
+            Write-Host "  To: $absoluteTargetDir\"
+            Copy-Item liblancedb_go.dll $absoluteTargetDir
+            Write-Host "✅ Dynamic library copied (liblancedb_go.dll)"
           } else {
-            Write-Host "⚠️  No dynamic library found (.dll)"
+            Write-Host "⚠️ No dynamic library found (.dll)"
             Write-Host "This is expected for static builds"
           }
+          
+          # Verify files were copied successfully using absolute path
+          Write-Host "🔍 Verifying copied files in: $absoluteTargetDir"
+          Get-ChildItem $absoluteTargetDir | Format-Table Name, Length -AutoSize
 
       # Upload artifacts for each platform
       - name: Upload build artifacts
