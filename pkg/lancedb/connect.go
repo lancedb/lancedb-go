@@ -1,5 +1,7 @@
 package lancedb
 
+//go:generate go run ../../cmd/download-binaries
+
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../include
 #cgo darwin,amd64 LDFLAGS: ${SRCDIR}/../../lib/darwin_amd64/liblancedb_go.a -framework Security -framework CoreFoundation

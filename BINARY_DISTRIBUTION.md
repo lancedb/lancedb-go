@@ -14,29 +14,27 @@ Previously, lancedb-go required users to:
 
 ## 🏗️ How It Works
 
-### 1. **Platform-Specific Libraries**
-The repository includes pre-built native libraries for all supported platforms:
+### 1. **Download-on-Build System**
+The library uses an intelligent download-on-build system:
 
-```
-lib/
-├── darwin_amd64/     # macOS Intel
-├── darwin_arm64/     # macOS Apple Silicon  
-├── linux_amd64/      # Linux AMD64
-├── linux_arm64/      # Linux ARM64
-└── windows_amd64/    # Windows AMD64
-```
+- ✅ **Git repository**: Only source code (fast clones)
+- ✅ **GitHub Releases**: Binary distribution (proper storage)
+- ✅ **Auto-download**: Binaries downloaded when needed
+- ✅ **Transparent**: Works seamlessly with `go get`
 
 ### 2. **Smart CGO Directives**
 The CGO configuration automatically selects the right library:
 
 ```go
+//go:generate go run ../../cmd/download-binaries
+
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../include
-#cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/../../lib/darwin_amd64 -llancedb_go
-#cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/../../lib/darwin_arm64 -llancedb_go
-#cgo linux,amd64 LDFLAGS: -L${SRCDIR}/../../lib/linux_amd64 -llancedb_go
-#cgo linux,arm64 LDFLAGS: -L${SRCDIR}/../../lib/linux_arm64 -llancedb_go
-#cgo windows,amd64 LDFLAGS: -L${SRCDIR}/../../lib/windows_amd64 -llancedb_go
+#cgo darwin,amd64 LDFLAGS: ${SRCDIR}/../../lib/darwin_amd64/liblancedb_go.a
+#cgo darwin,arm64 LDFLAGS: ${SRCDIR}/../../lib/darwin_arm64/liblancedb_go.a
+#cgo linux,amd64 LDFLAGS: ${SRCDIR}/../../lib/linux_amd64/liblancedb_go.a
+#cgo linux,arm64 LDFLAGS: ${SRCDIR}/../../lib/linux_arm64/liblancedb_go.a
+#cgo windows,amd64 LDFLAGS: ${SRCDIR}/../../lib/windows_amd64/liblancedb_go.a
 #include "lancedb.h"
 */
 ```
@@ -44,10 +42,10 @@ The CGO configuration automatically selects the right library:
 ### 3. **Automated Release Process**
 When a new version is released:
 
-1. **GitHub Actions builds** native libraries for all platforms
-2. **Libraries are committed** to the repository
-3. **Release is tagged** with pre-built binaries
-4. **Users can install** with just `go get`
+1. **GitHub Actions builds** native libraries for all platforms (~1.7GB total)
+2. **Binaries attached** to GitHub Release (not committed to Git)
+3. **Release archive** created with all platforms
+4. **Users can install** with just `go get` - binaries auto-download
 
 ## 🚀 For End Users
 
@@ -56,6 +54,14 @@ When a new version is released:
 go get github.com/lancedb/lancedb-go
 ```
 
+**What happens behind the scenes:**
+1. Go downloads the source code (~1MB)
+2. On first build, detects missing native libraries
+3. **Tries to download** platform-specific binaries (~350MB for your platform)
+4. **If download fails**, automatically falls back to building from source
+5. Caches binaries locally for future builds
+6. Links everything together seamlessly
+
 ### Usage
 ```go
 import "github.com/lancedb/lancedb-go/pkg/lancedb"
@@ -63,6 +69,51 @@ import "github.com/lancedb/lancedb-go/pkg/lancedb"
 // Works immediately - no build dependencies required!
 conn, err := lancedb.Connect(ctx, "my-database", nil)
 ```
+
+### Advanced Usage
+
+**Manual binary download:**
+```bash
+# Download binaries explicitly (optional)
+go generate github.com/lancedb/lancedb-go/...
+```
+
+**Specify version:**
+```bash
+# Download specific version binaries
+export LANCEDB_VERSION=v0.1.1-2
+go generate github.com/lancedb/lancedb-go/...
+```
+
+**Custom release URL:**
+```bash
+# Use custom binary source (enterprise/mirrors)
+export LANCEDB_RELEASE_URL=https://my-mirror.com/lancedb-go-binaries.tar.gz
+go build ./...
+```
+
+### Automatic Fallback Behavior
+
+The build system intelligently handles missing or failed binary downloads:
+
+1. **First, tries to download** pre-built binaries from GitHub Releases
+2. **If download fails** (network issues, release doesn't exist, etc.):
+   - Automatically falls back to `make build-native`
+   - Builds Rust libraries from source locally  
+   - Requires: Rust, cbindgen, and platform build tools
+3. **Caches the result** so future builds are fast
+
+**Example fallback scenario:**
+```bash
+go build ./...
+# 🔄 LanceDB: Downloading native binaries for darwin_arm64...
+# ⚠️ LanceDB: Download failed (HTTP 404), falling back to building from source...
+# 🔨 LanceDB: Building native libraries from source...
+# 📋 This may take several minutes on first run
+# ✅ LanceDB: Successfully built native libraries from source for darwin_arm64
+```
+
+This ensures `go get` **always works**, whether pre-built binaries are available or not.
 
 ### Supported Platforms
 - ✅ **macOS**: Intel (amd64) and Apple Silicon (arm64)
@@ -133,33 +184,28 @@ lancedb-go/
    make test-dist
    ```
 
-3. **Commit binaries**:
-   ```bash
-   git add lib/ include/
-   git commit -m "Add pre-built binaries for vX.Y.Z"
-   git push
-   ```
-
-4. **Create and push tag**:
+3. **Create and push tag**:
    ```bash
    git tag v1.0.0
    git push origin v1.0.0
    ```
 
-5. **GitHub Actions automatically**:
+4. **GitHub Actions automatically**:
    - Builds all platforms
-   - Creates GitHub release
-   - Updates documentation
+   - Creates GitHub release with binary attachments
+   - Distributes binaries via GitHub Releases (not Git repository)
 
 ### GitHub Actions Workflow
 
 The release workflow (`.github/workflows/release.yml`) automatically:
 
 - **Builds** native libraries for all platforms
-- **Verifies** binary completeness
-- **Creates** GitHub release with artifacts
-- **Commits** binaries to the repository
-- **Updates** documentation
+- **Verifies** binary completeness  
+- **Creates** GitHub release with binary attachments
+- **Distributes** binaries via GitHub Releases (proper approach)
+- **Keeps** Git repository clean (no large binary files committed)
+
+> **Important**: Binary files are distributed via GitHub Releases, not committed to the Git repository. This prevents repository bloat and avoids Git push timeout issues.
 
 ## 🧪 Testing
 

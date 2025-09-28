@@ -25,32 +25,32 @@ jobs:
       matrix:
         include:
           # macOS builds
-          - platform: darwin
-            arch: amd64
-            runner: macos-latest
-            rust_target: x86_64-apple-darwin
+          # - platform: darwin
+          #   arch: amd64
+          #   runner: macos-latest
+          #   rust_target: x86_64-apple-darwin
             
           - platform: darwin
             arch: arm64
             runner: macos-latest
             rust_target: aarch64-apple-darwin
           
-          # Linux builds
-          - platform: linux
-            arch: amd64
-            runner: ubuntu-latest
-            rust_target: x86_64-unknown-linux-gnu
+          # # Linux builds
+          # - platform: linux
+          #   arch: amd64
+          #   runner: ubuntu-latest
+          #   rust_target: x86_64-unknown-linux-gnu
 
-          - platform: linux
-            arch: arm64
-            runner: ubuntu-latest
-            rust_target: aarch64-unknown-linux-gnu
+          # - platform: linux
+          #   arch: arm64
+          #   runner: ubuntu-latest
+          #   rust_target: aarch64-unknown-linux-gnu
 
-          # Windows builds
-          - platform: windows
-            arch: amd64
-            runner: windows-latest
-            rust_target: x86_64-pc-windows-msvc
+          # # Windows builds
+          # - platform: windows
+          #   arch: amd64
+          #   runner: windows-latest
+          #   rust_target: x86_64-pc-windows-msvc
 
     steps:
       - name: Checkout code
@@ -710,28 +710,22 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "📋 Release version: $VERSION"
 
-      # Commit and push the binary files to the repository
-      - name: Commit binary files
+      # Note: We don't commit binary files to the repository
+      # Instead, we distribute them via GitHub Releases
+      - name: Prepare binary distribution
         run: |
-          echo "📝 Configuring git..."
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          echo "📦 Preparing binary distribution for GitHub Release..."
+          echo "Binary files will be attached to the GitHub Release, not committed to the repository."
           
-          echo "➕ Adding binary files to repository..."
-          git add lib/ include/
+          # Verify all binary files are present
+          echo "🔍 Verifying binary files for release..."
+          find lib/ -name "*.a" -o -name "*.so" -o -name "*.dylib" -o -name "*.lib" -o -name "*.dll" | sort
           
-          # Check if there are changes to commit
-          if git diff --staged --quiet; then
-            echo "ℹ️ No changes to commit"
-          else
-            echo "💾 Committing binary files..."
-            git commit -m "Add pre-built native binaries for ${{ steps.get_version.outputs.version }}"
-            
-            echo "🚀 Pushing to repository..."
-            git push origin HEAD:main
-          fi
+          # Show size information
+          echo "📊 Binary file sizes:"
+          du -h lib/*/
 
-      # Create GitHub release
+      # Create GitHub release with all binary files
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
@@ -740,6 +734,17 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: |
             lancedb-go-native-binaries.tar.gz
+            lib/darwin_amd64/liblancedb_go.a
+            lib/darwin_amd64/liblancedb_go.dylib
+            lib/darwin_arm64/liblancedb_go.a
+            lib/darwin_arm64/liblancedb_go.dylib
+            lib/linux_amd64/liblancedb_go.a
+            lib/linux_amd64/liblancedb_go.so
+            lib/linux_arm64/liblancedb_go.a
+            lib/linux_arm64/liblancedb_go.so
+            lib/windows_amd64/lancedb_go.lib
+            lib/windows_amd64/lancedb_go.dll
+            include/lancedb.h
           draft: false
           prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') || contains(steps.get_version.outputs.version, 'rc') }}
         env:

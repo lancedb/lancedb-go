@@ -6,10 +6,16 @@
 # Default target
 all: build test
 
-# Build the Rust library and Go bindings
+# Build the Go bindings (automatically downloads binaries if needed)
 build:
-	@echo "Building Rust library..."
-	make build-native
+	@echo "Building Go library..."
+	go generate ./...
+	go build ./...
+
+# Download pre-built binaries
+download-binaries:
+	@echo "Downloading pre-built binaries..."
+	go run cmd/download-binaries/main.go
 
 # Run tests
 test: build
@@ -209,7 +215,8 @@ help:
 	@echo ""
 	@echo "=== Build & Test ==="
 	@echo "  all               - Build and test"
-	@echo "  build             - Build Rust library and Go bindings (legacy)"
+	@echo "  build             - Build Go bindings (auto-downloads binaries)"
+	@echo "  download-binaries - Download pre-built native binaries"
 	@echo "  build-native      - Build native libraries for current platform"
 	@echo "  build-all-platforms - Build native libraries for all platforms"
 	@echo "  test              - Run tests"
