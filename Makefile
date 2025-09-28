@@ -9,15 +9,7 @@ all: build test
 # Build the Rust library and Go bindings
 build:
 	@echo "Building Rust library..."
-	cd rust && cargo build --release
-	@echo "Generating C headers..."
-	mkdir -p rust/target/generated/include
-	cd rust && cbindgen --config cbindgen.toml --crate lancedb-go --output target/generated/include/lancedb.h
-	@echo "Copying library files..."
-	mkdir -p rust/target/generated/lib
-	cp rust/target/release/liblancedb_go.a rust/target/generated/lib/
-	@echo "Building Go module..."
-	go build ./...
+	make build-native
 
 # Run tests
 test: build
