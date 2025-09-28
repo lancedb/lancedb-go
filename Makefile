@@ -97,14 +97,14 @@ lint-rust:
 # Lint Go code only
 lint-go:
 	@echo "Linting Go code..."
-	@which golangci-lint > /dev/null || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
-	golangci-lint run --config .golangci.yml
+	@test -f $(shell go env GOPATH)/bin/golangci-lint || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
+	$(shell go env GOPATH)/bin/golangci-lint run --config .golangci.yml
 
 # Lint Go code with fixes applied automatically
 lint-go-fix:
 	@echo "Linting and fixing Go code..."
-	@which golangci-lint > /dev/null || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
-	golangci-lint run --config .golangci.yml --fix
+	@test -f $(shell go env GOPATH)/bin/golangci-lint || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
+	$(shell go env GOPATH)/bin/golangci-lint run --config .golangci.yml --fix
 
 # Show detailed linting report
 lint-report:
@@ -113,8 +113,8 @@ lint-report:
 	cd rust && cargo clippy -- -D warnings
 	@echo ""
 	@echo "=== Go Linting Report ==="
-	@which golangci-lint > /dev/null || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
-	golangci-lint run --config .golangci.yml --out-format=colored-line-number
+	@test -f $(shell go env GOPATH)/bin/golangci-lint || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
+	$(shell go env GOPATH)/bin/golangci-lint run --config .golangci.yml --out-format=colored-line-number
 
 # Build examples
 examples: build
