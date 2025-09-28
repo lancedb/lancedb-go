@@ -40,12 +40,12 @@ jobs:
             arch: amd64
             runner: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
-            
+
           - platform: linux
             arch: arm64
             runner: ubuntu-latest
             rust_target: aarch64-unknown-linux-gnu
-            
+
           # Windows builds
           - platform: windows
             arch: amd64
@@ -65,6 +65,57 @@ jobs:
       - name: Install cbindgen
         run: cargo install cbindgen --force
 
+      # Install system dependencies
+      - name: Install system dependencies (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install system dependencies (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew install protobuf
+
+      - name: Install system dependencies (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          # Try multiple methods to install protoc on Windows
+          Write-Host "Installing protobuf compiler for Windows..."
+          
+          # Method 1: Try winget
+          try {
+            winget install --id Google.ProtocolBuffers --silent --accept-package-agreements --accept-source-agreements
+            Write-Host "✅ Protobuf installed via winget"
+          }
+          catch {
+            Write-Host "⚠️ Winget failed, trying chocolatey..."
+            
+            # Method 2: Try chocolatey 
+            try {
+              choco install protoc --yes
+              Write-Host "✅ Protobuf installed via chocolatey"
+            }
+            catch {
+              Write-Host "⚠️ Chocolatey failed, downloading manually..."
+              
+              # Method 3: Manual download
+              $protoc_url = "https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protoc-25.1-win64.zip"
+              $protoc_zip = "$env:TEMP\protoc.zip"
+              $protoc_dir = "$env:TEMP\protoc"
+              
+              Invoke-WebRequest -Uri $protoc_url -OutFile $protoc_zip
+              Expand-Archive -Path $protoc_zip -DestinationPath $protoc_dir -Force
+              
+              # Add to PATH
+              $env:PATH = "$protoc_dir\bin;$env:PATH"
+              echo "PATH=$protoc_dir\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+              
+              Write-Host "✅ Protobuf installed manually"
+            }
+          }
+
       # Linux cross-compilation setup
       - name: Install cross-compilation tools (Linux ARM64)
         if: matrix.platform == 'linux' && matrix.arch == 'arm64'
@@ -80,10 +131,20 @@ jobs:
           workspaces: "rust -> target"
           key: ${{ matrix.platform }}-${{ matrix.arch }}
 
-      - name: Create directories
+      # Create directories (Unix)
+      - name: Create directories (Unix)
+        if: matrix.platform != 'windows'
         run: |
           mkdir -p lib/${{ matrix.platform }}_${{ matrix.arch }}
           mkdir -p include
+
+      # Create directories (Windows)
+      - name: Create directories (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "lib/${{ matrix.platform }}_${{ matrix.arch }}" -Force
+          New-Item -ItemType Directory -Path "include" -Force
 
       - name: Build native library
         run: |
@@ -117,9 +178,38 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          cd rust/target/${{ matrix.rust_target }}/release
-          Copy-Item lancedb_go.lib ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
-          Copy-Item lancedb_go.dll ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+          Set-Location rust/target/${{ matrix.rust_target }}/release
+          Write-Host "📂 Contents of release directory:"
+          Get-ChildItem -Name | Write-Host
+          
+          # Copy static library (.a is preferred for CGO compatibility)
+          if (Test-Path "liblancedb_go.a") {
+            Copy-Item liblancedb_go.a ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+            Write-Host "✅ Copied liblancedb_go.a (static library for CGO)"
+          } elseif (Test-Path "lancedb_go.lib") {
+            Copy-Item lancedb_go.lib ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+            Write-Host "✅ Copied lancedb_go.lib"
+          } elseif (Test-Path "liblancedb_go.lib") {
+            Copy-Item liblancedb_go.lib ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+            Write-Host "✅ Copied liblancedb_go.lib"
+          } else {
+            Write-Host "❌ No static library found (.a, .lib)"
+            Write-Host "Available files:"
+            Get-ChildItem -Filter "*lancedb*" | Format-Table Name, Length
+            exit 1
+          }
+          
+          # Copy dynamic library (.dll)
+          if (Test-Path "lancedb_go.dll") {
+            Copy-Item lancedb_go.dll ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+            Write-Host "✅ Copied lancedb_go.dll"
+          } elseif (Test-Path "liblancedb_go.dll") {
+            Copy-Item liblancedb_go.dll ../../../../../lib/${{ matrix.platform }}_${{ matrix.arch }}/
+            Write-Host "✅ Copied liblancedb_go.dll"
+          } else {
+            Write-Host "⚠️  No dynamic library found (.dll)"
+            Write-Host "This is expected for static builds"
+          }
 
       # Upload artifacts for each platform
       - name: Upload build artifacts
@@ -271,66 +361,3 @@ jobs:
           go get github.com/lancedb/lancedb-go@${{ steps.get_version.outputs.version }}
           
           echo "✅ Release installation test passed!"
-
-  # Update documentation after successful release
-  update-docs:
-    name: Update Documentation
-    needs: create-release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update README with installation instructions
-        run: |
-          echo "📝 Updating README with new installation instructions..."
-          
-          # Update installation section to emphasize that it now works with go get
-          sed -i '/## Installation/,/```/ {
-            /## Installation/!d
-          }' README.md
-          
-          cat >> README_TEMP.md << 'EOF'
-          ## Installation
-          
-          ✨ **Now works out of the box with `go get`!** No build dependencies required.
-          
-          ```bash
-          go get github.com/lancedb/lancedb-go
-          ```
-          
-          The native libraries are pre-built and included in the module.
-          
-          ### Supported Platforms
-          
-          - **macOS**: Intel (amd64) and Apple Silicon (arm64)
-          - **Linux**: Intel/AMD (amd64) and ARM (arm64)
-          - **Windows**: Intel/AMD (amd64)
-          
-          ### Quick Test
-          
-          ```bash
-          # Test installation by running an example
-          go run github.com/lancedb/lancedb-go/examples/basic_crud
-          ```
-          EOF
-          
-          # Insert the new installation section
-          awk '/^## Installation/{while(getline && $0 !~ /^## /){} print "## Installation\n\n✨ **Now works out of the box with `go get`!** No build dependencies required.\n\n```bash\ngo get github.com/lancedb/lancedb-go\n```\n\nThe native libraries are pre-built and included in the module.\n\n### Supported Platforms\n\n- **macOS**: Intel (amd64) and Apple Silicon (arm64)\n- **Linux**: Intel/AMD (amd64) and ARM (arm64)\n- **Windows**: Intel/AMD (amd64)\n\n### Quick Test\n\n```bash\n# Test installation by running an example\ngo run github.com/lancedb/lancedb-go/examples/basic_crud\n```\n"} $0 !~ /^## Installation/{print}' README.md > README_NEW.md
-          
-          mv README_NEW.md README.md
-
-      - name: Commit documentation updates
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          
-          if git diff --quiet README.md; then
-            echo "ℹ️ No documentation changes to commit"
-          else
-            git add README.md
-            git commit -m "Update documentation for binary distribution"
-            git push origin HEAD:main
-          fi
