@@ -259,29 +259,99 @@ jobs:
 
       - name: Run tests with race detection
         run: |
-          # Set up library path for current platform
-          CURRENT_PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-          if [ -d "lib/$CURRENT_PLATFORM" ]; then
-            export LD_LIBRARY_PATH="$(pwd)/lib/$CURRENT_PLATFORM:${LD_LIBRARY_PATH:-}"
-            echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
-            
-            # Check dynamic linking if .so files exist
-            if ls lib/$CURRENT_PLATFORM/*.so >/dev/null 2>&1; then
-              ldd lib/$CURRENT_PLATFORM/*.so 2>/dev/null || echo "ldd check failed"
-            fi
-          else
-            echo "⚠️  Using default library path (static linking expected)"
-          fi
-          go test -v -race ./...
+          # Platform detection (similar to Makefile)
+          UNAME_S=$(uname -s)
+          UNAME_M=$(uname -m)
+          
+          # Normalize architecture names
+          case "$UNAME_M" in
+            x86_64|amd64) ARCH=amd64 ;;
+            arm64|aarch64) ARCH=arm64 ;;
+            *) echo "❌ Unsupported architecture: $UNAME_M"; exit 1 ;;
+          esac
+          
+          # Normalize platform names and set CGO flags
+          case "$UNAME_S" in
+            Darwin)
+              PLATFORM=darwin
+              FRAMEWORK_FLAGS="-framework Security -framework CoreFoundation"
+              CGO_LDFLAGS="$(pwd)/lib/darwin_${ARCH}/liblancedb_go.a $FRAMEWORK_FLAGS"
+              ;;
+            Linux)
+              PLATFORM=linux
+              SYSTEM_LIBS="-lm -ldl -lpthread"
+              CGO_LDFLAGS="$(pwd)/lib/linux_${ARCH}/liblancedb_go.a $SYSTEM_LIBS"
+              ;;
+            MINGW*|MSYS*|CYGWIN*)
+              PLATFORM=windows
+              ARCH=amd64
+              CGO_LDFLAGS="$(pwd)/lib/windows_amd64/liblancedb_go.a"
+              ;;
+            *)
+              echo "❌ Unsupported platform: $UNAME_S"
+              exit 1
+              ;;
+          esac
+          
+          # Set CGO flags
+          CGO_CFLAGS="-I$(pwd)/include"
+          PLATFORM_ARCH="${PLATFORM}_${ARCH}"
+          
+          # Display platform information (like Makefile)
+          echo "Running Go tests for $PLATFORM_ARCH..."
+          echo "CGO_CFLAGS: $CGO_CFLAGS"
+          echo "CGO_LDFLAGS: $CGO_LDFLAGS"
+          
+          # Run tests with proper CGO environment (like Makefile)
+          CGO_CFLAGS="$CGO_CFLAGS" CGO_LDFLAGS="$CGO_LDFLAGS" go test -v -race ./...
 
       - name: Run benchmarks
         run: |
-          # Set up library path for current platform
-          CURRENT_PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-          if [ -d "lib/$CURRENT_PLATFORM" ]; then
-            export LD_LIBRARY_PATH="$(pwd)/lib/$CURRENT_PLATFORM:${LD_LIBRARY_PATH:-}"
-          fi
-          go test -bench=. -benchmem ./...
+          # Platform detection (similar to Makefile)
+          UNAME_S=$(uname -s)
+          UNAME_M=$(uname -m)
+          
+          # Normalize architecture names
+          case "$UNAME_M" in
+            x86_64|amd64) ARCH=amd64 ;;
+            arm64|aarch64) ARCH=arm64 ;;
+            *) echo "❌ Unsupported architecture: $UNAME_M"; exit 1 ;;
+          esac
+          
+          # Normalize platform names and set CGO flags
+          case "$UNAME_S" in
+            Darwin)
+              PLATFORM=darwin
+              FRAMEWORK_FLAGS="-framework Security -framework CoreFoundation"
+              CGO_LDFLAGS="$(pwd)/lib/darwin_${ARCH}/liblancedb_go.a $FRAMEWORK_FLAGS"
+              ;;
+            Linux)
+              PLATFORM=linux
+              SYSTEM_LIBS="-lm -ldl -lpthread"
+              CGO_LDFLAGS="$(pwd)/lib/linux_${ARCH}/liblancedb_go.a $SYSTEM_LIBS"
+              ;;
+            MINGW*|MSYS*|CYGWIN*)
+              PLATFORM=windows
+              ARCH=amd64
+              CGO_LDFLAGS="$(pwd)/lib/windows_amd64/liblancedb_go.a"
+              ;;
+            *)
+              echo "❌ Unsupported platform: $UNAME_S"
+              exit 1
+              ;;
+          esac
+          
+          # Set CGO flags
+          CGO_CFLAGS="-I$(pwd)/include"
+          PLATFORM_ARCH="${PLATFORM}_${ARCH}"
+          
+          # Display platform information (like Makefile)
+          echo "Running benchmarks for $PLATFORM_ARCH..."
+          echo "CGO_CFLAGS: $CGO_CFLAGS"
+          echo "CGO_LDFLAGS: $CGO_LDFLAGS"
+          
+          # Run benchmarks with proper CGO environment (like Makefile)
+          CGO_CFLAGS="$CGO_CFLAGS" CGO_LDFLAGS="$CGO_LDFLAGS" go test -bench=. -benchmem ./...
 
   # 🎯 Final status aggregation
   ci-success:
