@@ -4,6 +4,7 @@
 package internal
 
 /*
+#cgo CFLAGS: -I${SRCDIR}/../../include
 #include "lancedb.h"
 */
 import "C"

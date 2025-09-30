@@ -3,6 +3,7 @@ package lancedb
 //go:generate go run ../../cmd/download-binaries
 
 /*
+#cgo CFLAGS: -I${SRCDIR}/../../include
 #include "lancedb.h"
 */
 import "C"
