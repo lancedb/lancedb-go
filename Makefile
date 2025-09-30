@@ -237,11 +237,6 @@ build-all-platforms:
 	@echo "Building native libraries for all platforms..."
 	./scripts/build-all-platforms.sh
 
-# Test binary distribution
-test-dist: build-native
-	@echo "Testing binary distribution..."
-	./scripts/test-binary-distribution.sh
-
 # Create a release build (legacy - use build-native instead)
 release: clean build-native
 	@echo "Release build complete (using binary distribution)"
@@ -282,7 +277,6 @@ help:
 	@echo "  build-all-platforms - Build native libraries for all platforms"
 	@echo "  build-go          - Build Go project with proper CGO configuration"
 	@echo "  test              - Run tests"
-	@echo "  test-dist         - Test binary distribution"
 	@echo "  bench             - Run benchmarks"
 	@echo "  clean             - Clean build artifacts"
 	@echo "  clean-dist        - Clean binary distribution files"

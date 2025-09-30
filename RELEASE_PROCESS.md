@@ -99,7 +99,6 @@ git filter-repo --path-glob 'lib/**' --invert-paths --force
 ```bash
 make build-native          # Build for current platform
 make build-all-platforms   # Build for all platforms  
-make test-dist             # Test binary distribution
 ```
 
 ### Testing Releases Locally

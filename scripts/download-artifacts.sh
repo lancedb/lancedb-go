@@ -74,11 +74,11 @@ detect_architecture() {
 
 # Function to get the latest release version
 get_latest_version() {
-    print_info "Fetching latest release version..."
+    print_info "Fetching latest release version..." >&2
     local latest_version=$(curl -s "$GITHUB_API_URL/releases/latest" | grep '"tag_name"' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
     
     if [[ -z "$latest_version" ]]; then
-        print_error "Failed to fetch latest version from GitHub API"
+        print_error "Failed to fetch latest version from GitHub API" >&2
         exit 1
     fi
     
@@ -238,7 +238,8 @@ main() {
     local static_lib_path="$lib_dir/$static_lib_name"
     
     if ! download_file "$static_lib_url" "$static_lib_path"; then
-        print_warning "Static library download failed, trying alternative approach..."
+        print_warning "Individual file download failed. This may be because the release doesn't contain platform-specific files."
+        print_info "Falling back to complete archive download (recommended approach)..."
         # Try downloading the complete archive as fallback
         download_complete_archive "$version" "$platform_arch"
         return $?

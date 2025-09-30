@@ -206,8 +206,7 @@ This package uses **pre-built native binaries** to eliminate build dependencies:
 
 ### 🔧 For Contributors & Maintainers
 - **Build locally**: `make build-native`
-- **Build all platforms**: `make build-all-platforms`  
-- **Test distribution**: `make test-dist`
+- **Build all platforms**: `make build-all-platforms`
 - **See detailed guide**: [BINARY_DISTRIBUTION.md](./BINARY_DISTRIBUTION.md)
 
 ### 📦 How It Works
