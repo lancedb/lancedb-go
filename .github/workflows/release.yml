@@ -733,16 +733,8 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: |
             lancedb-go-native-binaries.tar.gz
-            lib/darwin_amd64/liblancedb_go.a
-            lib/darwin_amd64/liblancedb_go.dylib
             lib/darwin_arm64/liblancedb_go.a
             lib/darwin_arm64/liblancedb_go.dylib
-            lib/linux_amd64/liblancedb_go.a
-            lib/linux_amd64/liblancedb_go.so
-            lib/linux_arm64/liblancedb_go.a
-            lib/linux_arm64/liblancedb_go.so
-            lib/windows_amd64/lancedb_go.lib
-            lib/windows_amd64/lancedb_go.dll
             include/lancedb.h
           draft: false
           prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') || contains(steps.get_version.outputs.version, 'rc') }}
