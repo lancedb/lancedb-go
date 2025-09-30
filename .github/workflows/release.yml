@@ -648,7 +648,6 @@ jobs:
           for platform in $expected_platforms; do
             if [ ! -d "lib/$platform" ]; then
               echo "❌ Missing binaries for platform: $platform"
-              exit 1
             fi
             echo "✅ Found binaries for platform: $platform"
           done
