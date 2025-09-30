@@ -1,31 +1,126 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-.PHONY: all build test clean install-deps install-act fmt lint lint-rust lint-go lint-go-fix lint-report examples docs release ci-quick ci-format ci-build ci-test ci-security ci-docs ci-examples ci-local ci-list ci-stage1 ci-stage2 ci-stage3 ci-debug ci-clean ci-graph
+.PHONY: all build test clean install-deps install-act fmt lint lint-rust lint-go lint-go-fix lint-report examples prepare-examples run-examples run-example docs release check-libraries platform-info build-go ci-quick ci-format ci-build ci-test ci-security ci-docs ci-examples ci-local ci-list ci-stage1 ci-stage2 ci-stage3 ci-debug ci-clean ci-graph
 
 # Default target
 all: build test
 
-# Build the Go bindings (automatically downloads binaries if needed)
+# Build the Rust library and Go bindings
 build:
-	@echo "Building Go library..."
-	go generate ./...
-	go build ./...
+	@echo "Building Rust library..."
+	make build-native
 
-# Download pre-built binaries
-download-binaries:
-	@echo "Downloading pre-built binaries..."
-	go run cmd/download-binaries/main.go
+# Platform detection variables
+CURRENT_DIR := $(shell pwd)
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+# Normalize architecture names
+ifeq ($(UNAME_M),x86_64)
+	ARCH := amd64
+else ifeq ($(UNAME_M),amd64)
+	ARCH := amd64
+else ifeq ($(UNAME_M),arm64)
+	ARCH := arm64
+else ifeq ($(UNAME_M),aarch64)
+	ARCH := arm64
+else
+	$(error Unsupported architecture: $(UNAME_M))
+endif
+
+# Normalize platform names and set CGO flags
+ifeq ($(UNAME_S),Darwin)
+	PLATFORM := darwin
+	FRAMEWORK_FLAGS := -framework Security -framework CoreFoundation
+	CGO_LDFLAGS := $(CURRENT_DIR)/lib/darwin_$(ARCH)/liblancedb_go.a $(FRAMEWORK_FLAGS)
+else ifeq ($(UNAME_S),Linux)
+	PLATFORM := linux
+	SYSTEM_LIBS := -lm -ldl -lpthread
+	CGO_LDFLAGS := $(CURRENT_DIR)/lib/linux_$(ARCH)/liblancedb_go.a $(SYSTEM_LIBS)
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+	PLATFORM := windows
+	ARCH := amd64
+	CGO_LDFLAGS := $(CURRENT_DIR)/lib/windows_amd64/liblancedb_go.a
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+	PLATFORM := windows
+	ARCH := amd64
+	CGO_LDFLAGS := $(CURRENT_DIR)/lib/windows_amd64/liblancedb_go.a
+else ifneq (,$(findstring CYGWIN,$(UNAME_S)))
+	PLATFORM := windows
+	ARCH := amd64
+	CGO_LDFLAGS := $(CURRENT_DIR)/lib/windows_amd64/liblancedb_go.a
+else
+	$(error Unsupported platform: $(UNAME_S))
+endif
+
+# Set CGO flags
+CGO_CFLAGS := -I$(CURRENT_DIR)/include
+PLATFORM_ARCH := $(PLATFORM)_$(ARCH)
+
+# Show platform information (useful for debugging)
+platform-info:
+	@echo "Platform Detection Information:"
+	@echo "================================"
+	@echo "Operating System: $(UNAME_S)"
+	@echo "Architecture:     $(UNAME_M)"
+	@echo "Normalized Platform: $(PLATFORM)"
+	@echo "Normalized Arch:     $(ARCH)"
+	@echo "Platform-Arch:       $(PLATFORM_ARCH)"
+	@echo "Current Directory:   $(CURRENT_DIR)"
+	@echo ""
+	@echo "CGO Configuration:"
+	@echo "=================="
+	@echo "CGO_CFLAGS:  $(CGO_CFLAGS)"
+	@echo "CGO_LDFLAGS: $(CGO_LDFLAGS)"
+	@echo ""
+	@echo "Expected Library Path: $(CURRENT_DIR)/lib/$(PLATFORM_ARCH)/"
+	@if [ -d "$(CURRENT_DIR)/lib/$(PLATFORM_ARCH)" ]; then \
+		echo "✅ Library directory exists"; \
+		ls -la "$(CURRENT_DIR)/lib/$(PLATFORM_ARCH)/"; \
+	else \
+		echo "❌ Library directory not found: $(CURRENT_DIR)/lib/$(PLATFORM_ARCH)/"; \
+		echo "   Run './scripts/download-artifacts.sh' to download platform libraries"; \
+	fi
+
+# Check if native libraries exist
+check-libraries:
+	@if [ ! -d "$(CURRENT_DIR)/lib/$(PLATFORM_ARCH)" ] || [ ! -f "$(CURRENT_DIR)/lib/$(PLATFORM_ARCH)/liblancedb_go.a" ]; then \
+		echo "❌ Native libraries not found for platform: $(PLATFORM_ARCH)"; \
+		echo "Expected: $(CURRENT_DIR)/lib/$(PLATFORM_ARCH)/liblancedb_go.a"; \
+		echo ""; \
+		echo "Please download the native libraries first:"; \
+		echo "  ./scripts/download-artifacts.sh"; \
+		echo ""; \
+		echo "Or use the build helper script:"; \
+		echo "  ./build.sh"; \
+		exit 1; \
+	fi
+	@if [ ! -d "$(CURRENT_DIR)/include" ] || [ ! -f "$(CURRENT_DIR)/include/lancedb.h" ]; then \
+		echo "⚠️ Header files not found, fallback to default one"; \
+		echo "Expected: $(CURRENT_DIR)/include/lancedb.h"; \
+		echo "Please download the artifacts using: ./scripts/download-artifacts.sh"; \
+	fi
 
 # Run tests
-test: build
-	@echo "Running Go tests..."
-	go test -v ./...
+test: build check-libraries
+	@echo "Running Go tests for $(PLATFORM_ARCH)..."
+	@echo "CGO_CFLAGS: $(CGO_CFLAGS)"
+	@echo "CGO_LDFLAGS: $(CGO_LDFLAGS)"
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go test -v ./...
 
 # Run benchmarks
-bench: build
-	@echo "Running benchmarks..."
-	go test -bench=. -benchmem ./...
+bench: build check-libraries
+	@echo "Running benchmarks for $(PLATFORM_ARCH)..."
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go test -bench=. -benchmem ./...
+
+# Quick build for user projects (convenience target)
+build-go: check-libraries
+	@echo "Building Go project with LanceDB native libraries..."
+	@echo "Platform: $(PLATFORM_ARCH)"
+	@echo "CGO_CFLAGS: $(CGO_CFLAGS)"
+	@echo "CGO_LDFLAGS: $(CGO_LDFLAGS)"
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go build $(ARGS)
 
 # Clean build artifacts
 clean:
@@ -97,14 +192,14 @@ lint-rust:
 # Lint Go code only
 lint-go:
 	@echo "Linting Go code..."
-	@test -f $(shell go env GOPATH)/bin/golangci-lint || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
-	$(shell go env GOPATH)/bin/golangci-lint run --config .golangci.yml
+	@which golangci-lint > /dev/null || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
+	golangci-lint run --config .golangci.yml
 
 # Lint Go code with fixes applied automatically
 lint-go-fix:
 	@echo "Linting and fixing Go code..."
-	@test -f $(shell go env GOPATH)/bin/golangci-lint || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
-	$(shell go env GOPATH)/bin/golangci-lint run --config .golangci.yml --fix
+	@which golangci-lint > /dev/null || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
+	golangci-lint run --config .golangci.yml --fix
 
 # Show detailed linting report
 lint-report:
@@ -113,41 +208,8 @@ lint-report:
 	cd rust && cargo clippy -- -D warnings
 	@echo ""
 	@echo "=== Go Linting Report ==="
-	@test -f $(shell go env GOPATH)/bin/golangci-lint || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
-	$(shell go env GOPATH)/bin/golangci-lint run --config .golangci.yml --out-format=colored-line-number
-
-# Build examples
-examples: build
-	@echo "Building examples..."
-	@mkdir -p rust/target
-	@for dir in examples/*/; do \
-		if [ -d "$$dir" ] && [ "$$(basename "$$dir")" != "README.md" ]; then \
-			example_name=$$(basename "$$dir"); \
-			echo "Building $$example_name..."; \
-			if [ -f "$$dir/main.go" ]; then \
-				cd "$$dir" && go build -o "../../rust/target/$${example_name}_example" . && cd ../..; \
-			elif [ -f "$$dir/$${example_name}.go" ]; then \
-				cd "$$dir" && go build -o "../../rust/target/$${example_name}_example" "$${example_name}.go" && cd ../..; \
-			else \
-				echo "Warning: No main.go or $${example_name}.go found in $$dir"; \
-			fi; \
-		fi; \
-	done
-	@echo "Examples built in rust/target/ directory"
-
-# Run examples
-run-examples: examples
-	@echo "Running all examples..."
-	@for example in rust/target/*_example; do \
-		if [ -x "$$example" ]; then \
-			example_name=$$(basename "$$example" _example); \
-			echo ""; \
-			echo "=== Running $$example_name example ==="; \
-			"$$example" || echo "Warning: $$example_name example failed with exit code $$?"; \
-		fi; \
-	done
-	@echo ""
-	@echo "All examples completed."
+	@which golangci-lint > /dev/null || (echo "golangci-lint not found. Run 'make install-deps' to install it." && exit 1)
+	golangci-lint run --config .golangci.yml --out-format=colored-line-number
 
 # Generate documentation
 docs:
@@ -215,10 +277,10 @@ help:
 	@echo ""
 	@echo "=== Build & Test ==="
 	@echo "  all               - Build and test"
-	@echo "  build             - Build Go bindings (auto-downloads binaries)"
-	@echo "  download-binaries - Download pre-built native binaries"
+	@echo "  build             - Build Rust library and Go bindings (legacy)"
 	@echo "  build-native      - Build native libraries for current platform"
 	@echo "  build-all-platforms - Build native libraries for all platforms"
+	@echo "  build-go          - Build Go project with proper CGO configuration"
 	@echo "  test              - Run tests"
 	@echo "  test-dist         - Test binary distribution"
 	@echo "  bench             - Run benchmarks"
@@ -241,25 +303,21 @@ help:
 	@echo "  ci-test      - Run test suite using act"
 	@echo "  ci-security  - Run security scan using act"
 	@echo "  ci-docs      - Run documentation check using act"
-	@echo "  ci-examples  - Run examples build using act"
 	@echo "  ci-local     - Run complete optimized CI pipeline"
 	@echo "  ci-list      - List all available CI jobs"
 	@echo "  ci-stage1    - Run Stage 1 (quick-checks only)"
 	@echo "  ci-stage2    - Run Stage 2 (build, security, docs)"
-	@echo "  ci-stage3    - Run Stage 3 (tests and examples)"
 	@echo "  ci-debug     - Run CI with verbose debug output"
 	@echo "  ci-clean     - Clean Docker containers and images"
 	@echo "  ci-graph     - Show CI workflow dependencies"	@echo ""
-	@echo "=== Examples & Documentation ==="
-	@echo "  examples     - Build all examples"
-	@echo "  run-examples - Run all examples"
-	@echo "  docs         - Generate documentation"
 	@echo ""
 	@echo "=== Setup & Tools ==="
 	@echo "  install-deps - Install development dependencies"
 	@echo "  install-act  - Install act (GitHub Actions local runner)"
 	@echo "  dev-setup    - Setup development environment"
 	@echo "  check-tools  - Check if required tools are installed"
+	@echo "  platform-info - Show detected platform and CGO configuration"
+	@echo "  check-libraries - Check if native libraries are available"
 	@echo ""
 	@echo "=== Release ==="
 	@echo "  release      - Create release build"
@@ -304,11 +362,6 @@ ci-docs: install-act
 	@echo "📚 Running documentation check locally..."
 	act -j docs
 
-# Run examples build locally
-ci-examples: install-act
-	@echo "⚡ Running examples build locally..."
-	act -j build-examples
-
 # Run complete optimized CI pipeline (all jobs)
 ci-local: install-act
 	@echo "🚀 Running complete optimized CI pipeline locally..."
@@ -329,10 +382,6 @@ ci-stage2: install-act
 	@echo "🚦 Running CI Stage 2 (Build, Security, Docs)..."
 	act -j build-artifacts -j security -j docs
 
-ci-stage3: install-act
-	@echo "🚦 Running CI Stage 3 (Tests and Examples)..."
-	act -j test -j build-examples
-
 # Debug CI workflow with verbose output
 ci-debug: install-act
 	@echo "🐞 Running CI with debug output..."
@@ -350,10 +399,9 @@ ci-graph: install-act
 	@echo "📊 CI Workflow Dependencies:"
 	@echo "Stage 0: quick-checks"
 	@echo "Stage 1: build-artifacts, security, docs (depends on quick-checks)"
-	@echo "Stage 2: test, build-examples (depends on build-artifacts)"
+	@echo "Stage 2: test (depends on build-artifacts)"
 	@echo "Stage 3: ci-success (depends on all previous)"
 	@echo "Stage 4: cleanup (depends on ci-success)"
 	@echo ""
 	@echo "📋 Available jobs:"
 	@act --list
-

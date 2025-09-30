@@ -57,7 +57,7 @@ tmp/
 # These files are auto-downloaded during build process
 # and should not be committed to Git repository
 /lib/
-/include/lancedb.h
+/examples/lib
 
 # Release archive (generated during release process)
 lancedb-go-native-binaries.tar.gz

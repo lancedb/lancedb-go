@@ -2,15 +2,81 @@
 
 A Go library for [LanceDB](https://github.com/lancedb/lancedb) with **pre-built native binaries**.
 
-✨ **Now works out-of-the-box with `go get`** - no build dependencies required!
+✨ **Simple three-step installation** - download native libraries, `go get`, then set CGO variables. No build dependencies required!
 
 ## Installation
+
+### Step 1: Download Native Libraries and Headers
+
+First, download the platform-specific native libraries and C header files:
+
+```bash
+# Download and run the artifact downloader script
+curl -sSL https://raw.githubusercontent.com/lancedb/lancedb-go/main/scripts/download-artifacts.sh | bash
+
+# Or download a specific version
+curl -sSL https://raw.githubusercontent.com/lancedb/lancedb-go/main/scripts/download-artifacts.sh | bash -s v1.0.0
+```
+
+Alternatively, you can download the script and run it manually:
+
+```bash
+# Download the script
+curl -O https://raw.githubusercontent.com/lancedb/lancedb-go/main/scripts/download-artifacts.sh
+chmod +x download-artifacts.sh
+
+# Run it to get latest version
+./download-artifacts.sh
+
+# Or specify a version
+./download-artifacts.sh v1.0.0
+```
+
+This will create the following directory structure in your project:
+
+```
+your-project/
+├── lib/
+│   └── {platform}_{arch}/          # Platform-specific native libraries
+│       ├── liblancedb_go.a         # Static library (all platforms)
+│       ├── liblancedb_go.dylib     # Dynamic library (macOS)
+│       ├── liblancedb_go.so        # Dynamic library (Linux)
+│       └── lancedb_go.dll          # Dynamic library (Windows)
+├── include/
+│   └── lancedb.h                   # C header file (REQUIRED)
+└── your-app/
+    └── main.go
+```
+
+**Important:** Both the `lib/` directory (with platform-specific libraries) and the `include/` directory (with `lancedb.h`) are required for compilation.
+
+### Step 2: Install Go Module
 
 ```bash
 go get github.com/lancedb/lancedb-go
 ```
 
-**That's it!** Native libraries are pre-built and included. No need to install Rust, cbindgen, or any other dependencies.
+### Step 3: Set CGO Environment Variables
+
+**Important:** You must set the CGO environment variables to build projects using lancedb-go. These flags tell Go where to find the native libraries and headers.
+
+```bash
+# Get the required CGO flags for your platform
+make platform-info
+
+# Example output will show:
+# CGO_CFLAGS:  -I/path/to/your-project/include
+# CGO_LDFLAGS: /path/to/your-project/lib/darwin_arm64/liblancedb_go.a -framework Security -framework CoreFoundation
+
+# Set the environment variables (REQUIRED):
+export CGO_CFLAGS="-I$(pwd)/include"
+export CGO_LDFLAGS="$(pwd)/lib/darwin_arm64/liblancedb_go.a -framework Security -framework CoreFoundation"
+
+# Now you can build your project:
+go build ./cmd/myapp
+```
+
+**Note:** Replace `darwin_arm64` with your actual platform (`linux_amd64`, `windows_amd64`, etc.) as shown by `make platform-info`. These environment variables must be set every time you build a project that uses lancedb-go.
 
 ### Supported Platforms
 
@@ -134,7 +200,7 @@ This package uses **pre-built native binaries** to eliminate build dependencies:
 ### ✅ What This Means for You
 - **No Rust installation required**
 - **No cbindgen or other build tools needed**  
-- **Works immediately** after `go get`
+- **Simple three-step process**: download artifacts, `go get`, then set CGO variables
 - **Cross-platform** support out of the box
 - **Consistent experience** across all environments
 
@@ -145,9 +211,9 @@ This package uses **pre-built native binaries** to eliminate build dependencies:
 - **See detailed guide**: [BINARY_DISTRIBUTION.md](./BINARY_DISTRIBUTION.md)
 
 ### 📦 How It Works
-The repository includes pre-built libraries for all supported platforms in the `lib/` directory. Go's CGO system automatically selects the correct library for your platform during compilation.
+Pre-built libraries for all supported platforms are available via GitHub releases. The download script automatically detects your platform and downloads the correct binaries to the `lib/` directory. Go's CGO system then selects the correct library for your platform during compilation.
 
-**No setup required** - it just works! 🎉
+**Simple setup** - download once, then it just works! 🎉
 
 ## Development
 

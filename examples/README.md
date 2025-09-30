@@ -1,355 +1,336 @@
-# LanceDB Go SDK Examples
+# LanceDB Go Examples
 
-This directory contains comprehensive examples demonstrating the various capabilities of the LanceDB Go SDK. Each example focuses on different aspects of using LanceDB in production applications.
+This directory contains comprehensive examples demonstrating various LanceDB capabilities using the Go SDK. Each example is a complete, runnable program that showcases different aspects of working with LanceDB.
+
+## 🚀 Quick Start
+
+The easiest way to run examples is using the provided Makefile:
+
+```bash
+# Download native libraries and run all examples
+make
+
+# Or run individual examples
+make basic-crud
+make vector-search
+make hybrid-search
+```
+
+## 📋 Prerequisites
+
+Before running examples, you need to set up native libraries:
+
+### Option 1: Using Makefile (Recommended)
+```bash
+# Download libraries automatically
+make download-artifacts
+```
+
+### Option 2: Manual Download
+```bash
+# Download the script
+curl -O https://raw.githubusercontent.com/lancedb/lancedb-go/main/scripts/download-artifacts.sh
+chmod +x download-artifacts.sh
+
+# Run it
+./download-artifacts.sh
+```
+
+### Option 3: Check Your Setup
+```bash
+# See platform detection and CGO configuration
+make platform-info
+```
 
 ## 📚 Available Examples
 
-### 1. Basic CRUD Operations (`basic_crud.go`)
-**Demonstrates:** Fundamental database operations - Create, Read, Update, Delete
+### 1. [Basic CRUD Operations](./basic_crud/basic_crud.go)
+**Fundamental database operations**
+
+Learn the basics of LanceDB with this comprehensive example:
 - Database connection and table creation
-- Schema definition with multiple data types
-- Inserting, querying, updating, and deleting records
-- Basic error handling and resource management
+- Schema definition with multiple data types (integers, strings, vectors)
+- Insert operations with Arrow builders
+- Query operations with filtering
+- Update and delete operations
+- Proper error handling and resource management
 
 ```bash
-go run basic_crud.go
+make basic-crud
 ```
 
-### 2. Vector Search (`vector_search.go`)
-**Demonstrates:** Comprehensive vector similarity search capabilities
-- Creating and storing vector embeddings
-- Basic and advanced vector similarity search
-- Different K values and search configurations
-- Vector search with metadata filtering
-- Performance benchmarking and optimization
+**Key concepts covered:**
+- Arrow schema creation
+- Memory management with Arrow allocators
+- Batch record creation
+- SQL-like filtering syntax
+
+### 2. [Vector Search](./vector_search/vector_search.go)
+**Vector similarity search and embeddings**
+
+Explore LanceDB's core vector search capabilities:
+- Creating and storing high-dimensional vector embeddings
+- Basic vector similarity search (cosine similarity)
+- Advanced search with distance metrics
+- Performance benchmarking across different K values
+- Vector search combined with metadata filtering
 
 ```bash
-go run vector_search.go
+make vector-search
 ```
 
-### 3. Hybrid Search (`hybrid_search.go`)
-**Demonstrates:** Combining vector search with traditional filtering
+**Key concepts covered:**
+- Vector embedding creation
+- Similarity search algorithms
+- Distance metrics (L2, cosine)
+- Search result ranking
+- Performance optimization
+
+### 3. [Hybrid Search](./hybrid_search/hybrid_search.go)
+**Combining vector and traditional search**
+
+Learn how to build sophisticated search systems:
 - E-commerce product catalog with vectors and metadata
 - Vector search combined with SQL-like filters
 - Multi-modal query patterns
-- Recommendation system implementations
-- Cross-category and similarity-based recommendations
+- Recommendation system patterns
+- Real-world search scenarios
 
 ```bash
-go run hybrid_search.go
+make hybrid-search
 ```
 
-### 4. Index Management (`index_management.go`)
-**Demonstrates:** Creating and managing different types of indexes
-- Vector indexes: IVF-PQ, IVF-Flat, HNSW-PQ for different use cases
+**Key concepts covered:**
+- Metadata filtering with vector search
+- Complex query composition
+- Search result fusion
+- Recommendation algorithms
+
+### 4. [Index Management](./index_management/index_management.go)
+**Creating and managing indexes for performance**
+
+Optimize your database performance with proper indexing:
+- Vector indexes: IVF-PQ, IVF-Flat, HNSW-PQ
 - Scalar indexes: BTree for range queries, Bitmap for categorical data
-- Full-text search indexes for text content
-- Index performance comparison and optimization
-- Best practices for index selection
+- Full-text search indexes
+- Performance comparison and optimization strategies
+- Index maintenance and monitoring
 
 ```bash
-go run index_management.go
+make index-management
 ```
 
-### 5. Batch Operations (`batch_operations.go`)
-**Demonstrates:** Efficient bulk data operations
-- Different batch insertion strategies and performance comparison
-- Batch update and delete operations
+**Key concepts covered:**
+- Index types and use cases
+- Performance tuning
+- Memory vs accuracy trade-offs
+- Index maintenance strategies
+
+### 5. [Batch Operations](./batch_operations/batch_operations.go)
+**Efficient bulk data operations**
+
+Handle large-scale data efficiently:
+- Different batch insertion strategies
 - Memory-efficient processing of large datasets
 - Concurrent batch operations with goroutines
-- Error handling and recovery patterns for batch operations
+- Error handling and recovery patterns
+- Progress monitoring and reporting
 
 ```bash
-go run batch_operations.go
+make batch-operations
 ```
 
-### 6. Storage Configuration (`storage_configuration.go`)
-**Demonstrates:** Local and cloud storage configurations
-- Local file system storage with optimization settings
-- AWS S3 configuration with authentication methods
+**Key concepts covered:**
+- Batch processing patterns
+- Memory optimization
+- Concurrency patterns
+- Error recovery strategies
+
+### 6. [Storage Configuration](./storage_configuration/storage_configuration.go)
+**Storage setup and optimization**
+
+Configure LanceDB for different storage backends:
+- Local file system storage optimization
+- AWS S3 configuration with different authentication methods
 - MinIO object storage for local development
-- Storage performance comparison and optimization
-- Error handling and fallback strategies
+- Performance comparison across storage types
+- Storage security and access patterns
 
 ```bash
-go run storage_configuration.go
+make storage-configuration
 ```
 
+**Key concepts covered:**
+- Storage backend configuration
+- Authentication patterns
+- Performance optimization
+- Security best practices
 
-## 🚀 Getting Started
+## 🛠️ Development Workflow
 
-### Prerequisites
+### Building Examples
 
-1. **Go 1.21+** installed on your system
-2. **LanceDB Go SDK dependencies** (install with `go mod tidy`)
-3. **Optional**: AWS credentials for S3 examples
-4. **Optional**: MinIO server for object storage examples
-
-### Installation
-
-1. Clone the LanceDB repository:
 ```bash
-git clone https://github.com/lancedb/lancedb-go.git
-cd lancedb-go
-```
+# Build all examples
+make build-all
 
-2. Install dependencies:
-```bash
-go mod tidy
-```
+# Build without running
+make build-all
 
-3. Build the Go SDK (if needed):
-```bash
-make build
+# Test builds (quick verification)
+make test
 ```
 
 ### Running Examples
 
-Each example is self-contained and can be run independently:
+```bash
+# Run all examples sequentially
+make run-all
+
+# Run specific example
+make basic-crud
+make vector-search
+# ... etc
+```
+
+### Platform Information
 
 ```bash
-# Basic CRUD operations
-go run examples/basic_crud.go
-
-# Vector search capabilities
-go run examples/vector_search.go
-
-# Hybrid search patterns
-go run examples/hybrid_search.go
-
-# Index management
-go run examples/index_management.go
-
-# Batch operations
-go run examples/batch_operations.go
-
-# Storage configuration
-go run examples/storage_configuration.go
-
+# Check your platform and CGO configuration
+make platform-info
 ```
 
-## 🔧 Configuration
+Example output:
+```
+Platform Detection Information:
+================================
+Operating System: Darwin
+Architecture:     arm64
+Normalized Platform: darwin
+Normalized Arch:     arm64
+Platform-Arch:       darwin_arm64
+Current Directory:   /path/to/examples
 
-### Local Examples
-Most examples work out-of-the-box with local storage and don't require additional configuration.
+CGO Configuration:
+==================
+CGO_CFLAGS:  -I/path/to/examples/include
+CGO_LDFLAGS: /path/to/examples/lib/darwin_arm64/liblancedb_go.a -framework Security -framework CoreFoundation
 
-### AWS S3 Examples
-For S3-related examples, you'll need AWS credentials configured:
+Library Status:
+===============
+✅ Library directory exists: /path/to/examples/lib/darwin_arm64/
+```
 
-1. **IAM Role (Recommended for EC2/ECS)**:
-   - No additional configuration needed
-   - Examples will use the instance's IAM role
-
-2. **AWS Credentials File**:
-   ```bash
-   aws configure
-   # Or set up ~/.aws/credentials
-   ```
-
-3. **Environment Variables**:
-   ```bash
-   export AWS_ACCESS_KEY_ID=your_access_key
-   export AWS_SECRET_ACCESS_KEY=your_secret_key
-   export AWS_REGION=us-east-1
-   ```
-
-### MinIO Examples
-For MinIO examples, start a local MinIO server:
+### Cleaning Up
 
 ```bash
-# Using Docker
-docker run -p 9000:9000 -p 9001:9001 \
-  -e "MINIO_ROOT_USER=minioadmin" \
-  -e "MINIO_ROOT_PASSWORD=minioadmin" \
-  quay.io/minio/minio server /data --console-address ":9001"
+# Clean built binaries and temp files
+make clean
 
-# Create test bucket via MinIO console at http://localhost:9001
+# Clean everything including downloaded libraries
+make clean-all
 ```
 
-## 📖 Example Details
+## 🔧 Manual Setup (Advanced)
 
-### Basic CRUD (`basic_crud.go`)
-```
-📊 Features:
-• Database connection management
-• Table schema creation with multiple data types
-• Record insertion, querying, updating, deletion
-• Error handling and resource cleanup
-• Performance timing and metrics
-
-🎯 Use Cases:
-• Learning basic LanceDB operations
-• Understanding schema design
-• Building simple applications
-```
-
-### Vector Search (`vector_search.go`)
-```
-📊 Features:
-• Vector embedding generation and storage
-• Similarity search with configurable parameters
-• Performance benchmarking across different K values
-• Metadata filtering combined with vector search
-• Query optimization techniques
-
-🎯 Use Cases:
-• Semantic search applications
-• Recommendation systems
-• Content similarity matching
-• AI/ML model integration
-```
-
-### Hybrid Search (`hybrid_search.go`)
-```
-📊 Features:
-• Product catalog with vectors and structured data
-• Combined vector + metadata filtering
-• E-commerce search scenarios
-• Recommendation patterns
-• Multi-modal query optimization
-
-🎯 Use Cases:
-• E-commerce product search
-• Content discovery platforms
-• Recommendation engines
-• Advanced search applications
-```
-
-### Index Management (`index_management.go`)
-```
-📊 Features:
-• Vector indexes: IVF-PQ, IVF-Flat, HNSW-PQ
-• Scalar indexes: BTree, Bitmap, Label List
-• Full-text search indexes
-• Performance comparison and analysis
-• Index selection best practices
-
-🎯 Use Cases:
-• Query performance optimization
-• Large-scale vector search
-• Mixed workload optimization
-• Production database tuning
-```
-
-### Batch Operations (`batch_operations.go`)
-```
-📊 Features:
-• Bulk insertion strategies and performance
-• Memory-efficient large dataset processing
-• Concurrent processing with goroutines
-• Error handling and recovery patterns
-• Resource management and optimization
-
-🎯 Use Cases:
-• Data migration and ETL
-• Large-scale data ingestion
-• Bulk data processing
-• Performance-critical applications
-```
-
-### Storage Configuration (`storage_configuration.go`)
-```
-📊 Features:
-• Local storage optimization
-• AWS S3 configuration patterns
-• MinIO setup for development
-• Storage performance comparison
-• Error handling and fallback strategies
-
-🎯 Use Cases:
-• Development environment setup
-• Cloud storage integration
-• Storage optimization
-• Multi-environment deployment
-```
-
-
-## 🛠 Development Tips
-
-### Running with Custom Parameters
-Many examples accept environment variables for customization:
+If you prefer to set up CGO manually:
 
 ```bash
-# Custom database path
-DATABASE_PATH="/tmp/my-lancedb" go run examples/basic_crud.go
+# 1. Download artifacts (if not done already)
+make download-artifacts
 
-# Custom AWS region
-AWS_REGION="us-west-2" go run examples/storage_configuration.go
+# 2. Get platform-specific CGO flags
+make platform-info
 
-# Enable debug logging
-DEBUG=true go run examples/vector_search.go
+# 3. Set environment variables
+export CGO_CFLAGS="-I$(pwd)/include"
+export CGO_LDFLAGS="$(pwd)/lib/darwin_arm64/liblancedb_go.a -framework Security -framework CoreFoundation"
+
+# 4. Build and run manually
+cd basic_crud
+go run basic_crud.go
 ```
 
-### Performance Testing
-Use the `time` command to measure example execution:
+## 📁 Project Structure
 
-```bash
-time go run examples/batch_operations.go
+```
+examples/
+├── Makefile                    # Build automation
+├── README.md                   # This file
+├── go.mod                      # Go module (separate from main project)
+├── go.sum                      # Go module checksums
+├── lib/                        # Native libraries (downloaded)
+│   └── {platform}_{arch}/      # Platform-specific binaries
+├── include/                    # C headers (downloaded)
+│   └── lancedb.h              # Main header file
+├── bin/                        # Built examples (created by make)
+├── basic_crud/
+│   └── basic_crud.go
+├── vector_search/
+│   └── vector_search.go
+├── hybrid_search/
+│   └── hybrid_search.go
+├── index_management/
+│   └── index_management.go
+├── batch_operations/
+│   └── batch_operations.go
+└── storage_configuration/
+    └── storage_configuration.go
 ```
 
-### Memory Profiling
-Enable Go's built-in profiling for memory analysis:
-
-```bash
-go run -pprof examples/batch_operations.go
-```
-
-## 📚 Learning Path
-
-**Recommended order for learning:**
-
-1. **Start with `basic_crud.go`** - Learn fundamental operations
-2. **Try `vector_search.go`** - Understand vector operations  
-3. **Explore `hybrid_search.go`** - See real-world patterns
-4. **Study `index_management.go`** - Optimize performance
-5. **Practice `batch_operations.go`** - Handle large datasets
-6. **Configure `storage_configuration.go`** - Set up storage for different environments
-
-## 🔍 Troubleshooting
+## 🚨 Troubleshooting
 
 ### Common Issues
 
-**Connection Errors:**
-```
-Error: failed to connect to database
-Solution: Check file permissions and disk space for local storage
-```
-
-**AWS S3 Errors:**
-```
-Error: failed to connect to S3
-Solution: Verify AWS credentials and bucket permissions
+**1. "Native libraries not found"**
+```bash
+# Solution: Download the libraries
+make download-artifacts
 ```
 
-**MinIO Errors:**
-```
-Error: connection refused
-Solution: Ensure MinIO server is running on localhost:9000
+**2. "Header files not found"**
+```bash
+# Check if include directory exists
+ls -la include/
+
+# Re-download if missing
+make download-artifacts
 ```
 
-**Build Errors:**
+**3. "CGO compilation failed"**
+```bash
+# Check your platform configuration
+make platform-info
+
+# Ensure CGO environment variables are set correctly
+echo $CGO_CFLAGS
+echo $CGO_LDFLAGS
 ```
-Error: undefined: lancedb
-Solution: Run 'go mod tidy' and 'make build'
-```
+
+**4. "Build failed on different platform"**
+- The Makefile automatically detects your platform
+- Supported: macOS (amd64/arm64), Linux (amd64/arm64), Windows (amd64)
+- Run `make platform-info` to verify detection
 
 ### Getting Help
 
-1. **Check the main README**: `../README.md`
-2. **Review error messages**: Examples include detailed error handling
-3. **Enable debug logging**: Set `DEBUG=true` environment variable
-4. **Check dependencies**: Run `go mod verify`
+1. **Check platform info**: `make platform-info`
+2. **Verify library setup**: `ls -la lib/*/`
+3. **Test basic build**: `make test`
+4. **Clean and retry**: `make clean-all && make`
 
-## 🤝 Contributing
+For more help, see the main [LanceDB Go repository](https://github.com/lancedb/lancedb-go) documentation.
 
-To add new examples:
+## 🎯 Next Steps
 
-1. Create a new `.go` file in this directory
-2. Follow the existing code structure and documentation style
-3. Include comprehensive comments and error handling
-4. Add the example to this README with description
-5. Test thoroughly with different scenarios
+After running the examples:
+
+1. **Explore the source code** - Each example is well-commented
+2. **Modify examples** - Try changing parameters and see the effects
+3. **Build your own application** - Use examples as templates
+4. **Performance testing** - Run benchmarks with your own data
+5. **Join the community** - Share your use cases and get support
 
 ## 📄 License
 
-All examples are provided under the same license as the LanceDB project.
+These examples are part of the LanceDB Go SDK and follow the same license terms.
