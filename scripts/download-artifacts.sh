@@ -234,7 +234,7 @@ main() {
     local dynamic_lib_name=$(get_dynamic_lib_info "$platform")
     
     # Download static library
-    local static_lib_url="$base_download_url/lib/$platform_arch/$static_lib_name"
+    local static_lib_url="$base_download_url/$static_lib_name"
     local static_lib_path="$lib_dir/$static_lib_name"
     
     if ! download_file "$static_lib_url" "$static_lib_path"; then
@@ -247,7 +247,7 @@ main() {
     
     # Download dynamic library (optional for some platforms)
     if [[ -n "$dynamic_lib_name" ]]; then
-        local dynamic_lib_url="$base_download_url/lib/$platform_arch/$dynamic_lib_name"
+        local dynamic_lib_url="$base_download_url/$dynamic_lib_name"
         local dynamic_lib_path="$lib_dir/$dynamic_lib_name"
         
         if ! download_file "$dynamic_lib_url" "$dynamic_lib_path"; then
@@ -256,7 +256,7 @@ main() {
     fi
     
     # Download header file
-    local header_url="$base_download_url/include/lancedb.h"
+    local header_url="$base_download_url/lancedb.h"
     local header_path="$include_dir/lancedb.h"
     
     if ! download_file "$header_url" "$header_path"; then
