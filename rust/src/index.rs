@@ -243,7 +243,7 @@ pub extern "C" fn simple_lancedb_table_index_stats(
     index_stats_json: *mut *mut c_char,
 ) -> *mut SimpleResult {
     let result = std::panic::catch_unwind(|| -> SimpleResult {
-        if table_handle.is_null() || index_stats_json.is_null() {
+        if table_handle.is_null() || index_name.is_null() || index_stats_json.is_null() {
             return SimpleResult::error("Invalid null arguments".to_string());
         }
 
