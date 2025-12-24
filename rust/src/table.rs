@@ -6,6 +6,8 @@
 use crate::ffi::{from_c_str, SimpleResult};
 use crate::runtime::get_simple_runtime;
 use crate::schema::create_arrow_schema_from_json;
+use lancedb::table::OptimizeAction;
+use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
 use std::sync::Arc;
 
@@ -215,6 +217,67 @@ pub extern "C" fn simple_lancedb_table_close(table_handle: *mut c_void) -> *mut 
         Ok(res) => Box::into_raw(Box::new(res)),
         Err(_) => Box::into_raw(Box::new(SimpleResult::error(
             "Panic in simple_lancedb_table_close".to_string(),
+        ))),
+    }
+}
+
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn simple_lancedb_table_optimize(
+    table_handle: *mut c_void,
+    optimize_stats_json: *mut *mut c_char,
+) -> *mut SimpleResult {
+    let result = std::panic::catch_unwind(|| -> SimpleResult {
+        if table_handle.is_null() || optimize_stats_json.is_null() {
+            return SimpleResult::error("Invalid null arguments".to_string());
+        }
+
+        let table = unsafe { &*(table_handle as *const lancedb::Table) };
+        let rt = get_simple_runtime();
+
+        match rt.block_on(async { table.optimize(OptimizeAction::All).await }) {
+            Ok(optimize_stats) => {
+                let mut stats_json = serde_json::json!({});
+                if let Some(compaction_stats) = optimize_stats.compaction {
+                    stats_json["compaction"] = serde_json::json!({
+                        "fragments_removed": compaction_stats.fragments_removed,
+                        "fragments_added": compaction_stats.fragments_added,
+                        "files_removed": compaction_stats.files_removed,
+                        "files_added": compaction_stats.files_added,
+                    });
+                }
+                if let Some(prune_stats) = optimize_stats.prune {
+                    stats_json["prune"] = serde_json::json!({
+                        "bytes_removed": prune_stats.bytes_removed,
+                        "old_versions": prune_stats.old_versions,
+                    });
+                }
+
+                match serde_json::to_string(&stats_json) {
+                    Ok(json_str) => match CString::new(json_str) {
+                        Ok(c_string) => {
+                            unsafe {
+                                *optimize_stats_json = c_string.into_raw();
+                            }
+                            SimpleResult::ok()
+                        }
+                        Err(_) => {
+                            SimpleResult::error("Failed to convert JSON to C string".to_string())
+                        }
+                    },
+                    Err(e) => {
+                        SimpleResult::error(format!("Failed to serialize optimize stats to JSON: {}", e))
+                    }
+                }
+            }
+            Err(e) => SimpleResult::error(format!("Failed to optimize table: {}", e)),
+        }
+    });
+
+    match result {
+        Ok(res) => Box::into_raw(Box::new(res)),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_optimize".to_string(),
         ))),
     }
 }
