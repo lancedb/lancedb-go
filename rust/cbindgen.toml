@@ -30,8 +30,10 @@ include = [
     "simple_lancedb_table_add_json",
     "simple_lancedb_table_create_index",
     "simple_lancedb_table_get_indexes",
+    "simple_lancedb_table_index_stats",
     "simple_lancedb_table_select_query",
     "simple_lancedb_table_close",
+    "simple_lancedb_table_optimize",
     "simple_lancedb_result_free",
     "simple_lancedb_free_string",
 ]
