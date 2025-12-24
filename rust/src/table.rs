@@ -221,6 +221,7 @@ pub extern "C" fn simple_lancedb_table_close(table_handle: *mut c_void) -> *mut 
     }
 }
 
+/// Optimize the on-disk data and indices for better performance
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_optimize(
