@@ -235,6 +235,7 @@ pub extern "C" fn simple_lancedb_table_get_indexes(
     }
 }
 
+/// Retrieve statistics about an index
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_index_stats(
