@@ -442,6 +442,47 @@ func (t *Table) GetAllIndexes(_ context.Context) ([]contracts.IndexInfo, error) 
 	return indexes, nil
 }
 
+// Retrieve statistics about an index
+func (t *Table) IndexStats(_ context.Context, indexName string) (*contracts.IndexStatistics, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.closed || t.handle == nil {
+		return nil, fmt.Errorf("table is closed")
+	}
+
+	cIndexName := C.CString(indexName)
+	// #nosec G103 - Required for freeing C allocated string memory
+	defer C.free(unsafe.Pointer(cIndexName))
+
+	var indexStatsJSON *C.char
+	result := C.simple_lancedb_table_index_stats(t.handle, cIndexName, &indexStatsJSON)
+	defer C.simple_lancedb_result_free(result)
+
+	if !result.SUCCESS {
+		if result.ERROR_MESSAGE != nil {
+			errorMsg := C.GoString(result.ERROR_MESSAGE)
+			return nil, fmt.Errorf("failed to get indexes: %s", errorMsg)
+		}
+		return nil, fmt.Errorf("failed to get indexes: unknown error")
+	}
+
+	if indexStatsJSON == nil {
+		return nil, nil
+	}
+
+	jsonStr := C.GoString(indexStatsJSON)
+	C.simple_lancedb_free_string(indexStatsJSON)
+
+	// Parse JSON response
+	var indexStats contracts.IndexStatistics
+	if err := json.Unmarshal([]byte(jsonStr), &indexStats); err != nil {
+		return nil, fmt.Errorf("failed to parse index stats JSON: %w", err)
+	}
+
+	return &indexStats, nil
+}
+
 // Select executes a select query with various predicates (vector search, filters, etc.)
 //
 //nolint:gocritic
@@ -555,6 +596,43 @@ func (t *Table) SelectWithLimit(ctx context.Context, limit int, offset int) ([]m
 		Limit:  &limit,
 		Offset: &offset,
 	})
+}
+
+// Optimize the on-disk data and indices for better performance
+func (t *Table) Optimize(_ context.Context) (*contracts.OptimizeStats, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.closed || t.handle == nil {
+		return nil, fmt.Errorf("table is closed")
+	}
+
+	var optimizeStatsJSON *C.char
+	result := C.simple_lancedb_table_optimize(t.handle, &optimizeStatsJSON)
+	defer C.simple_lancedb_result_free(result)
+
+	if !result.SUCCESS {
+		if result.ERROR_MESSAGE != nil {
+			errorMsg := C.GoString(result.ERROR_MESSAGE)
+			return nil, fmt.Errorf("failed to optimize table: %s", errorMsg)
+		}
+		return nil, fmt.Errorf("failed to optimize table: unknown error")
+	}
+
+	if optimizeStatsJSON == nil {
+		return nil, fmt.Errorf("optimize stats is nil")
+	}
+
+	jsonStr := C.GoString(optimizeStatsJSON)
+	C.simple_lancedb_free_string(optimizeStatsJSON)
+
+	// Parse JSON response
+	var optimizeStats contracts.OptimizeStats
+	if err := json.Unmarshal([]byte(jsonStr), &optimizeStats); err != nil {
+		return nil, fmt.Errorf("failed to parse optimize stats JSON: %w", err)
+	}
+
+	return &optimizeStats, nil
 }
 
 // indexTypeToString converts IndexType enum to string representation
