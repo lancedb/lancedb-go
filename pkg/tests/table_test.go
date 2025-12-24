@@ -506,6 +506,138 @@ func TestAddRecords_ErrorCases(t *testing.T) {
 	t.Log("✅AddRecords correctly handles closed table")
 }
 
+func TestOptimize(t *testing.T) {
+	// Create a temporary directory for the test database
+	tempDir, err := os.MkdirTemp("", "lancedb_test_optimize")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Connect to LanceDB
+	db, err := lancedb.Connect(context.Background(), tempDir, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect to LanceDB: %v", err)
+	}
+	defer db.Close()
+
+	// Create table schema
+	pool := memory.NewGoAllocator()
+	arrowSchema := arrow.NewSchema(
+		[]arrow.Field{
+			{Name: "vector", Type: arrow.FixedSizeListOf(2, arrow.PrimitiveTypes.Float32)},
+			{Name: "value", Type: arrow.BinaryTypes.String},
+			{Name: "price", Type: arrow.PrimitiveTypes.Float32},
+		}, nil,
+	)
+
+	schema, err := internal.NewSchema(arrowSchema)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	// Create the table
+	table, err := db.CreateTable(context.Background(), "test", schema)
+	if err != nil {
+		t.Fatalf("Failed to create table: %v", err)
+	}
+	defer table.Close()
+
+	// Create records
+	vectorBuilder := array.NewFloat32Builder(pool)
+	vectorBuilder.AppendValues([]float32{3.1, 4.1, 5.9, 26.5}, nil)
+	vectorFloat32Array := vectorBuilder.NewArray()
+	defer vectorFloat32Array.Release()
+
+	vectorListType := arrow.FixedSizeListOf(2, arrow.PrimitiveTypes.Float32)
+	vectorArray := array.NewFixedSizeListData(
+		array.NewData(vectorListType, 2, []*memory.Buffer{nil},
+			[]arrow.ArrayData{vectorFloat32Array.Data()}, 0, 0),
+	)
+	defer vectorArray.Release()
+
+	itemBuilder := array.NewStringBuilder(pool)
+	itemBuilder.AppendValues([]string{"foo", "bar"}, nil)
+	itemArray := itemBuilder.NewArray()
+	defer itemArray.Release()
+
+	priceBuilder := array.NewFloat32Builder(pool)
+	priceBuilder.AppendValues([]float32{10.0, 20.0}, nil)
+	priceArray := priceBuilder.NewArray()
+	defer priceArray.Release()
+
+	record := array.NewRecord(arrowSchema, []arrow.Array{vectorArray, itemArray, priceArray}, 2)
+	defer record.Release()
+
+	err = table.AddRecords(context.Background(), []arrow.Record{record}, nil)
+	if err != nil {
+		t.Fatalf("Failed to add records: %v", err)
+	}
+
+	err = table.CreateIndex(context.Background(), []string{"price"}, contracts.IndexTypeBTree)
+	if err != nil {
+		t.Fatalf("Failed to create index: %v", err)
+	}
+
+	stats, err := table.IndexStats(context.Background(), "price_idx")
+	if err != nil {
+		t.Fatalf("Failed to get index stats: %v", err)
+	}
+	if stats.NumIndexedRows != 2 {
+		t.Errorf("Expected 2 indexed rows, got %d", stats.NumIndexedRows)
+	}
+
+	vectorBuilder2 := array.NewFloat32Builder(pool)
+	vectorBuilder2.AppendValues([]float32{2.0, 2.0}, nil)
+	vectorFloat32Array2 := vectorBuilder2.NewArray()
+	defer vectorFloat32Array2.Release()
+
+	vectorArray2 := array.NewFixedSizeListData(
+		array.NewData(vectorListType, 1, []*memory.Buffer{nil},
+			[]arrow.ArrayData{vectorFloat32Array2.Data()}, 0, 0),
+	)
+	defer vectorArray2.Release()
+
+	itemBuilder2 := array.NewStringBuilder(pool)
+	itemBuilder2.AppendValues([]string{"baz"}, nil)
+	itemArray2 := itemBuilder2.NewArray()
+	defer itemArray2.Release()
+
+	priceBuilder2 := array.NewFloat32Builder(pool)
+	priceBuilder2.AppendValues([]float32{30.0}, nil)
+	priceArray2 := priceBuilder2.NewArray()
+	defer priceArray2.Release()
+
+	record2 := array.NewRecord(arrowSchema, []arrow.Array{vectorArray2, itemArray2, priceArray2}, 1)
+	defer record2.Release()
+
+	err = table.AddRecords(context.Background(), []arrow.Record{record2}, nil)
+	if err != nil {
+		t.Fatalf("Failed to add records: %v", err)
+	}
+
+	count, err := table.Count(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to get table count: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("Expected 3 rows in table, got %d", count)
+	}
+
+	_, err = table.Optimize(context.Background())
+	if err != nil {
+		t.Fatalf("Failed to optimize table: %v", err)
+	}
+
+	stats, err = table.IndexStats(context.Background(), "price_idx")
+	if err != nil {
+		t.Fatalf("Failed to get index stats: %v", err)
+	}
+	if stats.NumIndexedRows != 3 {
+		t.Errorf("Expected 2 indexed rows before optimize, got %d", stats.NumIndexedRows)
+	}
+}
+
 func BenchmarkAddRecords(b *testing.B) {
 	// Setup
 	tempDir, err := os.MkdirTemp("", "lancedb_bench_add_records")
