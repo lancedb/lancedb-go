@@ -266,9 +266,10 @@ pub extern "C" fn simple_lancedb_table_optimize(
                             SimpleResult::error("Failed to convert JSON to C string".to_string())
                         }
                     },
-                    Err(e) => {
-                        SimpleResult::error(format!("Failed to serialize optimize stats to JSON: {}", e))
-                    }
+                    Err(e) => SimpleResult::error(format!(
+                        "Failed to serialize optimize stats to JSON: {}",
+                        e
+                    )),
                 }
             }
             Err(e) => SimpleResult::error(format!("Failed to optimize table: {}", e)),
