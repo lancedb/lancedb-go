@@ -301,6 +301,23 @@ pub fn convert_arrow_value_to_json(
             }
             Ok(serde_json::Value::Array(list_values))
         }
+        DataType::List(_) => {
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::ListArray>()
+                .ok_or("Failed to downcast to ListArray")?;
+            let values_array = typed_array.values();
+            let offsets = typed_array.offsets();
+
+            let mut list_values = Vec::new();
+            for i in offsets[row_idx]..offsets[row_idx + 1] {
+                match convert_arrow_value_to_json(values_array.as_ref(), i as usize) {
+                    Ok(val) => list_values.push(val),
+                    Err(_) => list_values.push(serde_json::Value::Null),
+                }
+            }
+            Ok(serde_json::Value::Array(list_values))
+        }
         _ => Ok(serde_json::Value::String(format!(
             "Unsupported type: {:?}",
             array.data_type()

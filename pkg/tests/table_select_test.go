@@ -12,6 +12,7 @@ import (
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/memory"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/lancedb/lancedb-go/pkg/contracts"
 	"github.com/lancedb/lancedb-go/pkg/internal"
@@ -54,6 +55,7 @@ func TestSelectQueries(t *testing.T) {
 		{Name: "category", Type: arrow.BinaryTypes.String, Nullable: true},
 		{Name: "score", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
 		{Name: "embedding", Type: arrow.FixedSizeListOf(128, arrow.PrimitiveTypes.Float32), Nullable: false},
+		{Name: "labels", Type: arrow.ListOf(arrow.BinaryTypes.String), Nullable: true},
 	}
 	arrowSchema := arrow.NewSchema(fields, nil)
 	schema, err := internal.NewSchema(arrowSchema)
@@ -115,8 +117,27 @@ func TestSelectQueries(t *testing.T) {
 	)
 	defer embeddingArray.Release()
 
+	// Create labels (list of strings)
+	labelsBuilder := array.NewListBuilder(pool, arrow.BinaryTypes.String)
+	stringBuilder := labelsBuilder.ValueBuilder().(*array.StringBuilder)
+	labelsData := [][]string{
+		{"student", "athlete"},
+		{"engineer"},
+		{"artist", "musician"},
+		{"scientist"},
+		{"doctor", "researcher"},
+	}
+	for _, labels := range labelsData {
+		labelsBuilder.Append(true)
+		for _, label := range labels {
+			stringBuilder.Append(label)
+		}
+	}
+	labelsArray := labelsBuilder.NewArray()
+	defer labelsArray.Release()
+
 	// Create Arrow Record
-	columns := []arrow.Array{idArray, nameArray, categoryArray, scoreArray, embeddingArray}
+	columns := []arrow.Array{idArray, nameArray, categoryArray, scoreArray, embeddingArray, labelsArray}
 	record := array.NewRecord(arrowSchema, columns, int64(numRecords))
 	defer record.Release()
 
@@ -140,6 +161,7 @@ func TestSelectQueries(t *testing.T) {
 		t.Logf("Retrieved %d records", len(results))
 		for i, row := range results {
 			t.Logf("  Record %d: id=%v, name=%v, score=%v", i+1, row["id"], row["name"], row["score"])
+			assert.ElementsMatch(t, labelsData[i], row["labels"])
 		}
 	})
 
