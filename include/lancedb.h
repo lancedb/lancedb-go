@@ -117,6 +117,13 @@ struct SimpleResult *simple_lancedb_table_create_index(void *table_handle,
 struct SimpleResult *simple_lancedb_table_get_indexes(void *table_handle, char **indexes_json);
 
 /**
+ * Retrieve statistics about an index
+ */
+struct SimpleResult *simple_lancedb_table_index_stats(void *table_handle,
+                                                      const char *index_name,
+                                                      char **index_stats_json);
+
+/**
  * Count rows in a table (simple version)
  */
 struct SimpleResult *simple_lancedb_table_count_rows(void *table_handle, int64_t *count);
@@ -181,6 +188,11 @@ struct SimpleResult *simple_lancedb_open_table(void *handle,
  * Close a table handle (simple version)
  */
 struct SimpleResult *simple_lancedb_table_close(void *table_handle);
+
+/**
+ * Optimize the on-disk data and indices for better performance
+ */
+struct SimpleResult *simple_lancedb_table_optimize(void *table_handle, char **optimize_stats_json);
 
 /**
  * Free a VersionInfo structure

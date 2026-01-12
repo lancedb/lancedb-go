@@ -234,3 +234,65 @@ pub extern "C" fn simple_lancedb_table_get_indexes(
         ))),
     }
 }
+
+/// Retrieve statistics about an index
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn simple_lancedb_table_index_stats(
+    table_handle: *mut c_void,
+    index_name: *const c_char,
+    index_stats_json: *mut *mut c_char,
+) -> *mut SimpleResult {
+    let result = std::panic::catch_unwind(|| -> SimpleResult {
+        if table_handle.is_null() || index_name.is_null() || index_stats_json.is_null() {
+            return SimpleResult::error("Invalid null arguments".to_string());
+        }
+
+        let table = unsafe { &*(table_handle as *const lancedb::Table) };
+        let rt = get_simple_runtime();
+
+        let index_name_str = match from_c_str(index_name) {
+            Ok(s) => s,
+            Err(e) => return SimpleResult::error(format!("Invalid index name: {}", e)),
+        };
+
+        match rt.block_on(async { table.index_stats(index_name_str).await }) {
+            Ok(Some(index_stats)) => {
+                let stats_json = serde_json::json!({
+                    "num_indexed_rows": index_stats.num_indexed_rows,
+                    "num_unindexed_rows": index_stats.num_unindexed_rows,
+                    "index_type": format!("{:?}", index_stats.index_type),
+                    "distance_type": index_stats.distance_type,
+                    "num_indices": index_stats.num_indices,
+                    "loss": index_stats.loss,
+                });
+
+                match serde_json::to_string(&stats_json) {
+                    Ok(json_str) => match CString::new(json_str) {
+                        Ok(c_string) => {
+                            unsafe {
+                                *index_stats_json = c_string.into_raw();
+                            }
+                            SimpleResult::ok()
+                        }
+                        Err(_) => {
+                            SimpleResult::error("Failed to convert JSON to C string".to_string())
+                        }
+                    },
+                    Err(e) => {
+                        SimpleResult::error(format!("Failed to serialize indexes to JSON: {}", e))
+                    }
+                }
+            }
+            Ok(None) => SimpleResult::ok(),
+            Err(e) => SimpleResult::error(format!("Failed to get index stats: {}", e)),
+        }
+    });
+
+    match result {
+        Ok(res) => Box::into_raw(Box::new(res)),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_index_stats".to_string(),
+        ))),
+    }
+}

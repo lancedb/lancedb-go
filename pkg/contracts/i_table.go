@@ -57,6 +57,9 @@ type ITable interface {
 	// GetAllIndexes returns information about all indexes present on the table
 	GetAllIndexes(ctx context.Context) ([]IndexInfo, error)
 
+	// Retrieve statistics about an index
+	IndexStats(ctx context.Context, indexName string) (*IndexStatistics, error)
+
 	// Select executes a query with the provided configuration and returns the results
 	Select(ctx context.Context, config QueryConfig) ([]map[string]interface{}, error)
 
@@ -81,6 +84,9 @@ type ITable interface {
 
 	// SelectWithLimit returns a limited number of records with optional offset
 	SelectWithLimit(ctx context.Context, limit int, offset int) ([]map[string]interface{}, error)
+
+	// Optimize the on-disk data and indices for better performance
+	Optimize(ctx context.Context) (*OptimizeStats, error)
 }
 
 // AddDataOptions configures how data is added to a Table

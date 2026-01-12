@@ -22,6 +22,16 @@ type IndexInfo struct {
 	IndexType string   `json:"index_type"`
 }
 
+// IndexStatistics represents statistics about an index
+type IndexStatistics struct {
+	NumIndexedRows   int64    `json:"num_indexed_rows"`
+	NumUnindexedRows int64    `json:"num_unindexed_rows"`
+	IndexType        string   `json:"index_type"`
+	DistanceType     *string  `json:"distance_type,omitempty"`
+	NumIndices       *int     `json:"num_indices,omitempty"`
+	Loss             *float64 `json:"loss,omitempty"`
+}
+
 // QueryConfig represents the configuration for a select query
 type QueryConfig struct {
 	Columns      []string      `json:"columns,omitempty"`
@@ -48,4 +58,24 @@ type FTSSearch struct {
 // QueryResult represents the result of a select query
 type QueryResult struct {
 	Rows []map[string]interface{} `json:"rows"`
+}
+
+// CompactionMetrics represents statistics about the optimization
+type CompactionMetrics struct {
+	FragmentsRemoved *int64 `json:"fragments_removed,omitempty"`
+	FragmentsAdded   *int64 `json:"fragments_added,omitempty"`
+	FilesRemoved     *int64 `json:"files_removed,omitempty"`
+	FilesAdded       *int64 `json:"files_added,omitempty"`
+}
+
+// RemovalStats represents stats of the file compaction
+type RemovalStats struct {
+	BytesRemoved *int64 `json:"bytes_removed,omitempty"`
+	OldVersions  *int64 `json:"old_versions,omitempty"`
+}
+
+// OptimizeStats represents stats of the version pruning
+type OptimizeStats struct {
+	Compaction *CompactionMetrics `json:"compaction,omitempty"`
+	Prune      *RemovalStats      `json:"prune,omitempty"`
 }
