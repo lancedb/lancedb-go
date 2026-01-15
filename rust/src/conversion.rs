@@ -294,10 +294,7 @@ pub fn convert_arrow_value_to_json(
 
             let mut list_values = Vec::new();
             for i in start_idx..end_idx {
-                list_values.push(convert_arrow_value_to_json(
-                    values_array.as_ref(),
-                    i as usize,
-                )?);
+                list_values.push(convert_arrow_value_to_json(values_array.as_ref(), i)?);
             }
             Ok(serde_json::Value::Array(list_values))
         }
