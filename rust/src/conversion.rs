@@ -294,10 +294,24 @@ pub fn convert_arrow_value_to_json(
 
             let mut list_values = Vec::new();
             for i in start_idx..end_idx {
-                match convert_arrow_value_to_json(values_array.as_ref(), i) {
-                    Ok(val) => list_values.push(val),
-                    Err(_) => list_values.push(serde_json::Value::Null),
-                }
+                list_values.push(convert_arrow_value_to_json(values_array.as_ref(), i)?);
+            }
+            Ok(serde_json::Value::Array(list_values))
+        }
+        DataType::List(_) => {
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::ListArray>()
+                .ok_or("Failed to downcast to ListArray")?;
+            let values_array = typed_array.values();
+            let offsets = typed_array.offsets();
+
+            let mut list_values = Vec::new();
+            for i in offsets[row_idx]..offsets[row_idx + 1] {
+                list_values.push(convert_arrow_value_to_json(
+                    values_array.as_ref(),
+                    i as usize,
+                )?);
             }
             Ok(serde_json::Value::Array(list_values))
         }
