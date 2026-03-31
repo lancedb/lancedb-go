@@ -190,64 +190,79 @@ func TestQueryBuilderExecute(t *testing.T) {
 	defer cleanup()
 
 	t.Run("Execute with no options returns all rows", func(t *testing.T) {
-		results, err := table.Query().Execute()
+		record, err := table.Query().Execute(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, results, 5)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(5), record.NumRows())
 	})
 
 	t.Run("Execute with filter", func(t *testing.T) {
-		results, err := table.Query().Filter("score > 90").Execute()
+		record, err := table.Query().Filter("score > 90").Execute(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, results, 3)
-		for _, row := range results {
-			score, ok := row["score"].(float64)
-			require.True(t, ok, "Score should be float64")
-			assert.Greater(t, score, 90.0)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(3), record.NumRows())
+		scoreIdx := record.Schema().FieldIndices("score")
+		require.Len(t, scoreIdx, 1)
+		scoreCol := record.Column(scoreIdx[0]).(*array.Float64)
+		for i := 0; i < int(record.NumRows()); i++ {
+			assert.Greater(t, scoreCol.Value(i), 90.0)
 		}
 	})
 
 	t.Run("Execute with multiple filters joined by AND", func(t *testing.T) {
-		results, err := table.Query().
+		record, err := table.Query().
 			Filter("score > 85").
 			Filter("score < 95").
-			Execute()
+			Execute(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, results, 4)
-		for _, row := range results {
-			score, ok := row["score"].(float64)
-			require.True(t, ok, "Score should be float64")
-			assert.Greater(t, score, 85.0)
-			assert.Less(t, score, 95.0)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(4), record.NumRows())
+		scoreIdx := record.Schema().FieldIndices("score")
+		require.Len(t, scoreIdx, 1)
+		scoreCol := record.Column(scoreIdx[0]).(*array.Float64)
+		for i := 0; i < int(record.NumRows()); i++ {
+			assert.Greater(t, scoreCol.Value(i), 85.0)
+			assert.Less(t, scoreCol.Value(i), 95.0)
 		}
 	})
 
 	t.Run("Execute with limit", func(t *testing.T) {
-		results, err := table.Query().Limit(2).Execute()
+		record, err := table.Query().Limit(2).Execute(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, results, 2)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(2), record.NumRows())
 	})
 
 	t.Run("Execute with offset", func(t *testing.T) {
-		results, err := table.Query().Offset(2).Execute()
+		record, err := table.Query().Offset(2).Execute(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, results, 3)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(3), record.NumRows())
 	})
 
 	t.Run("Execute with columns", func(t *testing.T) {
-		results, err := table.Query().Columns([]string{"id", "name"}).Execute()
+		record, err := table.Query().Columns([]string{"id", "name"}).Execute(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, results, 5)
-		for i, row := range results {
-			assert.Len(t, row, 2, "Record %d should have 2 columns", i)
-			assert.Contains(t, row, "id")
-			assert.Contains(t, row, "name")
-		}
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(5), record.NumRows())
+		schema := record.Schema()
+		assert.Equal(t, 2, len(schema.Fields()))
+		assert.True(t, schema.HasField("id"))
+		assert.True(t, schema.HasField("name"))
 	})
 
 	t.Run("Execute with filter and limit chained", func(t *testing.T) {
-		results, err := table.Query().Filter("score > 85").Limit(2).Execute()
+		record, err := table.Query().Filter("score > 85").Limit(2).Execute(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, results, 2)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(2), record.NumRows())
 	})
 
 	t.Run("Execute on closed table returns error", func(t *testing.T) {
@@ -255,7 +270,7 @@ func TestQueryBuilderExecute(t *testing.T) {
 		closedTable.Close()
 		defer closedCleanup()
 
-		_, err := closedTable.Query().Execute()
+		_, err := closedTable.Query().Execute(context.Background())
 		require.Error(t, err)
 	})
 }
@@ -265,23 +280,25 @@ func TestQueryBuilderExecuteAsync(t *testing.T) {
 	defer cleanup()
 
 	t.Run("ExecuteAsync returns results on channel", func(t *testing.T) {
-		resultChan, errChan := table.Query().Filter("score > 90").ExecuteAsync()
+		resultChan, errChan := table.Query().Filter("score > 90").ExecuteAsync(context.Background())
 
 		select {
-		case results, ok := <-resultChan:
+		case record, ok := <-resultChan:
 			if !ok {
 				// closed-empty: select raced; drain errChan for actual error
 				err := <-errChan
 				t.Fatalf("ExecuteAsync failed: %v", err)
 			}
-			assert.Len(t, results, 3)
+			defer record.Release()
+			assert.Equal(t, int64(3), record.NumRows())
 		case err, ok := <-errChan:
 			if ok {
 				t.Fatalf("ExecuteAsync failed: %v", err)
 			}
 			// closed-empty: select raced; results must be on resultChan
-			results := <-resultChan
-			assert.Len(t, results, 3)
+			record := <-resultChan
+			defer record.Release()
+			assert.Equal(t, int64(3), record.NumRows())
 		case <-time.After(5 * time.Second):
 			t.Fatal("ExecuteAsync timed out")
 		}
@@ -292,12 +309,13 @@ func TestQueryBuilderExecuteAsync(t *testing.T) {
 		closedTable.Close()
 		defer closedCleanup()
 
-		resultChan, errChan := closedTable.Query().ExecuteAsync()
+		resultChan, errChan := closedTable.Query().ExecuteAsync(context.Background())
 
 		select {
-		case results, ok := <-resultChan:
+		case record, ok := <-resultChan:
 			if ok {
-				t.Fatalf("Expected error, got results: %v", results)
+				defer record.Release()
+				t.Fatalf("Expected error, got record with %d rows", record.NumRows())
 			}
 			// closed-empty: select raced; drain errChan for actual error
 			err := <-errChan
@@ -305,8 +323,11 @@ func TestQueryBuilderExecuteAsync(t *testing.T) {
 		case err, ok := <-errChan:
 			if !ok {
 				// closed-empty: select raced; results must be on resultChan
-				results := <-resultChan
-				t.Fatalf("Expected error, got results: %v", results)
+				record := <-resultChan
+				if record != nil {
+					defer record.Release()
+				}
+				t.Fatalf("Expected error, got record")
 			}
 			require.Error(t, err)
 		case <-time.After(5 * time.Second):
@@ -325,68 +346,73 @@ func TestVectorQueryBuilder(t *testing.T) {
 	}
 
 	t.Run("Limit returns results", func(t *testing.T) {
-		results, err := table.VectorQuery("embedding", queryVec).Limit(3).Execute()
+		record, err := table.VectorQuery("embedding", queryVec).Limit(3).Execute(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, results, 3)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(3), record.NumRows())
 	})
 
 	t.Run("Limit with Filter returns filtered results", func(t *testing.T) {
 		// score > 93 matches only Alice(95.5) and Eve(94.1), proving the filter
 		// actually reduces results rather than trivially matching all rows.
-		results, err := table.VectorQuery("embedding", queryVec).Limit(5).Filter("score > 93").Execute()
+		record, err := table.VectorQuery("embedding", queryVec).Limit(5).Filter("score > 93").Execute(context.Background())
 		require.NoError(t, err)
-		require.Len(t, results, 2)
-		for _, row := range results {
-			score, ok := row["score"].(float64)
-			require.True(t, ok)
-			assert.Greater(t, score, 93.0)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(2), record.NumRows())
+		scoreIdx := record.Schema().FieldIndices("score")
+		require.Len(t, scoreIdx, 1)
+		scoreCol := record.Column(scoreIdx[0]).(*array.Float64)
+		for i := 0; i < int(record.NumRows()); i++ {
+			assert.Greater(t, scoreCol.Value(i), 93.0)
 		}
 	})
 
 	t.Run("Without Limit returns error", func(t *testing.T) {
-		_, err := table.VectorQuery("embedding", queryVec).Execute()
+		_, err := table.VectorQuery("embedding", queryVec).Execute(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "vector search requires a positive K value")
 	})
 
 	t.Run("Zero Limit returns error", func(t *testing.T) {
-		_, err := table.VectorQuery("embedding", queryVec).Limit(0).Execute()
+		_, err := table.VectorQuery("embedding", queryVec).Limit(0).Execute(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "K must be a positive integer")
 	})
 
 	t.Run("Negative Limit returns error", func(t *testing.T) {
-		_, err := table.VectorQuery("embedding", queryVec).Limit(-5).Execute()
+		_, err := table.VectorQuery("embedding", queryVec).Limit(-5).Execute(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "K must be a positive integer")
 	})
 
 	t.Run("Columns restricts returned fields", func(t *testing.T) {
-		results, err := table.VectorQuery("embedding", queryVec).Limit(3).Columns([]string{"id", "name"}).Execute()
+		record, err := table.VectorQuery("embedding", queryVec).Limit(3).Columns([]string{"id", "name"}).Execute(context.Background())
 		require.NoError(t, err)
-		require.NotEmpty(t, results)
-		for _, row := range results {
-			assert.Contains(t, row, "id")
-			assert.Contains(t, row, "name")
-			assert.NotContains(t, row, "score")
-			assert.NotContains(t, row, "embedding")
-		}
+		require.NotNil(t, record)
+		defer record.Release()
+		schema := record.Schema()
+		assert.True(t, schema.HasField("id"))
+		assert.True(t, schema.HasField("name"))
+		assert.False(t, schema.HasField("score"))
+		assert.False(t, schema.HasField("embedding"))
 	})
 
 	t.Run("Nil vector returns error", func(t *testing.T) {
-		_, err := table.VectorQuery("embedding", nil).Limit(3).Execute()
+		_, err := table.VectorQuery("embedding", nil).Limit(3).Execute(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "non-empty query vector")
 	})
 
 	t.Run("Empty vector returns error", func(t *testing.T) {
-		_, err := table.VectorQuery("embedding", []float32{}).Limit(3).Execute()
+		_, err := table.VectorQuery("embedding", []float32{}).Limit(3).Execute(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "non-empty query vector")
 	})
 
 	t.Run("Empty column name returns error", func(t *testing.T) {
-		_, err := table.VectorQuery("", queryVec).Limit(3).Execute()
+		_, err := table.VectorQuery("", queryVec).Limit(3).Execute(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "non-empty column name")
 	})
@@ -396,43 +422,88 @@ func TestVectorQueryBuilder(t *testing.T) {
 		closedTable.Close()
 		defer closedCleanup()
 
-		_, err := closedTable.VectorQuery("embedding", queryVec).Limit(3).Execute()
+		_, err := closedTable.VectorQuery("embedding", queryVec).Limit(3).Execute(context.Background())
 		require.Error(t, err)
 	})
 
 	t.Run("ApplyOptions sets limit via MaxResults", func(t *testing.T) {
 		opts := &contracts.QueryOptions{MaxResults: 2}
-		results, err := table.VectorQuery("embedding", queryVec).ApplyOptions(opts).Execute()
+		record, err := table.VectorQuery("embedding", queryVec).ApplyOptions(opts).Execute(context.Background())
 		require.NoError(t, err)
-		assert.Len(t, results, 2)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(2), record.NumRows())
 	})
 
 	t.Run("ApplyOptions without MaxResults requires explicit Limit", func(t *testing.T) {
 		opts := &contracts.QueryOptions{}
-		_, err := table.VectorQuery("embedding", queryVec).ApplyOptions(opts).Execute()
+		_, err := table.VectorQuery("embedding", queryVec).ApplyOptions(opts).Execute(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "requires a positive K value")
 	})
 
 	t.Run("ExecuteAsync returns results on channel", func(t *testing.T) {
-		resultChan, errChan := table.VectorQuery("embedding", queryVec).Limit(3).ExecuteAsync()
+		resultChan, errChan := table.VectorQuery("embedding", queryVec).Limit(3).ExecuteAsync(context.Background())
 
 		select {
-		case results, ok := <-resultChan:
+		case record, ok := <-resultChan:
 			if !ok {
 				err := <-errChan
 				t.Fatalf("ExecuteAsync failed: %v", err)
 			}
-			assert.Len(t, results, 3)
+			defer record.Release()
+			assert.Equal(t, int64(3), record.NumRows())
 		case err, ok := <-errChan:
 			if ok {
 				t.Fatalf("ExecuteAsync failed: %v", err)
 			}
-			results := <-resultChan
-			assert.Len(t, results, 3)
+			record := <-resultChan
+			defer record.Release()
+			assert.Equal(t, int64(3), record.NumRows())
 		case <-time.After(5 * time.Second):
 			t.Fatal("ExecuteAsync timed out")
 		}
+	})
+
+	t.Run("DistanceType L2 executes successfully", func(t *testing.T) {
+		record, err := table.VectorQuery("embedding", queryVec).
+			Limit(3).
+			DistanceType(contracts.DistanceTypeL2).
+			Execute(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(3), record.NumRows())
+	})
+
+	t.Run("DistanceType Cosine executes successfully", func(t *testing.T) {
+		record, err := table.VectorQuery("embedding", queryVec).
+			Limit(3).
+			DistanceType(contracts.DistanceTypeCosine).
+			Execute(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(3), record.NumRows())
+	})
+
+	t.Run("DistanceType Dot executes successfully", func(t *testing.T) {
+		record, err := table.VectorQuery("embedding", queryVec).
+			Limit(3).
+			DistanceType(contracts.DistanceTypeDot).
+			Execute(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(3), record.NumRows())
+	})
+
+	t.Run("Default distance type works without explicit set", func(t *testing.T) {
+		record, err := table.VectorQuery("embedding", queryVec).Limit(3).Execute(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, record)
+		defer record.Release()
+		assert.Equal(t, int64(3), record.NumRows())
 	})
 
 	t.Run("ExecuteAsync on closed table returns error on channel", func(t *testing.T) {
@@ -440,19 +511,23 @@ func TestVectorQueryBuilder(t *testing.T) {
 		closedTable.Close()
 		defer closedCleanup()
 
-		resultChan, errChan := closedTable.VectorQuery("embedding", queryVec).Limit(3).ExecuteAsync()
+		resultChan, errChan := closedTable.VectorQuery("embedding", queryVec).Limit(3).ExecuteAsync(context.Background())
 
 		select {
-		case results, ok := <-resultChan:
+		case record, ok := <-resultChan:
 			if ok {
-				t.Fatalf("Expected error, got results: %v", results)
+				defer record.Release()
+				t.Fatalf("Expected error, got record with %d rows", record.NumRows())
 			}
 			err := <-errChan
 			require.Error(t, err)
 		case err, ok := <-errChan:
 			if !ok {
-				results := <-resultChan
-				t.Fatalf("Expected error, got results: %v", results)
+				record := <-resultChan
+				if record != nil {
+					defer record.Release()
+				}
+				t.Fatalf("Expected error, got record")
 			}
 			require.Error(t, err)
 		case <-time.After(5 * time.Second):

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/apache/arrow/go/v17/arrow"
+
 	lancedb "github.com/lancedb/lancedb-go/pkg/contracts"
 )
 
@@ -26,9 +28,10 @@ var _ lancedb.IVectorQueryBuilder = (*VectorQueryBuilder)(nil)
 // VectorQueryBuilder extends QueryBuilder for vector similarity searches
 type VectorQueryBuilder struct {
 	QueryBuilder
-	vector   []float32
-	column   string
-	limitSet bool // tracks whether Limit() was explicitly called
+	vector       []float32
+	column       string
+	limitSet     bool // tracks whether Limit() was explicitly called
+	distanceType *lancedb.DistanceType
 }
 
 // Filter adds a filter condition to the query
@@ -56,10 +59,14 @@ func (q *QueryBuilder) Offset(offset int) lancedb.IQueryBuilder {
 }
 
 // Execute executes the query and returns results.
-// Delegates to Table.Select() which holds the mutex and checks closed state.
-func (q *QueryBuilder) Execute() ([]map[string]interface{}, error) {
+// Delegates to Table.SelectIPC() which holds the mutex and checks closed state.
+func (q *QueryBuilder) Execute(ctx context.Context) (arrow.Record, error) {
 	config := q.buildConfig()
-	return q.table.Select(context.Background(), config)
+	ipcBytes, err := q.table.SelectIPC(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	return ipcBytesToRecord(ipcBytes)
 }
 
 // executeAsync runs fn in a goroutine and routes its result or error to
@@ -68,19 +75,27 @@ func (q *QueryBuilder) Execute() ([]map[string]interface{}, error) {
 // two-value receive form. Callers should check the ok flag to
 // distinguish a real value (ok=true) from a closed-empty channel (ok=false)
 // that may appear when the scheduler picks the other channel first.
-func executeAsync(fn func() ([]map[string]interface{}, error)) (<-chan []map[string]interface{}, <-chan error) {
-	resultChan := make(chan []map[string]interface{}, 1)
+func executeAsync(ctx context.Context, fn func(context.Context) (arrow.Record, error)) (<-chan arrow.Record, <-chan error) {
+	resultChan := make(chan arrow.Record, 1)
 	errorChan := make(chan error, 1)
+
+	// Short-circuit if context is already cancelled
+	if err := ctx.Err(); err != nil {
+		errorChan <- err
+		close(resultChan)
+		close(errorChan)
+		return resultChan, errorChan
+	}
 
 	go func() {
 		defer close(resultChan)
 		defer close(errorChan)
 
-		results, err := fn()
+		result, err := fn(ctx)
 		if err != nil {
 			errorChan <- err
 		} else {
-			resultChan <- results
+			resultChan <- result
 		}
 	}()
 
@@ -88,8 +103,8 @@ func executeAsync(fn func() ([]map[string]interface{}, error)) (<-chan []map[str
 }
 
 // ExecuteAsync executes the query asynchronously
-func (q *QueryBuilder) ExecuteAsync() (<-chan []map[string]interface{}, <-chan error) {
-	return executeAsync(q.Execute)
+func (q *QueryBuilder) ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error) {
+	return executeAsync(ctx, q.Execute)
 }
 
 // ApplyOptions applies query options to the builder
@@ -143,9 +158,30 @@ func (vq *VectorQueryBuilder) Columns(columns []string) lancedb.IVectorQueryBuil
 	return vq
 }
 
+// distanceTypeToString converts a DistanceType enum to the JSON string
+// expected by the Rust FFI. Caller guards against DistanceTypeUnspecified.
+func distanceTypeToString(dt lancedb.DistanceType) string {
+	switch dt {
+	case lancedb.DistanceTypeL2:
+		return "l2"
+	case lancedb.DistanceTypeCosine:
+		return "cosine"
+	case lancedb.DistanceTypeDot:
+		return "dot"
+	default:
+		panic(fmt.Sprintf("unhandled DistanceType: %d", dt))
+	}
+}
+
+// DistanceType sets the distance metric for vector similarity search
+func (vq *VectorQueryBuilder) DistanceType(dt lancedb.DistanceType) lancedb.IVectorQueryBuilder {
+	vq.distanceType = &dt
+	return vq
+}
+
 // Execute executes the vector search query and returns results.
-// Delegates to Table.Select() which holds the mutex and checks closed state.
-func (vq *VectorQueryBuilder) Execute() ([]map[string]interface{}, error) {
+// Delegates to Table.SelectIPC() which holds the mutex and checks closed state.
+func (vq *VectorQueryBuilder) Execute(ctx context.Context) (arrow.Record, error) {
 	if len(vq.vector) == 0 {
 		return nil, fmt.Errorf("vector search requires a non-empty query vector")
 	}
@@ -166,18 +202,27 @@ func (vq *VectorQueryBuilder) Execute() ([]map[string]interface{}, error) {
 	}
 
 	config := vq.buildConfig()
-	config.Limit = nil // K is authoritative for vector search
+	config.Limit = nil // K controls result count for vector search, not Limit
 	config.VectorSearch = &lancedb.VectorSearch{
 		Column: vq.column,
 		Vector: vq.vector,
 		K:      k,
 	}
-	return vq.table.Select(context.Background(), config)
+	if vq.distanceType != nil && *vq.distanceType != lancedb.DistanceTypeUnspecified {
+		dt := distanceTypeToString(*vq.distanceType)
+		config.VectorSearch.DistanceType = &dt
+	}
+
+	ipcBytes, err := vq.table.SelectIPC(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	return ipcBytesToRecord(ipcBytes)
 }
 
 // ExecuteAsync executes the vector query asynchronously
-func (vq *VectorQueryBuilder) ExecuteAsync() (<-chan []map[string]interface{}, <-chan error) {
-	return executeAsync(vq.Execute)
+func (vq *VectorQueryBuilder) ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error) {
+	return executeAsync(ctx, vq.Execute)
 }
 
 // ApplyOptions applies query options to the vector query builder.

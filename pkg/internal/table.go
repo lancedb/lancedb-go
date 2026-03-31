@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"runtime"
 	"sync"
 	"unsafe"
@@ -547,6 +548,58 @@ func (t *Table) Select(_ context.Context, config contracts.QueryConfig) ([]map[s
 	}
 
 	return rows, nil
+}
+
+// SelectIPC executes a query and returns raw Arrow IPC bytes.
+// The caller must deserialize the IPC data into Arrow Records.
+//
+//nolint:gocritic
+func (t *Table) SelectIPC(_ context.Context, config contracts.QueryConfig) ([]byte, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.closed || t.handle == nil {
+		return nil, fmt.Errorf("table is closed")
+	}
+
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal query config to JSON: %w", err)
+	}
+
+	cConfigJSON := C.CString(string(configJSON))
+	// #nosec G103 - Required for freeing C allocated string memory
+	defer C.free(unsafe.Pointer(cConfigJSON))
+
+	var resultIPCData *C.uchar
+	var resultIPCLen C.size_t
+	result := C.simple_lancedb_table_select_query_ipc(t.handle, cConfigJSON, &resultIPCData, &resultIPCLen)
+	defer C.simple_lancedb_result_free(result)
+
+	if !result.SUCCESS {
+		if result.ERROR_MESSAGE != nil {
+			errorMsg := C.GoString(result.ERROR_MESSAGE)
+			return nil, fmt.Errorf("failed to execute IPC query: %s", errorMsg)
+		}
+		return nil, fmt.Errorf("failed to execute IPC query: unknown error")
+	}
+
+	if resultIPCData == nil || resultIPCLen == 0 {
+		return nil, nil // Empty result set
+	}
+
+	// Guard against integer truncation for payloads > 2GB
+	if resultIPCLen > C.size_t(math.MaxInt32) {
+		C.simple_lancedb_free_ipc_data(resultIPCData)
+		return nil, fmt.Errorf("IPC result too large (%d bytes) to copy", resultIPCLen)
+	}
+
+	// Copy IPC data to Go-owned memory and free C allocation
+	// #nosec G103 - Safe conversion of C memory to Go bytes for Arrow IPC data
+	ipcBytes := C.GoBytes(unsafe.Pointer(resultIPCData), C.int(resultIPCLen))
+	C.simple_lancedb_free_ipc_data(resultIPCData)
+
+	return ipcBytes, nil
 }
 
 // SelectWithColumns is a convenience method for selecting specific columns
