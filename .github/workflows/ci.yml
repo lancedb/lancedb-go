@@ -20,7 +20,7 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # ⚡ Phase 1: Lightning-fast checks (only formatting)
+  # Phase 1: Lightning-fast checks (only formatting)
   quick-checks:
     name: Quick Checks
     runs-on: ubuntu-latest
@@ -33,7 +33,7 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Setup Go (minimal)  
+      - name: Setup Go (minimal)
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
@@ -49,7 +49,7 @@ jobs:
             exit 1
           fi
 
-  # 🏗️ Phase 2: Build artifacts once (includes linting)
+  # Phase 2: Build artifacts once (includes linting)
   build-artifacts:
     name: Build Artifacts
     needs: quick-checks
@@ -59,14 +59,14 @@ jobs:
           - os: ubuntu-latest
             rust-target: x86_64-unknown-linux-gnu
             artifact-name: linux-x64
-          # - os: macos-latest
-          #   rust-target: aarch64-apple-darwin
-          #   artifact-name: macos-arm64
-          # - os: macos-13
-          #   rust-target: x86_64-apple-darwin
-          #   artifact-name: macos-x64
+          - os: macos-latest
+            rust-target: aarch64-apple-darwin
+            artifact-name: macos-arm64
+          - os: windows-latest
+            rust-target: x86_64-pc-windows-gnu
+            artifact-name: windows-x64
     runs-on: ${{ matrix.os }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -95,6 +95,22 @@ jobs:
         run: |
           brew install protobuf
 
+      - name: Install system dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $protoc_url = "https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protoc-25.1-win64.zip"
+          $protoc_zip = "$env:TEMP\protoc.zip"
+          $protoc_dir = "$env:TEMP\protoc"
+          Invoke-WebRequest -Uri $protoc_url -OutFile $protoc_zip -UseBasicParsing
+          Expand-Archive -Path $protoc_zip -DestinationPath $protoc_dir -Force
+          $protoc_bin = "$protoc_dir\bin"
+          $env:PATH = "$protoc_bin;$env:PATH"
+          Add-Content $env:GITHUB_PATH "$protoc_bin"
+          $env:PROTOC = "$protoc_bin\protoc.exe"
+          Add-Content $env:GITHUB_ENV "PROTOC=$protoc_bin\protoc.exe"
+          & protoc --version
+
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
@@ -110,6 +126,7 @@ jobs:
             ${{ matrix.os }}-cargo-
 
       - name: Install cbindgen (cached)
+        shell: bash
         run: |
           if ! command -v cbindgen &> /dev/null; then
             cargo install cbindgen --version ^0.26
@@ -122,44 +139,49 @@ jobs:
           cargo clippy --target ${{ matrix.rust-target }} -- -D warnings
 
       - name: Build using new binary distribution system
+        shell: bash
         run: |
           # Make build scripts executable
           chmod +x scripts/build-native.sh
-          
+
           # Map CI matrix to our platform parameters
           case "${{ matrix.rust-target }}" in
             "x86_64-unknown-linux-gnu")
               ./scripts/build-native.sh linux amd64
               ;;
-            "aarch64-apple-darwin")  
+            "aarch64-apple-darwin")
               ./scripts/build-native.sh darwin arm64
               ;;
             "x86_64-apple-darwin")
               ./scripts/build-native.sh darwin amd64
               ;;
+            "x86_64-pc-windows-gnu")
+              ./scripts/build-native.sh windows amd64
+              ;;
             *)
-              echo "❌ Unknown target: ${{ matrix.rust-target }}"
+              echo "Unknown target: ${{ matrix.rust-target }}"
               exit 1
               ;;
           esac
 
       - name: Verify build artifacts
+        shell: bash
         run: |
-          echo "📝 Checking binary distribution structure..."
-          ls -la include/ || echo "❌ Missing include/ directory"
-          ls -la lib/ || echo "❌ Missing lib/ directory"
-          
+          echo "Checking binary distribution structure..."
+          ls -la include/ || echo "Missing include/ directory"
+          ls -la lib/ || echo "Missing lib/ directory"
+
           # Show what was built
-          echo "📚 Built libraries:"
+          echo "Built libraries:"
           find lib/ -name "*.a" -o -name "*.so" -o -name "*.dylib" -o -name "*.lib" -o -name "*.dll" | sort
-          
-          echo "📋 Header files:"
+
+          echo "Header files:"
           find include/ -name "*.h" | sort
 
       - name: Build Go module
         run: go build ./...
 
-      # 📦 Upload reusable artifacts
+      # Upload reusable artifacts
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -170,22 +192,25 @@ jobs:
           retention-days: 1
           compression-level: 6
 
-  # 🧪 Phase 3: Testing (reuses artifacts)
+  # Phase 3: Testing (reuses artifacts)
   test:
     name: Test Suite
     needs: build-artifacts
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-        go-version: ['1.21']
-#        exclude:
-#          # Optimize: only test latest Go on macOS
-#          - os: macos-latest
-#            go-version: '1.22'
-#          - os: macos-latest
-#            go-version: '1.21'
+        include:
+          - os: ubuntu-latest
+            artifact-name: linux-x64
+            go-version: '1.21'
+          - os: macos-latest
+            artifact-name: macos-arm64
+            go-version: '1.21'
+          - os: windows-latest
+            artifact-name: windows-x64
+            go-version: '1.21'
     runs-on: ${{ matrix.os }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -196,184 +221,133 @@ jobs:
           go-version: ${{ matrix.go-version }}
           cache: true
 
-      # 📥 Download pre-built artifacts (no rebuild!)
+      # Download pre-built artifacts (no rebuild!)
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          name: build-${{ matrix.os == 'ubuntu-latest' && 'linux-x64' || 'macos-arm64' }}
+          name: build-${{ matrix.artifact-name }}
           path: .
 
       # Fix artifact directory structure (same as build-examples)
       - name: Verify build artifacts for testing
+        shell: bash
         run: |
-          echo "🔍 Verifying binary distribution structure for tests..."
-          
+          echo "Verifying binary distribution structure for tests..."
+
           # Check header files
           if [ -f "include/lancedb.h" ]; then
-            echo "✅ Found header file: include/lancedb.h"
+            echo "Found header file: include/lancedb.h"
           else
-            echo "❌ Missing header file: include/lancedb.h"
+            echo "Missing header file: include/lancedb.h"
             find . -name "lancedb.h" 2>/dev/null || echo "No lancedb.h found anywhere"
             exit 1
           fi
-          
+
           # Check library files
-          if ls lib/*/liblancedb_go.* >/dev/null 2>&1; then
-            echo "✅ Found library files:"
-            ls lib/*/liblancedb_go.* | head -5
+          LIB_FILES=$(find lib/ -name "liblancedb_go.*" -o -name "lancedb_go.*" 2>/dev/null)
+          if [ -n "$LIB_FILES" ]; then
+            echo "Found library files:"
+            echo "$LIB_FILES" | head -5
           else
-            echo "❌ Missing library files in lib/ directories"
+            echo "Missing library files in lib/ directories"
             find . -name "liblancedb_go.*" 2>/dev/null || echo "No library files found anywhere"
             exit 1
           fi
-          
-          echo "✅ Binary distribution verified for testing"
 
-      - name: Install golangci-lint
+          echo "Binary distribution verified for testing"
+
+      - name: Install and run golangci-lint
+        if: matrix.os == 'ubuntu-latest'
         uses: golangci/golangci-lint-action@v4
         with:
           version: v1.55.2
           skip-cache: false
-
-      - name: Run Go linting
-        run: golangci-lint run --config .golangci.yml
+          args: --config .golangci.yml
 
       # Debug: Check library files before running tests
       - name: Debug - Verify library files for tests
+        shell: bash
         run: |
           echo "Checking library files for runtime..."
           ls -la lib/
           find lib/ -name "liblancedb_go.*" -exec file {} \;
           echo "PWD: $(pwd)"
-          
+
           # Check if we have libraries for current platform
           CURRENT_PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
           echo "Current platform: $CURRENT_PLATFORM"
           if [ -d "lib/$CURRENT_PLATFORM" ]; then
-            echo "✅ Found platform-specific libraries at: lib/$CURRENT_PLATFORM"
+            echo "Found platform-specific libraries at: lib/$CURRENT_PLATFORM"
             ls -la "lib/$CURRENT_PLATFORM"
           else
-            echo "⚠️  Platform-specific libraries not found, checking available platforms:"
+            echo "Platform-specific libraries not found, checking available platforms:"
             ls lib/ 2>/dev/null || echo "No lib/ directory"
           fi
 
-      - name: Run tests with race detection
+      - name: Configure CGO environment
+        shell: bash
         run: |
-          # Platform detection (similar to Makefile)
+          echo "CGO_CFLAGS=-I$(pwd)/include" >> "$GITHUB_ENV"
+
           UNAME_S=$(uname -s)
-          UNAME_M=$(uname -m)
-          
-          # Normalize architecture names
-          case "$UNAME_M" in
-            x86_64|amd64) ARCH=amd64 ;;
-            arm64|aarch64) ARCH=arm64 ;;
-            *) echo "❌ Unsupported architecture: $UNAME_M"; exit 1 ;;
-          esac
-          
-          # Normalize platform names and set CGO flags
           case "$UNAME_S" in
+            MINGW*|MSYS*|CYGWIN*)
+              root=$(pwd | sed 's|\\|/|g')
+              echo "CGO_LDFLAGS=${root}/lib/windows_amd64/liblancedb_go.a -lws2_32 -luserenv -lbcrypt -lntdll -ladvapi32" >> "$GITHUB_ENV"
+              echo "CGO_ENABLED=1" >> "$GITHUB_ENV"
+              echo "CC=gcc" >> "$GITHUB_ENV"
+              ;;
             Darwin)
-              PLATFORM=darwin
-              FRAMEWORK_FLAGS="-framework Security -framework CoreFoundation"
-              CGO_LDFLAGS="$(pwd)/lib/darwin_${ARCH}/liblancedb_go.a $FRAMEWORK_FLAGS"
+              ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+              SDK_VERSION=$(xcrun --show-sdk-version 2>/dev/null || echo "15.0")
+              echo "MACOSX_DEPLOYMENT_TARGET=$SDK_VERSION" >> "$GITHUB_ENV"
+              echo "CGO_LDFLAGS=$(pwd)/lib/darwin_${ARCH}/liblancedb_go.a -framework Security -framework CoreFoundation -lc++ -lbz2 -lz" >> "$GITHUB_ENV"
               ;;
             Linux)
-              PLATFORM=linux
-              SYSTEM_LIBS="-lm -ldl -lpthread"
-              CGO_LDFLAGS="$(pwd)/lib/linux_${ARCH}/liblancedb_go.a $SYSTEM_LIBS"
-              ;;
-            MINGW*|MSYS*|CYGWIN*)
-              PLATFORM=windows
-              ARCH=amd64
-              CGO_LDFLAGS="$(pwd)/lib/windows_amd64/liblancedb_go.a"
-              ;;
-            *)
-              echo "❌ Unsupported platform: $UNAME_S"
-              exit 1
+              ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+              echo "CGO_LDFLAGS=$(pwd)/lib/linux_${ARCH}/liblancedb_go.a -lm -ldl -lpthread" >> "$GITHUB_ENV"
               ;;
           esac
-          
-          # Set CGO flags
-          CGO_CFLAGS="-I$(pwd)/include"
-          PLATFORM_ARCH="${PLATFORM}_${ARCH}"
-          
-          # Display platform information (like Makefile)
-          echo "Running Go tests for $PLATFORM_ARCH..."
-          echo "CGO_CFLAGS: $CGO_CFLAGS"
-          echo "CGO_LDFLAGS: $CGO_LDFLAGS"
-          
-          # Run tests with proper CGO environment (like Makefile)
-          CGO_CFLAGS="$CGO_CFLAGS" CGO_LDFLAGS="$CGO_LDFLAGS" go test -v -race ./...
+
+      - name: Run tests
+        shell: bash
+        run: |
+          PLATFORM=$(uname -s)
+          RACE_FLAG="-race"
+          case "$PLATFORM" in
+            MINGW*|MSYS*|CYGWIN*) RACE_FLAG="" ;;
+          esac
+          echo "Running tests (race=$RACE_FLAG)..."
+          go test -v $RACE_FLAG ./...
 
       - name: Run benchmarks
+        if: matrix.os != 'windows-latest'
+        shell: bash
         run: |
-          # Platform detection (similar to Makefile)
-          UNAME_S=$(uname -s)
-          UNAME_M=$(uname -m)
-          
-          # Normalize architecture names
-          case "$UNAME_M" in
-            x86_64|amd64) ARCH=amd64 ;;
-            arm64|aarch64) ARCH=arm64 ;;
-            *) echo "❌ Unsupported architecture: $UNAME_M"; exit 1 ;;
-          esac
-          
-          # Normalize platform names and set CGO flags
-          case "$UNAME_S" in
-            Darwin)
-              PLATFORM=darwin
-              FRAMEWORK_FLAGS="-framework Security -framework CoreFoundation"
-              CGO_LDFLAGS="$(pwd)/lib/darwin_${ARCH}/liblancedb_go.a $FRAMEWORK_FLAGS"
-              ;;
-            Linux)
-              PLATFORM=linux
-              SYSTEM_LIBS="-lm -ldl -lpthread"
-              CGO_LDFLAGS="$(pwd)/lib/linux_${ARCH}/liblancedb_go.a $SYSTEM_LIBS"
-              ;;
-            MINGW*|MSYS*|CYGWIN*)
-              PLATFORM=windows
-              ARCH=amd64
-              CGO_LDFLAGS="$(pwd)/lib/windows_amd64/liblancedb_go.a"
-              ;;
-            *)
-              echo "❌ Unsupported platform: $UNAME_S"
-              exit 1
-              ;;
-          esac
-          
-          # Set CGO flags
-          CGO_CFLAGS="-I$(pwd)/include"
-          PLATFORM_ARCH="${PLATFORM}_${ARCH}"
-          
-          # Display platform information (like Makefile)
-          echo "Running benchmarks for $PLATFORM_ARCH..."
-          echo "CGO_CFLAGS: $CGO_CFLAGS"
-          echo "CGO_LDFLAGS: $CGO_LDFLAGS"
-          
-          # Run benchmarks with proper CGO environment (like Makefile)
-          CGO_CFLAGS="$CGO_CFLAGS" CGO_LDFLAGS="$CGO_LDFLAGS" go test -bench=. -benchmem ./...
+          echo "Running benchmarks..."
+          go test -bench=. -benchmem ./...
 
-  # 🎯 Final status aggregation
+  # Final status aggregation
   ci-success:
     name: CI Success
     if: always()
     needs: [quick-checks, build-artifacts, test]
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Check all jobs status
         run: |
           jobs_status='${{ toJson(needs) }}'
           echo "Jobs status: $jobs_status"
-          
+
           if echo "$jobs_status" | jq -r '.[] | select(.result != "success" and .result != "skipped") | .result' | grep -q .; then
-            echo "❌ Some jobs failed"
+            echo "Some jobs failed"
             exit 1
           fi
-          
-          echo "✅ All jobs completed successfully!"
 
-  # 🧹 Cleanup (optional)
+          echo "All jobs completed successfully!"
+
+  # Cleanup (optional)
   cleanup:
     name: Cleanup Artifacts
     if: always()

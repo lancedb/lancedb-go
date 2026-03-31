@@ -31,6 +31,8 @@ case "$PLATFORM" in
     "darwin"|"macos") PLATFORM="darwin" ;;
     "linux") PLATFORM="linux" ;;
     "windows"|"win32"|"win64") PLATFORM="windows" ;;
+    "windows-gnu") PLATFORM="windows-gnu" ;;
+    "windows-msvc") PLATFORM="windows-msvc" ;;
     *) echo "Unsupported platform: $PLATFORM" >&2; exit 1 ;;
 esac
 
@@ -52,7 +54,9 @@ case "$PLATFORM-$ARCH" in
     "darwin-arm64") RUST_TARGET="aarch64-apple-darwin" ;;
     "linux-amd64") RUST_TARGET="x86_64-unknown-linux-gnu" ;;
     "linux-arm64") RUST_TARGET="aarch64-unknown-linux-gnu" ;;
-    "windows-amd64") RUST_TARGET="x86_64-pc-windows-msvc" ;;
+    "windows-amd64") RUST_TARGET="x86_64-pc-windows-gnu" ;;
+    "windows-gnu-amd64") RUST_TARGET="x86_64-pc-windows-gnu" ;;
+    "windows-msvc-amd64") RUST_TARGET="x86_64-pc-windows-msvc" ;;
     *) echo "Unsupported target: $PLATFORM-$ARCH" >&2; exit 1 ;;
 esac
 
@@ -61,6 +65,13 @@ rustup target add "$RUST_TARGET"
 
 echo "🔨 Building Rust library..."
 cd "$RUST_DIR"
+
+# Set macOS deployment target to match SDK version
+if [[ "$PLATFORM" == "darwin" ]]; then
+    SDK_VERSION=$(xcrun --show-sdk-version 2>/dev/null || echo "15.0")
+    export MACOSX_DEPLOYMENT_TARGET="$SDK_VERSION"
+    echo "   MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
+fi
 
 # Build the library
 CARGO_TARGET_DIR="$RUST_DIR/target" cargo build --release --target "$RUST_TARGET"
@@ -78,8 +89,36 @@ case "$PLATFORM" in
         fi
         ;;
     "windows")
-        cp "$RUST_DIR/target/$RUST_TARGET/release/lancedb_go.lib" "$TARGET_DIR/"
-        cp "$RUST_DIR/target/$RUST_TARGET/release/lancedb_go.dll" "$TARGET_DIR/"
+        # GNU target (default for CGO compatibility) produces liblancedb_go.a
+        if [ -f "$RUST_DIR/target/$RUST_TARGET/release/liblancedb_go.a" ]; then
+            cp "$RUST_DIR/target/$RUST_TARGET/release/liblancedb_go.a" "$TARGET_DIR/"
+        else
+            echo "❌ No static library found for GNU target" >&2; exit 1
+        fi
+        if [ -f "$RUST_DIR/target/$RUST_TARGET/release/lancedb_go.dll" ]; then
+            cp "$RUST_DIR/target/$RUST_TARGET/release/lancedb_go.dll" "$TARGET_DIR/"
+        fi
+        ;;
+    "windows-msvc")
+        # MSVC target produces lancedb_go.lib
+        if [ -f "$RUST_DIR/target/$RUST_TARGET/release/lancedb_go.lib" ]; then
+            cp "$RUST_DIR/target/$RUST_TARGET/release/lancedb_go.lib" "$TARGET_DIR/"
+        else
+            echo "❌ No static library found for MSVC target" >&2; exit 1
+        fi
+        if [ -f "$RUST_DIR/target/$RUST_TARGET/release/lancedb_go.dll" ]; then
+            cp "$RUST_DIR/target/$RUST_TARGET/release/lancedb_go.dll" "$TARGET_DIR/"
+        fi
+        ;;
+    "windows-gnu")
+        if [ -f "$RUST_DIR/target/$RUST_TARGET/release/liblancedb_go.a" ]; then
+            cp "$RUST_DIR/target/$RUST_TARGET/release/liblancedb_go.a" "$TARGET_DIR/"
+        else
+            echo "❌ No static library found for GNU target" >&2; exit 1
+        fi
+        if [ -f "$RUST_DIR/target/$RUST_TARGET/release/lancedb_go.dll" ]; then
+            cp "$RUST_DIR/target/$RUST_TARGET/release/lancedb_go.dll" "$TARGET_DIR/"
+        fi
         ;;
 esac
 

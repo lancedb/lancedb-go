@@ -41,16 +41,22 @@ jobs:
             runner: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
 
-#          - platform: linux
-#            arch: arm64
-#            runner: ubuntu-latest
-#            rust_target: aarch64-unknown-linux-gnu
+          - platform: linux
+            arch: arm64
+            runner: ubuntu-latest
+            rust_target: aarch64-unknown-linux-gnu
 
-#          # Windows builds
-#          - platform: windows
-#            arch: amd64
-#            runner: windows-latest
-#            rust_target: x86_64-pc-windows-msvc
+          # Windows builds (MSVC - for MSVC users)
+          - platform: windows
+            arch: amd64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+
+          # Windows builds (GNU - for Go/CGO users)
+          - platform: windows-gnu
+            arch: amd64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-gnu
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -62,7 +68,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install cbindgen
-        run: cargo install cbindgen --force
+        run: cargo install cbindgen --version ^0.26 --force
 
       # Install system dependencies
       - name: Install system dependencies (Linux)
@@ -114,7 +120,7 @@ jobs:
           fi
 
       - name: Install system dependencies (Windows)
-        if: matrix.platform == 'windows' && runner.os == 'Windows'
+        if: startsWith(matrix.platform, 'windows') && runner.os == 'Windows'
         shell: pwsh
         run: |
           Write-Host "🏗️ Installing protobuf compiler for Windows..."
@@ -206,7 +212,7 @@ jobs:
           }
 
       - name: Skip Windows build on non-Windows runner
-        if: matrix.platform == 'windows' && runner.os != 'Windows'
+        if: startsWith(matrix.platform, 'windows') && runner.os != 'Windows'
         run: |
           echo "⚠️ Cannot build Windows target on $RUNNER_OS runner"
           echo "This requires an actual Windows runner (normal when using 'act')"
@@ -230,7 +236,7 @@ jobs:
 
       # Create directories (Unix)
       - name: Create directories (Unix)
-        if: matrix.platform != 'windows'
+        if: "!startsWith(matrix.platform, 'windows')"
         run: |
           echo "📁 Creating directories for ${{ matrix.platform }}_${{ matrix.arch }}..."
           TARGET_DIR="lib/${{ matrix.platform }}_${{ matrix.arch }}"
@@ -251,7 +257,7 @@ jobs:
 
       # Create directories (Windows)
       - name: Create directories (Windows)
-        if: matrix.platform == 'windows'
+        if: startsWith(matrix.platform, 'windows')
         shell: pwsh
         run: |
           Write-Host "📁 Creating directories for ${{ matrix.platform }}_${{ matrix.arch }}..."
@@ -282,7 +288,7 @@ jobs:
           Get-ChildItem lib -Name -ErrorAction SilentlyContinue | Write-Host
 
       - name: Verify protoc environment (Unix)
-        if: matrix.platform != 'windows'
+        if: "!startsWith(matrix.platform, 'windows')"
         run: |
           echo "🔍 Verifying protoc environment before build..."
           echo "Current PATH: $PATH"
@@ -295,7 +301,7 @@ jobs:
           ls -la /usr/bin/protoc 2>/dev/null && echo "Found: /usr/bin/protoc" || echo "Not found: /usr/bin/protoc"
 
       - name: Verify protoc environment (Windows)
-        if: matrix.platform == 'windows'
+        if: startsWith(matrix.platform, 'windows')
         shell: pwsh
         run: |
           Write-Host "🔍 Verifying protoc environment before build..."
@@ -311,7 +317,7 @@ jobs:
           }
 
       - name: Build native library (Unix)
-        if: matrix.platform != 'windows'
+        if: "!startsWith(matrix.platform, 'windows')"
         run: |
           # Check for cross-compilation issues
           if [[ "${{ matrix.platform }}" == "darwin" && "$RUNNER_OS" != "macOS" ]]; then
@@ -363,6 +369,7 @@ jobs:
         env:
           RUST_TARGET: ${{ matrix.rust_target }}
           PROTOC: ${{ env.PROTOC }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.platform == 'darwin' && '15.0' || '' }}
 
       - name: Build native library (Windows)
         if: matrix.platform == 'windows'
@@ -399,6 +406,35 @@ jobs:
           RUST_TARGET: ${{ matrix.rust_target }}
           PROTOC: ${{ env.PROTOC }}
 
+      - name: Build native library (Windows GNU)
+        if: matrix.platform == 'windows-gnu' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "🔨 Building for ${{ matrix.platform }}-${{ matrix.arch }} (GNU/MinGW) on Windows..."
+
+          # Ensure MinGW gcc is available
+          export PATH="/c/msys64/mingw64/bin:$PATH"
+          if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
+            echo "❌ x86_64-w64-mingw32-gcc not found — cannot build GNU target"
+            echo "Ensure MinGW-w64 toolchain is installed on the runner"
+            exit 1
+          fi
+          export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+          echo "✅ Linker: $CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER"
+
+          # Ensure protoc is available
+          if ! command -v protoc >/dev/null 2>&1; then
+            echo "❌ protoc not found in PATH"
+            exit 1
+          fi
+          echo "✅ protoc is ready: $(protoc --version)"
+
+          cd rust
+          cargo build --release --target "${{ matrix.rust_target }}"
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          PROTOC: ${{ env.PROTOC }}
+
       - name: Generate C header
         if: matrix.platform == 'darwin' && matrix.arch == 'amd64'  # Generate header only once
         run: |
@@ -411,7 +447,7 @@ jobs:
 
       # Copy libraries - macOS/Linux
       - name: Copy libraries (Unix)
-        if: matrix.platform != 'windows'
+        if: "!startsWith(matrix.platform, 'windows')"
         run: |
           # Skip if cross-compilation was skipped
           if [[ "${{ matrix.platform }}" == "darwin" && "$RUNNER_OS" != "macOS" ]]; then
@@ -608,6 +644,41 @@ jobs:
           Write-Host "🔍 Verifying copied files in: $absoluteTargetDir"
           Get-ChildItem $absoluteTargetDir | Format-Table Name, Length -AutoSize
 
+      # Copy libraries - Windows GNU (Git Bash)
+      - name: Copy libraries (Windows GNU)
+        if: matrix.platform == 'windows-gnu' && runner.os == 'Windows'
+        shell: bash
+        run: |
+          WORKSPACE_ROOT="$(pwd)"
+          TARGET_DIR="lib/${{ matrix.platform }}_${{ matrix.arch }}"
+          ABSOLUTE_TARGET_DIR="$WORKSPACE_ROOT/$TARGET_DIR"
+          RUST_BUILD_DIR="$WORKSPACE_ROOT/rust/target/${{ matrix.rust_target }}/release"
+
+          echo "📂 Copying GNU libraries to $TARGET_DIR..."
+          mkdir -p "$ABSOLUTE_TARGET_DIR"
+
+          if [ ! -d "$RUST_BUILD_DIR" ]; then
+            echo "❌ Build directory not found: $RUST_BUILD_DIR"
+            exit 1
+          fi
+
+          if [ -f "$RUST_BUILD_DIR/liblancedb_go.a" ]; then
+            cp "$RUST_BUILD_DIR/liblancedb_go.a" "$ABSOLUTE_TARGET_DIR/"
+            echo "✅ Copied liblancedb_go.a"
+          else
+            echo "❌ Static library liblancedb_go.a not found"
+            ls -la "$RUST_BUILD_DIR"/ || true
+            exit 1
+          fi
+
+          if [ -f "$RUST_BUILD_DIR/lancedb_go.dll" ]; then
+            cp "$RUST_BUILD_DIR/lancedb_go.dll" "$ABSOLUTE_TARGET_DIR/"
+            echo "✅ Copied lancedb_go.dll"
+          fi
+
+          echo "🔍 Verifying copied files:"
+          ls -la "$ABSOLUTE_TARGET_DIR/"
+
       # Upload artifacts for each platform
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -643,12 +714,14 @@ jobs:
           ls -la include/
           
           # Check that we have binaries for all expected platforms
-          expected_platforms="darwin_amd64 darwin_arm64 linux_amd64 linux_arm64 windows_amd64"
+          expected_platforms="darwin_amd64 darwin_arm64 linux_amd64 linux_arm64 windows_amd64 windows-gnu_amd64"
           for platform in $expected_platforms; do
             if [ ! -d "lib/$platform" ]; then
               echo "❌ Missing binaries for platform: $platform"
+              exit 1
+            else
+              echo "✅ Found binaries for platform: $platform"
             fi
-            echo "✅ Found binaries for platform: $platform"
           done
 
       # Create archive with all binaries
@@ -674,7 +747,7 @@ jobs:
           
           - **macOS**: Intel (amd64) and Apple Silicon (arm64)
           - **Linux**: Intel/AMD (amd64) and ARM (arm64)  
-          - **Windows**: Intel/AMD (amd64)
+          - **Windows**: Intel/AMD (amd64) - MSVC and GNU/MinGW variants
           
           ## Files Included
           
@@ -683,7 +756,8 @@ jobs:
           - `lib/darwin_arm64/` - macOS Apple Silicon binaries  
           - `lib/linux_amd64/` - Linux AMD64 binaries
           - `lib/linux_arm64/` - Linux ARM64 binaries
-          - `lib/windows_amd64/` - Windows AMD64 binaries
+          - `lib/windows_amd64/` - Windows AMD64 MSVC binaries
+          - `lib/windows-gnu_amd64/` - Windows AMD64 GNU/MinGW binaries (for Go CGO users)
           
           ## Usage
           
@@ -701,9 +775,14 @@ jobs:
         id: get_version
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
-            VERSION=${GITHUB_REF#refs/tags/}
+            VERSION="${GITHUB_REF#refs/tags/}"
           else
-            VERSION=${{ github.event.inputs.version }}
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          # Validate version format
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]]; then
+            echo "Invalid version format: $VERSION"
+            exit 1
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "📋 Release version: $VERSION"
@@ -723,6 +802,28 @@ jobs:
           echo "📊 Binary file sizes:"
           du -h lib/*/
 
+      # Rename platform-specific binaries to avoid filename collisions in GitHub release
+      - name: Prepare release assets
+        run: |
+          mkdir -p release_assets
+          cp lancedb-go-native-binaries.tar.gz release_assets/
+          cp include/lancedb.h release_assets/
+
+          # Copy with platform-suffixed names
+          for dir in lib/*/; do
+            platform=$(basename "$dir")
+            for file in "$dir"*; do
+              [ -f "$file" ] || continue
+              base=$(basename "$file")
+              name="${base%.*}"
+              ext="${base##*.}"
+              cp "$file" "release_assets/${name}-${platform}.${ext}"
+            done
+          done
+
+          echo "Release assets:"
+          ls -la release_assets/
+
       # Create GitHub release with all binary files
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -730,35 +831,17 @@ jobs:
           tag_name: ${{ steps.get_version.outputs.version }}
           name: LanceDB Go SDK ${{ steps.get_version.outputs.version }}
           body_path: RELEASE_NOTES.md
-          files: |
-            lancedb-go-native-binaries.tar.gz
-            lib/darwin_amd64/liblancedb_go.a
-            lib/darwin_amd64/liblancedb_go.dylib
-            lib/darwin_arm64/liblancedb_go.a
-            lib/darwin_arm64/liblancedb_go.dylib
-            lib/linux_amd64/liblancedb_go.a
-            lib/linux_amd64/liblancedb_go.so
-            lib/linux_arm64/liblancedb_go.a
-            lib/linux_arm64/liblancedb_go.so
-            lib/windows_amd64/lancedb_go.lib
-            lib/windows_amd64/lancedb_go.dll
-            include/lancedb.h
+          files: release_assets/*
           draft: false
           prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') || contains(steps.get_version.outputs.version, 'rc') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Test the release by trying to use it
-      - name: Test release installation
+      # Verify release assets were uploaded
+      - name: Verify release
         run: |
-          echo "🧪 Testing release installation..."
-          
-          # Create a temporary Go module to test installation
-          cd /tmp
-          mkdir lancedb-test
-          cd lancedb-test
-          
-          go mod init lancedb-test
-          go get github.com/lancedb/lancedb-go@${{ steps.get_version.outputs.version }}
-          
-          echo "✅ Release installation test passed!"
+          echo "🔍 Verifying release assets..."
+          gh release view ${{ steps.get_version.outputs.version }} --json assets --jq '.assets[].name' | sort
+          echo "✅ Release created successfully"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
