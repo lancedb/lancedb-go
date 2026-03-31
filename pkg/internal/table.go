@@ -228,7 +228,24 @@ func (t *Table) Query() contracts.IQueryBuilder {
 	return &QueryBuilder{
 		table:   t,
 		filters: make([]string, 0),
-		limit:   -1,
+	}
+}
+
+// VectorQuery creates a new vector query builder for this Table
+func (t *Table) VectorQuery(column string, vector []float32) contracts.IVectorQueryBuilder {
+	var vectorCopy []float32
+	if vector != nil {
+		vectorCopy = make([]float32, len(vector))
+		copy(vectorCopy, vector)
+	}
+	return &VectorQueryBuilder{
+		QueryBuilder: QueryBuilder{
+			table:   t,
+			filters: make([]string, 0),
+			columns: nil,
+		},
+		vector: vectorCopy,
+		column: column,
 	}
 }
 
