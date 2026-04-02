@@ -190,7 +190,7 @@ func (c *Connection) CreateTable(ctx context.Context, name string, schema contra
 		c.handle,
 		cName,
 		cSchemaPtr,
-		C.size_t(len(schemaIPC)),
+		C.size_t(uintptr(len(schemaIPC))),
 	)
 	defer C.simple_lancedb_result_free(result)
 
