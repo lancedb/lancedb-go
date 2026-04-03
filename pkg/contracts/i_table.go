@@ -35,6 +35,9 @@ type ITable interface {
 	// Query creates a new query builder for constructing complex queries
 	Query() IQueryBuilder
 
+	// VectorQuery creates a new vector query builder for similarity searches on the specified column
+	VectorQuery(column string, vector []float32) IVectorQueryBuilder
+
 	// Count returns the total number of rows in the table
 	Count(ctx context.Context) (int64, error)
 
