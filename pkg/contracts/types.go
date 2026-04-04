@@ -15,6 +15,16 @@ const (
 	IndexTypeFts
 )
 
+// DistanceType represents the distance metric for vector similarity search
+type DistanceType int
+
+const (
+	DistanceTypeUnspecified DistanceType = iota // use backend default
+	DistanceTypeL2                              // Euclidean distance
+	DistanceTypeCosine                          // Cosine similarity
+	DistanceTypeDot                             // Dot product
+)
+
 // IndexInfo represents information about an index on a table
 type IndexInfo struct {
 	Name      string   `json:"name"`
@@ -44,9 +54,10 @@ type QueryConfig struct {
 
 // VectorSearch represents vector similarity search parameters
 type VectorSearch struct {
-	Column string    `json:"column"`
-	Vector []float32 `json:"vector"`
-	K      int       `json:"k"`
+	Column       string    `json:"column"`
+	Vector       []float32 `json:"vector"`
+	K            int       `json:"k"`
+	DistanceType *string   `json:"distance_type,omitempty"`
 }
 
 // FTSSearch represents full-text search parameters
