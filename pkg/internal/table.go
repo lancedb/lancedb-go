@@ -185,7 +185,7 @@ func (t *Table) AddRecords(_ context.Context, records []arrow.Record, _ *contrac
 		t.handle,
 		// #nosec G103 - Safe conversion of Go slice to C array pointer for FFI
 		(*C.uchar)(unsafe.Pointer(&ipcBytes[0])),
-		C.size_t(len(ipcBytes)),
+		C.size_t(uintptr(len(ipcBytes))),
 		&addedCount,
 	)
 	defer C.simple_lancedb_result_free(result)
