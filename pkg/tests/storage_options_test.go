@@ -5,6 +5,7 @@ package tests
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -13,449 +14,266 @@ import (
 )
 
 func TestStorageOptionsBasic(t *testing.T) {
-	// Setup test database
 	tempDir, err := os.MkdirTemp("", "lancedb_test_storage_")
 	if err != nil {
-		t.Fatalf(" ❌Failed to create temp dir: %v", err)
+		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	t.Run("Connect with nil StorageOptions", func(t *testing.T) {
-		// Test connection without any storage options (should work like before)
+	t.Run("Connect with nil options", func(t *testing.T) {
 		conn, err := lancedb.Connect(context.Background(), tempDir, nil)
 		if err != nil {
-			t.Fatalf(" ❌Failed to connect without storage options: %v", err)
+			t.Fatalf("Failed to connect: %v", err)
 		}
 		defer conn.Close()
 
 		if conn.IsClosed() {
-			t.Fatal("❌Connection should not be marked as closed")
+			t.Fatal("Connection should not be closed")
 		}
-
-		t.Log("✅ Connection without storage options works correctly")
 	})
 
 	t.Run("Connect with empty ConnectionOptions", func(t *testing.T) {
-		// Test connection with empty ConnectionOptions
-		options := &contracts.ConnectionOptions{}
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
+		conn, err := lancedb.Connect(context.Background(), tempDir, &contracts.ConnectionOptions{})
 		if err != nil {
-			t.Fatalf(" ❌Failed to connect with empty options: %v", err)
+			t.Fatalf("Failed to connect: %v", err)
 		}
 		defer conn.Close()
-
-		t.Log("✅ Connection with empty options works correctly")
 	})
 
-	t.Run("Connect with empty StorageOptions", func(t *testing.T) {
-		// Test connection with empty StorageOptions
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{},
-		}
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
+	t.Run("Connect with empty map", func(t *testing.T) {
+		conn, err := lancedb.Connect(context.Background(), tempDir, &contracts.ConnectionOptions{
+			StorageOptions: map[string]string{},
+		})
 		if err != nil {
-			t.Fatalf(" ❌Failed to connect with empty storage options: %v", err)
+			t.Fatalf("Failed to connect: %v", err)
 		}
 		defer conn.Close()
-
-		t.Log("✅ Connection with empty storage options works correctly")
 	})
 }
 
-func TestS3StorageOptions(t *testing.T) {
-	// Setup test database
-	tempDir, err := os.MkdirTemp("", "lancedb_test_s3_storage_")
-	if err != nil {
-		t.Fatalf(" ❌Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+func TestStorageOptionsJSONSerialization(t *testing.T) {
+	t.Run("empty map marshals to {}", func(t *testing.T) {
+		opts := map[string]string{}
+		data, err := json.Marshal(opts)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+		if string(data) != "{}" {
+			t.Fatalf("Expected {}, got %s", string(data))
+		}
+	})
 
-	t.Run("S3 Configuration Basic", func(t *testing.T) {
-		// Test with basic S3 configuration (should set environment variables)
-		accessKey := "test-access-key"
-		secretKey := "test-secret-key"
-		region := "us-east-1"
-
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				S3Config: &contracts.S3Config{
-					AccessKeyID:     &accessKey,
-					SecretAccessKey: &secretKey,
-					Region:          &region,
-				},
-			},
+	t.Run("S3 keys produce flat JSON", func(t *testing.T) {
+		opts := map[string]string{
+			contracts.StorageAccessKeyID:     "AKIA...",
+			contracts.StorageSecretAccessKey: "wJalr...",
+			contracts.StorageRegion:          "us-east-1",
+		}
+		data, err := json.Marshal(opts)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
 		}
 
-		// Clear any existing AWS environment variables
-		originalAccessKey := os.Getenv("AWS_ACCESS_KEY_ID")
-		originalSecretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
-		originalRegion := os.Getenv("AWS_REGION")
+		// Verify it round-trips correctly
+		var parsed map[string]string
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if parsed["access_key_id"] != "AKIA..." {
+			t.Fatalf("Expected AKIA..., got %s", parsed["access_key_id"])
+		}
+		if parsed["region"] != "us-east-1" {
+			t.Fatalf("Expected us-east-1, got %s", parsed["region"])
+		}
+	})
 
-		defer func() {
-			// Restore original environment variables
-			if originalAccessKey != "" {
-				os.Setenv("AWS_ACCESS_KEY_ID", originalAccessKey)
-			} else {
-				os.Unsetenv("AWS_ACCESS_KEY_ID")
+	t.Run("mixed backend keys serialize correctly", func(t *testing.T) {
+		opts := map[string]string{
+			contracts.StorageAccessKeyID:      "key",
+			contracts.StorageAzureAccountName: "account",
+			contracts.StorageGCSBucket:        "mybucket",
+			contracts.StorageAllowHTTP:        "true",
+		}
+		data, err := json.Marshal(opts)
+		if err != nil {
+			t.Fatalf("Failed to marshal: %v", err)
+		}
+
+		var parsed map[string]string
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			t.Fatalf("Failed to unmarshal: %v", err)
+		}
+		if len(parsed) != 4 {
+			t.Fatalf("Expected 4 keys, got %d", len(parsed))
+		}
+	})
+}
+
+func TestStorageKeyConstants(t *testing.T) {
+	t.Run("all constants are non-empty", func(t *testing.T) {
+		constants := []string{
+			contracts.StorageAccessKeyID,
+			contracts.StorageSecretAccessKey,
+			contracts.StorageSessionToken,
+			contracts.StorageRegion,
+			contracts.StorageEndpoint,
+			contracts.StorageAWSEndpoint,
+			contracts.StorageVirtualHostedStyleRequest,
+			contracts.StorageUnsignedPayload,
+			contracts.StorageConditionalPut,
+			contracts.StorageCopyIfNotExists,
+			contracts.StorageS3Express,
+			contracts.StorageRoleArn,
+			contracts.StorageRoleSessionName,
+			contracts.StorageWebIdentityTokenFile,
+			contracts.StorageDefaultRegion,
+			contracts.StorageBucket,
+			contracts.StorageSkipSignature,
+			contracts.StorageDisableTagging,
+			contracts.StorageRequestPayer,
+			contracts.StorageGCSServiceAccount,
+			contracts.StorageGCSServiceAccountKey,
+			contracts.StorageGCSApplicationCredentials,
+			contracts.StorageGCSBucket,
+			contracts.StorageAzureAccountName,
+			contracts.StorageAzureAccessKey,
+			contracts.StorageAzureSASToken,
+			contracts.StorageAzureTenantID,
+			contracts.StorageAzureClientID,
+			contracts.StorageAzureClientSecret,
+			contracts.StorageAzureAuthorityID,
+			contracts.StorageAzureContainerName,
+			contracts.StorageAzureEndpoint,
+			contracts.StorageAzureUseFabricEndpoint,
+			contracts.StorageAzureMSIEndpoint,
+			contracts.StorageAzureUseAzureCLI,
+			contracts.StorageAllowHTTP,
+			contracts.StorageAllowInvalidCertificates,
+			contracts.StorageConnectTimeout,
+			contracts.StorageTimeout,
+			contracts.StorageUserAgent,
+			contracts.StorageProxyURL,
+		}
+
+		for _, c := range constants {
+			if c == "" {
+				t.Fatal("Found empty constant")
 			}
-			if originalSecretKey != "" {
-				os.Setenv("AWS_SECRET_ACCESS_KEY", originalSecretKey)
-			} else {
-				os.Unsetenv("AWS_SECRET_ACCESS_KEY")
+		}
+	})
+
+	t.Run("no duplicate values", func(t *testing.T) {
+		constants := []string{
+			contracts.StorageAccessKeyID,
+			contracts.StorageSecretAccessKey,
+			contracts.StorageSessionToken,
+			contracts.StorageRegion,
+			contracts.StorageEndpoint,
+			contracts.StorageAWSEndpoint,
+			contracts.StorageVirtualHostedStyleRequest,
+			contracts.StorageUnsignedPayload,
+			contracts.StorageConditionalPut,
+			contracts.StorageCopyIfNotExists,
+			contracts.StorageS3Express,
+			contracts.StorageRoleArn,
+			contracts.StorageRoleSessionName,
+			contracts.StorageWebIdentityTokenFile,
+			contracts.StorageDefaultRegion,
+			contracts.StorageBucket,
+			contracts.StorageSkipSignature,
+			contracts.StorageDisableTagging,
+			contracts.StorageRequestPayer,
+			contracts.StorageGCSServiceAccount,
+			contracts.StorageGCSServiceAccountKey,
+			contracts.StorageGCSApplicationCredentials,
+			contracts.StorageGCSBucket,
+			contracts.StorageAzureAccountName,
+			contracts.StorageAzureAccessKey,
+			contracts.StorageAzureSASToken,
+			contracts.StorageAzureTenantID,
+			contracts.StorageAzureClientID,
+			contracts.StorageAzureClientSecret,
+			contracts.StorageAzureAuthorityID,
+			contracts.StorageAzureContainerName,
+			contracts.StorageAzureEndpoint,
+			contracts.StorageAzureUseFabricEndpoint,
+			contracts.StorageAzureMSIEndpoint,
+			contracts.StorageAzureUseAzureCLI,
+			contracts.StorageAllowHTTP,
+			contracts.StorageAllowInvalidCertificates,
+			contracts.StorageConnectTimeout,
+			contracts.StorageTimeout,
+			contracts.StorageUserAgent,
+			contracts.StorageProxyURL,
+		}
+
+		seen := make(map[string]bool)
+		for _, c := range constants {
+			if seen[c] {
+				t.Fatalf("Duplicate constant value: %s", c)
 			}
-			if originalRegion != "" {
-				os.Setenv("AWS_REGION", originalRegion)
-			} else {
-				os.Unsetenv("AWS_REGION")
-			}
-		}()
-
-		// Test connection (environment variables should be set by Rust code)
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
-		if err != nil {
-			t.Fatalf(" ❌Failed to connect with S3 options: %v", err)
+			seen[c] = true
 		}
-		defer conn.Close()
-
-		// Note: We can't directly verify environment variables were set because
-		// they're set in the Rust code, but if the connection succeeds, it means
-		// the configuration was processed without errors
-		t.Log("✅ S3 basic configuration processed successfully")
-	})
-
-	t.Run("S3 Configuration with Session Token", func(t *testing.T) {
-		// Test with S3 configuration including session token
-		accessKey := "test-access-key"
-		secretKey := "test-secret-key"
-		sessionToken := "test-session-token"
-		region := "us-west-2"
-
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				S3Config: &contracts.S3Config{
-					AccessKeyID:     &accessKey,
-					SecretAccessKey: &secretKey,
-					SessionToken:    &sessionToken,
-					Region:          &region,
-				},
-			},
-		}
-
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
-		if err != nil {
-			t.Fatalf(" ❌Failed to connect with S3 session token: %v", err)
-		}
-		defer conn.Close()
-
-		t.Log("✅ S3 configuration with session token processed successfully")
-	})
-
-	t.Run("S3 Configuration with Profile", func(t *testing.T) {
-		// Test with AWS profile configuration
-		profile := "test-profile"
-		region := "eu-west-1"
-
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				S3Config: &contracts.S3Config{
-					Profile: &profile,
-					Region:  &region,
-				},
-			},
-		}
-
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
-		if err != nil {
-			t.Fatalf(" ❌Failed to connect with S3 profile: %v", err)
-		}
-		defer conn.Close()
-
-		t.Log("✅ S3 configuration with profile processed successfully")
-	})
-
-	t.Run("S3 Configuration Anonymous Access", func(t *testing.T) {
-		// Test with anonymous S3 access
-		anonymous := true
-		region := "us-east-1"
-
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				S3Config: &contracts.S3Config{
-					AnonymousAccess: &anonymous,
-					Region:          &region,
-				},
-			},
-		}
-
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
-		if err != nil {
-			t.Fatalf(" ❌Failed to connect with anonymous S3 access: %v", err)
-		}
-		defer conn.Close()
-
-		t.Log("✅ S3 anonymous access configuration processed successfully")
-	})
-
-	t.Run("S3 Configuration with Custom Endpoint", func(t *testing.T) {
-		// Test with custom S3 endpoint (e.g., MinIO)
-		endpoint := "http://localhost:9000"
-		accessKey := "minioadmin"
-		secretKey := "minioadmin"
-		forcePathStyle := true
-
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				S3Config: &contracts.S3Config{
-					Endpoint:        &endpoint,
-					AccessKeyID:     &accessKey,
-					SecretAccessKey: &secretKey,
-					ForcePathStyle:  &forcePathStyle,
-				},
-			},
-		}
-
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
-		if err != nil {
-			t.Fatalf(" ❌Failed to connect with custom S3 endpoint: %v", err)
-		}
-		defer conn.Close()
-
-		t.Log("✅ S3 custom endpoint configuration processed successfully")
 	})
 }
 
-func TestCloudStorageOptionsPlaceholders(t *testing.T) {
-	// Setup test database
-	tempDir, err := os.MkdirTemp("", "lancedb_test_cloud_storage_")
+func TestConnectWithStorageOptions(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lancedb_test_storage_opts_")
 	if err != nil {
-		t.Fatalf(" ❌Failed to create temp dir: %v", err)
+		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	t.Run("Azure Configuration Placeholder", func(t *testing.T) {
-		// Test that Azure configuration is accepted (even if not implemented)
-		accountName := "testaccount"
-		accessKey := "test-access-key"
-
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				AzureConfig: &contracts.AzureConfig{
-					AccountName: &accountName,
-					AccessKey:   &accessKey,
-				},
+	t.Run("S3-style options with local path", func(t *testing.T) {
+		conn, err := lancedb.Connect(context.Background(), tempDir, &contracts.ConnectionOptions{
+			StorageOptions: map[string]string{
+				contracts.StorageAccessKeyID:     "test-key",
+				contracts.StorageSecretAccessKey: "test-secret",
+				contracts.StorageRegion:          "us-east-1",
 			},
-		}
-
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
+		})
 		if err != nil {
-			t.Fatalf(" ❌Failed to connect with Azure options: %v", err)
+			t.Fatalf("Failed to connect: %v", err)
 		}
 		defer conn.Close()
-
-		t.Log("✅ Azure configuration placeholder processed successfully")
 	})
 
-	t.Run("GCS Configuration Placeholder", func(t *testing.T) {
-		// Test that GCS configuration is accepted (even if not implemented)
-		projectID := "test-project"
-		serviceAccountPath := "/path/to/service-account.json"
-
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				GCSConfig: &contracts.GCSConfig{
-					ProjectID:          &projectID,
-					ServiceAccountPath: &serviceAccountPath,
-				},
+	t.Run("GCS-style options with local path", func(t *testing.T) {
+		conn, err := lancedb.Connect(context.Background(), tempDir, &contracts.ConnectionOptions{
+			StorageOptions: map[string]string{
+				contracts.StorageGCSServiceAccount: "/path/to/sa.json",
 			},
-		}
-
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
+		})
 		if err != nil {
-			t.Fatalf(" ❌Failed to connect with GCS options: %v", err)
+			t.Fatalf("Failed to connect: %v", err)
 		}
 		defer conn.Close()
-
-		t.Log("✅ GCS configuration placeholder processed successfully")
 	})
-}
 
-func TestGeneralStorageOptions(t *testing.T) {
-	// Setup test database
-	tempDir, err := os.MkdirTemp("", "lancedb_test_general_storage_")
-	if err != nil {
-		t.Fatalf(" ❌Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	t.Run("General Storage Options Placeholders", func(t *testing.T) {
-		// Test that general storage options are accepted (even if not implemented)
-		blockSize := 4096
-		maxRetries := 3
-		timeout := 30
-		allowHTTP := true
-		userAgent := "LanceDB-Go/1.0"
-
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				BlockSize:  &blockSize,
-				MaxRetries: &maxRetries,
-				Timeout:    &timeout,
-				AllowHTTP:  &allowHTTP,
-				UserAgent:  &userAgent,
+	t.Run("Azure-style options with local path", func(t *testing.T) {
+		conn, err := lancedb.Connect(context.Background(), tempDir, &contracts.ConnectionOptions{
+			StorageOptions: map[string]string{
+				contracts.StorageAzureAccountName: "testaccount",
+				contracts.StorageAzureAccessKey:   "testkey",
 			},
-		}
-
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
+		})
 		if err != nil {
-			t.Fatalf(" ❌Failed to connect with general storage options: %v", err)
+			t.Fatalf("Failed to connect: %v", err)
 		}
 		defer conn.Close()
-
-		t.Log("✅ General storage options placeholders processed successfully")
 	})
 
-	t.Run("Local Configuration", func(t *testing.T) {
-		// Test local storage configuration
-		createDir := true
-		useMemoryMap := true
-		syncWrites := false
-
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				LocalConfig: &contracts.LocalConfig{
-					CreateDirIfNotExists: &createDir,
-					UseMemoryMap:         &useMemoryMap,
-					SyncWrites:           &syncWrites,
-				},
+	t.Run("mixed backend options with local path", func(t *testing.T) {
+		conn, err := lancedb.Connect(context.Background(), tempDir, &contracts.ConnectionOptions{
+			StorageOptions: map[string]string{
+				contracts.StorageAccessKeyID:      "key",
+				contracts.StorageAzureAccountName: "account",
+				contracts.StorageAllowHTTP:        "true",
 			},
-		}
-
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
+		})
 		if err != nil {
-			t.Fatalf(" ❌Failed to connect with local storage options: %v", err)
+			t.Fatalf("Failed to connect: %v", err)
 		}
 		defer conn.Close()
-
-		t.Log("✅ Local storage configuration processed successfully")
-	})
-}
-
-func TestCombinedStorageOptions(t *testing.T) {
-	// Setup test database
-	tempDir, err := os.MkdirTemp("", "lancedb_test_combined_storage_")
-	if err != nil {
-		t.Fatalf(" ❌Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	t.Run("Combined S3 and General Options", func(t *testing.T) {
-		// Test combination of S3 and general options
-		accessKey := "test-access-key"
-		secretKey := "test-secret-key"
-		region := "us-east-1"
-		blockSize := 8192
-		maxRetries := 5
-
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				S3Config: &contracts.S3Config{
-					AccessKeyID:     &accessKey,
-					SecretAccessKey: &secretKey,
-					Region:          &region,
-				},
-				BlockSize:  &blockSize,
-				MaxRetries: &maxRetries,
-			},
-		}
-
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
-		if err != nil {
-			t.Fatalf(" ❌Failed to connect with combined options: %v", err)
-		}
-		defer conn.Close()
-
-		t.Log("✅ Combined S3 and general options processed successfully")
-	})
-
-	t.Run("All Storage Options Combined", func(t *testing.T) {
-		// Test all storage options combined (comprehensive test)
-		accessKey := "test-access-key"
-		secretKey := "test-secret-key"
-		region := "us-east-1"
-		accountName := "testaccount"
-		projectID := "test-project"
-		blockSize := 4096
-		timeout := 30
-		createDir := true
-
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				S3Config: &contracts.S3Config{
-					AccessKeyID:     &accessKey,
-					SecretAccessKey: &secretKey,
-					Region:          &region,
-				},
-				AzureConfig: &contracts.AzureConfig{
-					AccountName: &accountName,
-				},
-				GCSConfig: &contracts.GCSConfig{
-					ProjectID: &projectID,
-				},
-				LocalConfig: &contracts.LocalConfig{
-					CreateDirIfNotExists: &createDir,
-				},
-				BlockSize: &blockSize,
-				Timeout:   &timeout,
-			},
-		}
-
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
-		if err != nil {
-			t.Fatalf(" ❌Failed to connect with all storage options: %v", err)
-		}
-		defer conn.Close()
-
-		t.Log("✅ All storage options combined processed successfully")
-	})
-}
-
-func TestStorageOptionsErrorCases(t *testing.T) {
-	t.Run("Invalid URI with StorageOptions", func(t *testing.T) {
-		// Test error handling with invalid URI
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{
-				S3Config: &contracts.S3Config{},
-			},
-		}
-
-		// Use an obviously invalid URI that should cause an error
-		_, err := lancedb.Connect(context.Background(), "invalid://not-a-valid-path", options)
-		if err == nil {
-			t.Log("Note: Invalid URI was accepted (might be expected behavior)")
-		} else {
-			t.Logf("✅ Correctly handled error with invalid URI: %v", err)
-		}
-	})
-
-	t.Run("Malformed StorageOptions JSON", func(t *testing.T) {
-		// This test is mainly to ensure our JSON serialization works
-		// The actual malformed JSON would be caught during marshaling
-		options := &contracts.ConnectionOptions{
-			StorageOptions: &contracts.StorageOptions{}, // Empty is valid
-		}
-
-		tempDir, err := os.MkdirTemp("", "lancedb_test_malformed_")
-		if err != nil {
-			t.Fatalf(" ❌Failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tempDir)
-
-		conn, err := lancedb.Connect(context.Background(), tempDir, options)
-		if err != nil {
-			t.Fatalf("Unexpected error with empty storage options: %v", err)
-		}
-		defer conn.Close()
-
-		t.Log("✅ Empty storage options handled correctly")
 	})
 }

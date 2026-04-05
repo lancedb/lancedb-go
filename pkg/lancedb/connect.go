@@ -35,7 +35,7 @@ func Connect(_ context.Context, uri string, options *contracts.ConnectionOptions
 	var result *C.SimpleResult
 
 	// Use storage options if provided
-	if options != nil && options.StorageOptions != nil {
+	if options != nil && len(options.StorageOptions) > 0 {
 		// Serialize storage options to JSON
 		optionsJSON, err := json.Marshal(options.StorageOptions)
 		if err != nil {

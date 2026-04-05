@@ -74,7 +74,8 @@ if [[ "$PLATFORM" == "darwin" ]]; then
 fi
 
 # Build the library
-CARGO_TARGET_DIR="$RUST_DIR/target" cargo build --release --target "$RUST_TARGET"
+CARGO_TARGET_DIR="$RUST_DIR/target" cargo build --release --target "$RUST_TARGET" \
+    --features aws,gcs,azure
 
 # Copy library to distribution directory
 echo "📦 Copying library files..."

@@ -40,6 +40,9 @@ tokio-stream = "0.1"
 default = []
 remote = ["lancedb/remote"]
 fp16kernels = ["lancedb/fp16kernels"]
+aws = ["lancedb/aws"]
+gcs = ["lancedb/gcs"]
+azure = ["lancedb/azure"]
 
 [build-dependencies]
 cbindgen = "0.26"
