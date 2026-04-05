@@ -74,9 +74,10 @@ pub extern "C" fn simple_lancedb_connect_with_options(
         // Parse storage options as flat key-value map
         let storage_options: HashMap<String, String> = match serde_json::from_str(&options_str) {
             Ok(opts) => opts,
-            Err(e) => {
-                return SimpleResult::error(format!("Failed to parse storage options JSON: {}", e))
-            }
+            Err(_) => return SimpleResult::error(
+                "Failed to parse storage options: expected JSON object with string keys and values"
+                    .to_string(),
+            ),
         };
 
         let rt = get_simple_runtime();

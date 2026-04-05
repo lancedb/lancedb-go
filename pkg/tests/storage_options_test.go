@@ -79,11 +79,11 @@ func TestStorageOptionsJSONSerialization(t *testing.T) {
 		if err := json.Unmarshal(data, &parsed); err != nil {
 			t.Fatalf("Failed to unmarshal: %v", err)
 		}
-		if parsed["access_key_id"] != "AKIA..." {
-			t.Fatalf("Expected AKIA..., got %s", parsed["access_key_id"])
+		if parsed[contracts.StorageAccessKeyID] != "AKIA..." {
+			t.Fatalf("Expected AKIA..., got %s", parsed[contracts.StorageAccessKeyID])
 		}
-		if parsed["region"] != "us-east-1" {
-			t.Fatalf("Expected us-east-1, got %s", parsed["region"])
+		if parsed[contracts.StorageRegion] != "us-east-1" {
+			t.Fatalf("Expected us-east-1, got %s", parsed[contracts.StorageRegion])
 		}
 	})
 
@@ -110,52 +110,52 @@ func TestStorageOptionsJSONSerialization(t *testing.T) {
 }
 
 func TestStorageKeyConstants(t *testing.T) {
-	t.Run("all constants are non-empty", func(t *testing.T) {
-		constants := []string{
-			contracts.StorageAccessKeyID,
-			contracts.StorageSecretAccessKey,
-			contracts.StorageSessionToken,
-			contracts.StorageRegion,
-			contracts.StorageEndpoint,
-			contracts.StorageAWSEndpoint,
-			contracts.StorageVirtualHostedStyleRequest,
-			contracts.StorageUnsignedPayload,
-			contracts.StorageConditionalPut,
-			contracts.StorageCopyIfNotExists,
-			contracts.StorageS3Express,
-			contracts.StorageRoleArn,
-			contracts.StorageRoleSessionName,
-			contracts.StorageWebIdentityTokenFile,
-			contracts.StorageDefaultRegion,
-			contracts.StorageBucket,
-			contracts.StorageSkipSignature,
-			contracts.StorageDisableTagging,
-			contracts.StorageRequestPayer,
-			contracts.StorageGCSServiceAccount,
-			contracts.StorageGCSServiceAccountKey,
-			contracts.StorageGCSApplicationCredentials,
-			contracts.StorageGCSBucket,
-			contracts.StorageAzureAccountName,
-			contracts.StorageAzureAccessKey,
-			contracts.StorageAzureSASToken,
-			contracts.StorageAzureTenantID,
-			contracts.StorageAzureClientID,
-			contracts.StorageAzureClientSecret,
-			contracts.StorageAzureAuthorityID,
-			contracts.StorageAzureContainerName,
-			contracts.StorageAzureEndpoint,
-			contracts.StorageAzureUseFabricEndpoint,
-			contracts.StorageAzureMSIEndpoint,
-			contracts.StorageAzureUseAzureCLI,
-			contracts.StorageAllowHTTP,
-			contracts.StorageAllowInvalidCertificates,
-			contracts.StorageConnectTimeout,
-			contracts.StorageTimeout,
-			contracts.StorageUserAgent,
-			contracts.StorageProxyURL,
-		}
+	allStorageKeys := []string{
+		contracts.StorageAccessKeyID,
+		contracts.StorageSecretAccessKey,
+		contracts.StorageSessionToken,
+		contracts.StorageRegion,
+		contracts.StorageEndpoint,
+		contracts.StorageAWSEndpoint,
+		contracts.StorageVirtualHostedStyleRequest,
+		contracts.StorageUnsignedPayload,
+		contracts.StorageConditionalPut,
+		contracts.StorageCopyIfNotExists,
+		contracts.StorageS3Express,
+		contracts.StorageRoleArn,
+		contracts.StorageRoleSessionName,
+		contracts.StorageWebIdentityTokenFile,
+		contracts.StorageDefaultRegion,
+		contracts.StorageBucket,
+		contracts.StorageSkipSignature,
+		contracts.StorageDisableTagging,
+		contracts.StorageRequestPayer,
+		contracts.StorageGCSServiceAccount,
+		contracts.StorageGCSServiceAccountKey,
+		contracts.StorageGCSApplicationCredentials,
+		contracts.StorageGCSBucket,
+		contracts.StorageAzureAccountName,
+		contracts.StorageAzureAccessKey,
+		contracts.StorageAzureSASToken,
+		contracts.StorageAzureTenantID,
+		contracts.StorageAzureClientID,
+		contracts.StorageAzureClientSecret,
+		contracts.StorageAzureAuthorityID,
+		contracts.StorageAzureContainerName,
+		contracts.StorageAzureEndpoint,
+		contracts.StorageAzureUseFabricEndpoint,
+		contracts.StorageAzureMSIEndpoint,
+		contracts.StorageAzureUseAzureCLI,
+		contracts.StorageAllowHTTP,
+		contracts.StorageAllowInvalidCertificates,
+		contracts.StorageConnectTimeout,
+		contracts.StorageTimeout,
+		contracts.StorageUserAgent,
+		contracts.StorageProxyURL,
+	}
 
-		for _, c := range constants {
+	t.Run("all constants are non-empty", func(t *testing.T) {
+		for _, c := range allStorageKeys {
 			if c == "" {
 				t.Fatal("Found empty constant")
 			}
@@ -163,52 +163,8 @@ func TestStorageKeyConstants(t *testing.T) {
 	})
 
 	t.Run("no duplicate values", func(t *testing.T) {
-		constants := []string{
-			contracts.StorageAccessKeyID,
-			contracts.StorageSecretAccessKey,
-			contracts.StorageSessionToken,
-			contracts.StorageRegion,
-			contracts.StorageEndpoint,
-			contracts.StorageAWSEndpoint,
-			contracts.StorageVirtualHostedStyleRequest,
-			contracts.StorageUnsignedPayload,
-			contracts.StorageConditionalPut,
-			contracts.StorageCopyIfNotExists,
-			contracts.StorageS3Express,
-			contracts.StorageRoleArn,
-			contracts.StorageRoleSessionName,
-			contracts.StorageWebIdentityTokenFile,
-			contracts.StorageDefaultRegion,
-			contracts.StorageBucket,
-			contracts.StorageSkipSignature,
-			contracts.StorageDisableTagging,
-			contracts.StorageRequestPayer,
-			contracts.StorageGCSServiceAccount,
-			contracts.StorageGCSServiceAccountKey,
-			contracts.StorageGCSApplicationCredentials,
-			contracts.StorageGCSBucket,
-			contracts.StorageAzureAccountName,
-			contracts.StorageAzureAccessKey,
-			contracts.StorageAzureSASToken,
-			contracts.StorageAzureTenantID,
-			contracts.StorageAzureClientID,
-			contracts.StorageAzureClientSecret,
-			contracts.StorageAzureAuthorityID,
-			contracts.StorageAzureContainerName,
-			contracts.StorageAzureEndpoint,
-			contracts.StorageAzureUseFabricEndpoint,
-			contracts.StorageAzureMSIEndpoint,
-			contracts.StorageAzureUseAzureCLI,
-			contracts.StorageAllowHTTP,
-			contracts.StorageAllowInvalidCertificates,
-			contracts.StorageConnectTimeout,
-			contracts.StorageTimeout,
-			contracts.StorageUserAgent,
-			contracts.StorageProxyURL,
-		}
-
 		seen := make(map[string]bool)
-		for _, c := range constants {
+		for _, c := range allStorageKeys {
 			if seen[c] {
 				t.Fatalf("Duplicate constant value: %s", c)
 			}

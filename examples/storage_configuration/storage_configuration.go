@@ -70,7 +70,7 @@ func demonstrateLocalStorage(ctx context.Context) error {
 	fmt.Printf("  Local storage at: %s\n", tempDir)
 
 	// Test basic operations
-	if err := testStorageConfiguration("Local", conn, ctx); err != nil {
+	if err := testStorageConfiguration(ctx, "Local", conn); err != nil {
 		return fmt.Errorf("local storage test failed: %w", err)
 	}
 
@@ -150,8 +150,8 @@ func printConfig(name string, opts map[string]string) {
 
 // Helper functions
 
-func testStorageConfiguration(name string, conn IConnection, ctx context.Context) error {
-	table, schema, err := createTestTable(conn, ctx, fmt.Sprintf("test_%s", name))
+func testStorageConfiguration(ctx context.Context, name string, conn IConnection) error {
+	table, schema, err := createTestTable(ctx, conn, fmt.Sprintf("test_%s", name))
 	if err != nil {
 		return err
 	}
@@ -173,7 +173,7 @@ func testStorageConfiguration(name string, conn IConnection, ctx context.Context
 	return nil
 }
 
-func createTestTable(conn IConnection, ctx context.Context, tableName string) (ITable, *arrow.Schema, error) {
+func createTestTable(ctx context.Context, conn IConnection, tableName string) (ITable, *arrow.Schema, error) {
 	fields := []arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
 		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: false},
