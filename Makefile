@@ -114,16 +114,11 @@ bench: build check-libraries
 	@echo "Running benchmarks for $(PLATFORM_ARCH)..."
 	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go test -bench=. -benchmem ./...
 
-# Run integration tests (requires Docker)
+# Run integration tests (requires Docker — uses testcontainers)
 test-integration: build check-libraries
-	@echo "Starting MinIO..."
-	docker compose up -d --wait minio
-	docker compose up createbucket
-	@echo "Running integration tests..."
+	@echo "Running integration tests (testcontainers will manage MinIO)..."
 	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" \
-		go test -v -tags integration ./...
-	@echo "Stopping MinIO..."
-	docker compose down
+		go test -v -tags integration -timeout 120s ./...
 
 # Quick build for user projects (convenience target)
 build-go: check-libraries

@@ -8,32 +8,33 @@ package lancedb_test
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/memory"
 	"github.com/lancedb/lancedb-go/pkg/contracts"
 	"github.com/lancedb/lancedb-go/pkg/lancedb"
+	miniogo "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
+	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 )
 
 const (
-	minioEndpoint  = "http://localhost:9000"
-	minioAccessKey = "minioadmin"
-	minioSecretKey = "minioadmin"
-	minioBucket    = "test-bucket"
-	minioRegion    = "us-east-1"
+	minioBucket = "test-bucket"
+	minioRegion = "us-east-1"
 )
+
+// Package-level state set by TestMain.
+var minioEndpoint string
 
 func minioOptions() *contracts.ConnectionOptions {
 	return &contracts.ConnectionOptions{
 		StorageOptions: map[string]string{
-			contracts.StorageAccessKeyID:               minioAccessKey,
-			contracts.StorageSecretAccessKey:           minioSecretKey,
+			contracts.StorageAccessKeyID:               "minioadmin",
+			contracts.StorageSecretAccessKey:           "minioadmin",
 			contracts.StorageEndpoint:                  minioEndpoint,
 			contracts.StorageRegion:                    minioRegion,
 			contracts.StorageAllowHTTP:                 "true",
@@ -43,31 +44,50 @@ func minioOptions() *contracts.ConnectionOptions {
 }
 
 func TestMain(m *testing.M) {
-	// Wait for MinIO to be ready (bucket is created by the createbucket
-	// sidecar in docker-compose.yml)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 
-	for {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, minioEndpoint+"/minio/health/live", nil)
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				break
-			}
-		}
-		if ctx.Err() != nil {
-			fmt.Fprintf(os.Stderr, "MinIO not ready after 30s: %v\n", err)
-			os.Exit(1)
-		}
-		time.Sleep(500 * time.Millisecond)
+	// Start MinIO via testcontainers
+	container, err := tcminio.Run(ctx, "minio/minio:latest",
+		tcminio.WithUsername("minioadmin"),
+		tcminio.WithPassword("minioadmin"),
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to start MinIO container: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Bucket is created synchronously by `docker compose up createbucket`
-	// in the Makefile before `go test` runs; no additional wait is needed.
+	// Get the dynamic endpoint
+	connStr, err := container.ConnectionString(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to get MinIO connection string: %v\n", err)
+		os.Exit(1)
+	}
+	minioEndpoint = "http://" + connStr
 
-	os.Exit(m.Run())
+	// Create the test bucket via MinIO client
+	mc, err := miniogo.New(connStr, &miniogo.Options{
+		Creds:  credentials.NewStaticV4(container.Username, container.Password, ""),
+		Secure: false,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create MinIO client: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := mc.MakeBucket(ctx, minioBucket, miniogo.MakeBucketOptions{Region: minioRegion}); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create bucket: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Run tests
+	code := m.Run()
+
+	// Cleanup
+	if err := container.Terminate(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to terminate container: %v\n", err)
+	}
+
+	os.Exit(code)
 }
 
 func TestConnectMinIO(t *testing.T) {
@@ -258,8 +278,8 @@ func TestMinIOInvalidEndpoint(t *testing.T) {
 	ctx := context.Background()
 	opts := &contracts.ConnectionOptions{
 		StorageOptions: map[string]string{
-			contracts.StorageAccessKeyID:               minioAccessKey,
-			contracts.StorageSecretAccessKey:           minioSecretKey,
+			contracts.StorageAccessKeyID:               "minioadmin",
+			contracts.StorageSecretAccessKey:           "minioadmin",
 			contracts.StorageEndpoint:                  "http://localhost:19999",
 			contracts.StorageRegion:                    minioRegion,
 			contracts.StorageAllowHTTP:                 "true",
