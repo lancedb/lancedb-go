@@ -136,7 +136,7 @@ jobs:
       - name: Lint Rust code
         run: |
           cd rust
-          cargo clippy --target ${{ matrix.rust-target }} -- -D warnings
+          cargo clippy --target ${{ matrix.rust-target }} --features aws,gcs,azure -- -D warnings
 
       - name: Build using new binary distribution system
         shell: bash

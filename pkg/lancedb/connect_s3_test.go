@@ -64,24 +64,8 @@ func TestMain(m *testing.M) {
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// Wait for bucket to exist (created by docker-compose sidecar)
-	bucketCtx, bucketCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer bucketCancel()
-	for {
-		req, _ := http.NewRequestWithContext(bucketCtx, http.MethodHead, minioEndpoint+"/"+minioBucket, nil)
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				break
-			}
-		}
-		if bucketCtx.Err() != nil {
-			fmt.Fprintf(os.Stderr, "Bucket %s not ready after 30s\n", minioBucket)
-			os.Exit(1)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
+	// Bucket is created synchronously by `docker compose up createbucket`
+	// in the Makefile before `go test` runs; no additional wait is needed.
 
 	os.Exit(m.Run())
 }
