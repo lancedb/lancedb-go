@@ -258,9 +258,9 @@ jobs:
 
       - name: Install and run golangci-lint
         if: matrix.os == 'ubuntu-latest'
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.55.2
+          version: v1.64.8
           skip-cache: false
           args: --config .golangci.yml
 
