@@ -6,6 +6,7 @@
 use crate::ffi::{from_c_str, SimpleResult};
 use crate::runtime::get_simple_runtime;
 use lancedb::connect;
+use std::collections::HashMap;
 use std::os::raw::{c_char, c_void};
 
 /// Connect to a LanceDB database (simple version)
@@ -70,27 +71,22 @@ pub extern "C" fn simple_lancedb_connect_with_options(
             Err(e) => return SimpleResult::error(format!("Invalid options JSON: {}", e)),
         };
 
-        // Parse storage options from JSON
-        let storage_options: serde_json::Value = match serde_json::from_str(&options_str) {
+        // Parse storage options as flat key-value map
+        let storage_options: HashMap<String, String> = match serde_json::from_str(&options_str) {
             Ok(opts) => opts,
-            Err(e) => {
-                return SimpleResult::error(format!("Failed to parse storage options JSON: {}", e))
-            }
+            Err(_) => return SimpleResult::error(
+                "Failed to parse storage options: expected JSON object with string keys and values"
+                    .to_string(),
+            ),
         };
 
         let rt = get_simple_runtime();
 
         match rt.block_on(async {
-            // For now, we'll handle S3 credentials via environment variables or AWS config
-            // This is a simplified approach until LanceDB's API structure is clearer
-
-            // Apply AWS credentials if provided
-            if let Some(s3_config) = storage_options.get("s3_config") {
-                apply_s3_environment_variables(s3_config);
-            }
-
-            // Create connection with URI (storage options applied via environment)
-            connect(&uri_str).execute().await
+            connect(&uri_str)
+                .storage_options(storage_options)
+                .execute()
+                .await
         }) {
             Ok(conn) => {
                 let boxed_conn = Box::new(conn);
@@ -109,38 +105,6 @@ pub extern "C" fn simple_lancedb_connect_with_options(
             "Panic in simple_lancedb_connect_with_options".to_string(),
         ))),
     }
-}
-
-/// Apply AWS S3 configuration via environment variables
-/// This is a simplified approach that works with most AWS SDK integrations
-fn apply_s3_environment_variables(s3_config: &serde_json::Value) {
-    use std::env;
-
-    // Set AWS credentials via environment variables if provided
-    if let Some(access_key) = s3_config.get("access_key_id").and_then(|v| v.as_str()) {
-        env::set_var("AWS_ACCESS_KEY_ID", access_key);
-    }
-
-    if let Some(secret_key) = s3_config.get("secret_access_key").and_then(|v| v.as_str()) {
-        env::set_var("AWS_SECRET_ACCESS_KEY", secret_key);
-    }
-
-    if let Some(session_token) = s3_config.get("session_token").and_then(|v| v.as_str()) {
-        env::set_var("AWS_SESSION_TOKEN", session_token);
-    }
-
-    if let Some(region) = s3_config.get("region").and_then(|v| v.as_str()) {
-        env::set_var("AWS_REGION", region);
-        env::set_var("AWS_DEFAULT_REGION", region);
-    }
-
-    if let Some(profile) = s3_config.get("profile").and_then(|v| v.as_str()) {
-        env::set_var("AWS_PROFILE", profile);
-    }
-
-    // Note: Other S3 options like custom endpoints, path style, etc. would need
-    // to be supported by LanceDB's connection builder API directly.
-    // For now, this provides basic AWS credential management.
 }
 
 /// Close a connection

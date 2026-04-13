@@ -36,7 +36,7 @@ jobs:
       - name: Setup Go (minimal)
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.24'
 
       - name: Check Rust formatting
         run: cd rust && cargo fmt -- --check
@@ -80,7 +80,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.24'
           cache: true
 
       # Install system dependencies
@@ -136,7 +136,7 @@ jobs:
       - name: Lint Rust code
         run: |
           cd rust
-          cargo clippy --target ${{ matrix.rust-target }} -- -D warnings
+          cargo clippy --target ${{ matrix.rust-target }} --features aws,gcs,azure -- -D warnings
 
       - name: Build using new binary distribution system
         shell: bash
@@ -202,13 +202,13 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact-name: linux-x64
-            go-version: '1.21'
+            go-version: '1.24'
           - os: macos-latest
             artifact-name: macos-arm64
-            go-version: '1.21'
+            go-version: '1.24'
           - os: windows-latest
             artifact-name: windows-x64
-            go-version: '1.21'
+            go-version: '1.24'
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -258,9 +258,9 @@ jobs:
 
       - name: Install and run golangci-lint
         if: matrix.os == 'ubuntu-latest'
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.55.2
+          version: v1.64.8
           skip-cache: false
           args: --config .golangci.yml
 

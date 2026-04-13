@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright The LanceDB Authors
 
-.PHONY: all build test clean install-deps install-act fmt lint lint-rust lint-go lint-go-fix lint-report examples prepare-examples run-examples run-example docs release check-libraries platform-info build-go ci-quick ci-format ci-build ci-test ci-security ci-docs ci-examples ci-local ci-list ci-stage1 ci-stage2 ci-stage3 ci-debug ci-clean ci-graph
+.PHONY: all build test test-integration clean install-deps install-act fmt lint lint-rust lint-go lint-go-fix lint-report examples prepare-examples run-examples run-example docs release check-libraries platform-info build-go ci-quick ci-format ci-build ci-test ci-security ci-docs ci-examples ci-local ci-list ci-stage1 ci-stage2 ci-stage3 ci-debug ci-clean ci-graph
 
 # Default target
 all: build test
@@ -113,6 +113,12 @@ test: build check-libraries
 bench: build check-libraries
 	@echo "Running benchmarks for $(PLATFORM_ARCH)..."
 	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go test -bench=. -benchmem ./...
+
+# Run integration tests (requires Docker — uses testcontainers)
+test-integration: build check-libraries
+	@echo "Running integration tests (testcontainers will manage MinIO)..."
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" \
+		go test -v -tags integration -timeout 120s ./...
 
 # Quick build for user projects (convenience target)
 build-go: check-libraries

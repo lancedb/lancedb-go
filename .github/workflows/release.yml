@@ -365,7 +365,7 @@ jobs:
           protoc --version
           
           cd rust
-          cargo build --release --target ${{ matrix.rust_target }}
+          cargo build --release --target ${{ matrix.rust_target }} --features aws,gcs,azure
         env:
           RUST_TARGET: ${{ matrix.rust_target }}
           PROTOC: ${{ env.PROTOC }}
@@ -376,12 +376,12 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "🔨 Building for ${{ matrix.platform }}-${{ matrix.arch }} on Windows..."
-          
+
           # Debug environment for protoc issues
           Write-Host "🔍 Environment debug:"
           Write-Host "PATH: $env:PATH"
           Write-Host "PROTOC: $env:PROTOC"
-          
+
           # Ensure protoc is available
           $protoc_cmd = Get-Command protoc -ErrorAction SilentlyContinue
           if (-not $protoc_cmd) {
@@ -389,19 +389,19 @@ jobs:
             Write-Host "Current PATH: $env:PATH"
             exit 1
           }
-          
+
           # Set PROTOC environment variable if not set
           if (-not $env:PROTOC) {
             $env:PROTOC = $protoc_cmd.Source
           }
-          
+
           Write-Host "✅ protoc is ready for build"
           Write-Host "protoc path: $($protoc_cmd.Source)"
           Write-Host "PROTOC env var: $env:PROTOC"
           & protoc --version
-          
+
           Set-Location rust
-          cargo build --release --target ${{ matrix.rust_target }}
+          cargo build --release --target ${{ matrix.rust_target }} --features aws,gcs,azure
         env:
           RUST_TARGET: ${{ matrix.rust_target }}
           PROTOC: ${{ env.PROTOC }}
@@ -430,7 +430,7 @@ jobs:
           echo "✅ protoc is ready: $(protoc --version)"
 
           cd rust
-          cargo build --release --target "${{ matrix.rust_target }}"
+          cargo build --release --target "${{ matrix.rust_target }}" --features aws,gcs,azure
         env:
           RUST_TARGET: ${{ matrix.rust_target }}
           PROTOC: ${{ env.PROTOC }}

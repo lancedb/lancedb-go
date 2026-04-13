@@ -13,18 +13,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"sync"
 	"unsafe"
 
 	"github.com/lancedb/lancedb-go/pkg/contracts"
 	"github.com/lancedb/lancedb-go/pkg/internal"
 )
 
+var initOnce sync.Once
+
 // Connect establishes a connection to a LanceDB database with context
 //
 //nolint:gocritic
 func Connect(_ context.Context, uri string, options *contracts.ConnectionOptions) (contracts.IConnection, error) {
-	// Initialize the library
-	C.simple_lancedb_init()
+	// Initialize the library (idempotent, but avoid redundant FFI calls)
+	initOnce.Do(func() { C.simple_lancedb_init() })
 
 	cURI := C.CString(uri)
 	// #nosec G103 - Required for freeing C allocated string memory
@@ -35,7 +38,7 @@ func Connect(_ context.Context, uri string, options *contracts.ConnectionOptions
 	var result *C.SimpleResult
 
 	// Use storage options if provided
-	if options != nil && options.StorageOptions != nil {
+	if options != nil && len(options.StorageOptions) > 0 {
 		// Serialize storage options to JSON
 		optionsJSON, err := json.Marshal(options.StorageOptions)
 		if err != nil {

@@ -151,14 +151,14 @@ struct SimpleResult *simple_lancedb_table_schema_ipc(void *table_handle,
 void simple_lancedb_free_ipc_data(uint8_t *data);
 
 /**
- * Execute a select query with various predicates (vector search, filters, etc.)
+ * Execute a select query and return results as JSON.
  */
 struct SimpleResult *simple_lancedb_table_select_query(void *table_handle,
                                                        const char *query_config_json,
                                                        char **result_json);
 
 /**
- * Execute a select query and return results as Arrow IPC binary data
+ * Execute a select query and return results as Arrow IPC binary data.
  */
 struct SimpleResult *simple_lancedb_table_select_query_ipc(void *table_handle,
                                                            const char *query_config_json,

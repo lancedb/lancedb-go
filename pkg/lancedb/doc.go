@@ -73,24 +73,20 @@ Local database:
 S3-based database:
 
 	opts := &contracts.ConnectionOptions{
-		StorageOptions: &contracts.StorageOptions{
-			S3Config: &contracts.S3Config{
-				Region:          "us-west-2",
-				AccessKeyId:     "your-key",
-				SecretAccessKey: "your-secret",
-			},
+		StorageOptions: map[string]string{
+			contracts.StorageAccessKeyID:     "your-key",
+			contracts.StorageSecretAccessKey: "your-secret",
+			contracts.StorageRegion:          "us-west-2",
 		},
 	}
-	db, err := contracts.Connect(context.Background(), "s3://my-bucket/db-prefix", opts)
+	db, err := lancedb.Connect(context.Background(), "s3://my-bucket/db-prefix", opts)
 
 Azure Storage:
 
 	opts := &contracts.ConnectionOptions{
-		StorageOptions: &contracts.StorageOptions{
-			AzureConfig: &contracts.AzureConfig{
-				AccountName: "your-account",
-				AccessKey:   "your-key",
-			},
+		StorageOptions: map[string]string{
+			contracts.StorageAzureAccountName: "your-account",
+			contracts.StorageAzureAccessKey:   "your-key",
 		},
 	}
 	db, err := lancedb.Connect(context.Background(), "az://container/prefix", opts)
