@@ -151,30 +151,10 @@ func (t *Table) AddRecords(_ context.Context, records []arrow.Record, _ *contrac
 		return nil
 	}
 
-	// Convert records to Arrow RecordBatch using Arrow IPC format
-	var buf bytes.Buffer
-	seeker := &seekBuffer{&buf}
-	writer, err := ipc.NewFileWriter(seeker, ipc.WithSchema(records[0].Schema()))
+	ipcBytes, err := recordsToIPCBytes(records)
 	if err != nil {
-		return fmt.Errorf("failed to create IPC writer: %w", err)
+		return err
 	}
-
-	for _, record := range records {
-		if err := writer.Write(record); err != nil {
-			err := writer.Close()
-			if err != nil {
-				return fmt.Errorf("failed to close writer: %w", err)
-			}
-			return fmt.Errorf("failed to write record to IPC: %w", err)
-		}
-	}
-
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("failed to close IPC writer: %w", err)
-	}
-
-	// Get the IPC bytes
-	ipcBytes := buf.Bytes()
 	if len(ipcBytes) == 0 {
 		return fmt.Errorf("no IPC data generated")
 	}
@@ -222,6 +202,11 @@ func (sb *seekBuffer) Seek(offset int64, whence int) (int64, error) {
 	default:
 		return 0, fmt.Errorf("unsupported whence value")
 	}
+}
+
+func (t *Table) MergeInsert(on []string) contracts.IMergeInsertBuilder {
+	onCopy := append([]string(nil), on...)
+	return &MergeInsertBuilder{table: t, on: onCopy}
 }
 
 // Query creates a new query builder for this Table

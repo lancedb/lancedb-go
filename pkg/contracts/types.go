@@ -90,3 +90,12 @@ type OptimizeStats struct {
 	Compaction *CompactionMetrics `json:"compaction,omitempty"`
 	Prune      *RemovalStats      `json:"prune,omitempty"`
 }
+
+// MergeResult's JSON tags mirror lancedb::table::MergeResult's serde form.
+type MergeResult struct {
+	Version         uint64 `json:"version"`
+	NumInsertedRows uint64 `json:"num_inserted_rows"`
+	NumUpdatedRows  uint64 `json:"num_updated_rows"`
+	NumDeletedRows  uint64 `json:"num_deleted_rows"`
+	NumAttempts     uint32 `json:"num_attempts"`
+}
