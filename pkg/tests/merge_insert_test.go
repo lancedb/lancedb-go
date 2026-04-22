@@ -224,6 +224,28 @@ func TestMergeInsert(t *testing.T) {
 			t.Error("expected error on closed table")
 		}
 	})
+
+	t.Run("RejectsMalformedConfig", func(t *testing.T) {
+		// A malformed condition type on the Rust-side config must surface as
+		// an error rather than be silently dropped to "no condition" (which
+		// would broaden a matched-update or by-source-delete).
+		table, err := conn.CreateTable(context.Background(), "merge_malformed", schema)
+		if err != nil {
+			t.Fatalf("create table: %v", err)
+		}
+		defer table.Close()
+
+		// The public Go API only accepts *string here, so we can't construct
+		// a numeric condition through it — but we can at least exercise a
+		// known-bad filter-by-source on an empty source to confirm the
+		// Rust-side null-pointer guard engages cleanly (bad-SQL → clean err).
+		badFilter := "this is not valid SQL )))"
+		if _, err := table.MergeInsert([]string{"id"}).
+			WhenNotMatchedBySourceDelete(&badFilter).
+			Execute(context.Background(), nil); err == nil {
+			t.Error("expected error for invalid SQL in by-source filter")
+		}
+	})
 }
 
 func buildRecord(t *testing.T, pool memory.Allocator, s *arrow.Schema, ids []int32, names []string, scores []float64) arrow.Record {

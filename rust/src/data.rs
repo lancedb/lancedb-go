@@ -342,25 +342,81 @@ pub extern "C" fn simple_lancedb_table_merge_insert_ipc(
             return SimpleResult::error("'on' must contain at least one column".to_string());
         }
 
-        let bool_field =
-            |k: &str| -> bool { cfg_obj.get(k).and_then(|v| v.as_bool()).unwrap_or(false) };
-        let optional_string = |k: &str| -> Option<String> {
+        // Strict field extractors: absent and explicit-null are accepted as
+        // unset, but a wrong-type value is rejected so a malformed payload
+        // cannot silently widen a matched-update or by-source-delete into
+        // an unfiltered one.
+        let bool_field = |k: &str| -> Result<bool, String> {
             match cfg_obj.get(k) {
-                Some(serde_json::Value::String(s)) => Some(s.clone()),
-                _ => None,
+                None | Some(serde_json::Value::Null) => Ok(false),
+                Some(serde_json::Value::Bool(b)) => Ok(*b),
+                Some(_) => Err(format!("'{}' must be a boolean", k)),
+            }
+        };
+        let optional_string = |k: &str| -> Result<Option<String>, String> {
+            match cfg_obj.get(k) {
+                None | Some(serde_json::Value::Null) => Ok(None),
+                Some(serde_json::Value::String(s)) => Ok(Some(s.clone())),
+                Some(_) => Err(format!("'{}' must be a string or null", k)),
+            }
+        };
+        let optional_u64 = |k: &str| -> Result<Option<u64>, String> {
+            match cfg_obj.get(k) {
+                None | Some(serde_json::Value::Null) => Ok(None),
+                Some(serde_json::Value::Number(n)) => n
+                    .as_u64()
+                    .map(Some)
+                    .ok_or_else(|| format!("'{}' must be a non-negative integer", k)),
+                Some(_) => Err(format!("'{}' must be a non-negative integer or null", k)),
+            }
+        };
+        let optional_bool = |k: &str| -> Result<Option<bool>, String> {
+            match cfg_obj.get(k) {
+                None | Some(serde_json::Value::Null) => Ok(None),
+                Some(serde_json::Value::Bool(b)) => Ok(Some(*b)),
+                Some(_) => Err(format!("'{}' must be a boolean or null", k)),
             }
         };
 
-        let when_matched_update_all = bool_field("when_matched_update_all");
-        let when_matched_condition = optional_string("when_matched_condition");
-        let when_not_matched_insert_all = bool_field("when_not_matched_insert_all");
-        let when_not_matched_by_source_delete = bool_field("when_not_matched_by_source_delete");
+        let when_matched_update_all = match bool_field("when_matched_update_all") {
+            Ok(v) => v,
+            Err(e) => return SimpleResult::error(e),
+        };
+        let when_matched_condition = match optional_string("when_matched_condition") {
+            Ok(v) => v,
+            Err(e) => return SimpleResult::error(e),
+        };
+        let when_not_matched_insert_all = match bool_field("when_not_matched_insert_all") {
+            Ok(v) => v,
+            Err(e) => return SimpleResult::error(e),
+        };
+        let when_not_matched_by_source_delete =
+            match bool_field("when_not_matched_by_source_delete") {
+                Ok(v) => v,
+                Err(e) => return SimpleResult::error(e),
+            };
         let when_not_matched_by_source_filter =
-            optional_string("when_not_matched_by_source_filter");
-        let timeout_ms = cfg_obj.get("timeout_ms").and_then(|v| v.as_u64());
-        let use_index = cfg_obj.get("use_index").and_then(|v| v.as_bool());
+            match optional_string("when_not_matched_by_source_filter") {
+                Ok(v) => v,
+                Err(e) => return SimpleResult::error(e),
+            };
+        let timeout_ms = match optional_u64("timeout_ms") {
+            Ok(v) => v,
+            Err(e) => return SimpleResult::error(e),
+        };
+        let use_index = match optional_bool("use_index") {
+            Ok(v) => v,
+            Err(e) => return SimpleResult::error(e),
+        };
 
-        let record_batches = if ipc_data.is_null() || ipc_len == 0 {
+        // Reject a null data pointer when the caller claims a non-zero
+        // length — this catches a pointer bug on the C side before it
+        // silently becomes an empty-source merge that, combined with
+        // when_not_matched_by_source_delete, could wipe the target table.
+        if ipc_data.is_null() && ipc_len > 0 {
+            return SimpleResult::error("ipc_data is null but ipc_len is non-zero".to_string());
+        }
+        let record_batches = if ipc_len == 0 {
             Vec::new()
         } else {
             let ipc_bytes = unsafe { std::slice::from_raw_parts(ipc_data, ipc_len) };
