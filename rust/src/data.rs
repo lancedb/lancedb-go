@@ -330,25 +330,20 @@ pub extern "C" fn simple_lancedb_table_merge_insert_ipc(
                     match v.as_str() {
                         Some(s) => out.push(s.to_string()),
                         None => {
-                            return SimpleResult::error(
-                                "'on' entries must be strings".to_string(),
-                            )
+                            return SimpleResult::error("'on' entries must be strings".to_string())
                         }
                     }
                 }
                 out
             }
-            _ => {
-                return SimpleResult::error("'on' must be an array of strings".to_string())
-            }
+            _ => return SimpleResult::error("'on' must be an array of strings".to_string()),
         };
         if on.is_empty() {
             return SimpleResult::error("'on' must contain at least one column".to_string());
         }
 
-        let bool_field = |k: &str| -> bool {
-            cfg_obj.get(k).and_then(|v| v.as_bool()).unwrap_or(false)
-        };
+        let bool_field =
+            |k: &str| -> bool { cfg_obj.get(k).and_then(|v| v.as_bool()).unwrap_or(false) };
         let optional_string = |k: &str| -> Option<String> {
             match cfg_obj.get(k) {
                 Some(serde_json::Value::String(s)) => Some(s.clone()),
@@ -360,7 +355,8 @@ pub extern "C" fn simple_lancedb_table_merge_insert_ipc(
         let when_matched_condition = optional_string("when_matched_condition");
         let when_not_matched_insert_all = bool_field("when_not_matched_insert_all");
         let when_not_matched_by_source_delete = bool_field("when_not_matched_by_source_delete");
-        let when_not_matched_by_source_filter = optional_string("when_not_matched_by_source_filter");
+        let when_not_matched_by_source_filter =
+            optional_string("when_not_matched_by_source_filter");
         let timeout_ms = cfg_obj.get("timeout_ms").and_then(|v| v.as_u64());
         let use_index = cfg_obj.get("use_index").and_then(|v| v.as_bool());
 
@@ -384,9 +380,7 @@ pub extern "C" fn simple_lancedb_table_merge_insert_ipc(
         } else {
             match rt.block_on(async { table.schema().await }) {
                 Ok(s) => s,
-                Err(e) => {
-                    return SimpleResult::error(format!("Failed to get table schema: {}", e))
-                }
+                Err(e) => return SimpleResult::error(format!("Failed to get table schema: {}", e)),
             }
         };
 
@@ -412,8 +406,7 @@ pub extern "C" fn simple_lancedb_table_merge_insert_ipc(
                 builder.use_index(u);
             }
 
-            let reader =
-                RecordBatchIterator::new(record_batches.into_iter().map(Ok), schema);
+            let reader = RecordBatchIterator::new(record_batches.into_iter().map(Ok), schema);
             builder.execute(Box::new(reader)).await
         });
 
