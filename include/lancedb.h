@@ -79,6 +79,29 @@ struct SimpleResult *simple_lancedb_table_add_ipc(void *table_handle,
                                                   int64_t *added_count);
 
 /**
+ * Upsert data into a table using Arrow IPC format and a merge-insert config JSON.
+ *
+ * `config_json` schema:
+ * ```json
+ * {
+ *   "on": ["col1", ...],
+ *   "when_matched_update_all": bool,
+ *   "when_matched_condition": null | "SQL string",
+ *   "when_not_matched_insert_all": bool,
+ *   "when_not_matched_by_source_delete": bool,
+ *   "when_not_matched_by_source_filter": null | "SQL string",
+ *   "timeout_ms": null | <u64>,
+ *   "use_index": null | bool
+ * }
+ * ```
+ */
+struct SimpleResult *simple_lancedb_table_merge_insert_ipc(void *table_handle,
+                                                           const char *config_json,
+                                                           const uint8_t *ipc_data,
+                                                           size_t ipc_len,
+                                                           char **result_json);
+
+/**
  * Get table names
  */
 struct SimpleResult *simple_lancedb_table_names(void *handle, char ***names, int *count);

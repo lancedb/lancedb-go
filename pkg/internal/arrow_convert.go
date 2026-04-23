@@ -13,6 +13,31 @@ import (
 	"github.com/apache/arrow/go/v17/arrow/memory"
 )
 
+// recordsToIPCBytes serializes one or more arrow.Records into an Arrow IPC
+// file-format buffer. Returns (nil, nil) when records is empty — the caller
+// decides what to do with a zero-row payload.
+func recordsToIPCBytes(records []arrow.Record) ([]byte, error) {
+	if len(records) == 0 {
+		return nil, nil
+	}
+	var buf bytes.Buffer
+	seeker := &seekBuffer{&buf}
+	writer, err := ipc.NewFileWriter(seeker, ipc.WithSchema(records[0].Schema()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create IPC writer: %w", err)
+	}
+	for _, record := range records {
+		if werr := writer.Write(record); werr != nil {
+			_ = writer.Close()
+			return nil, fmt.Errorf("failed to write record to IPC: %w", werr)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close IPC writer: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 // ipcBytesToRecord deserializes Arrow IPC bytes into a single arrow.Record.
 // If the IPC file contains multiple batches, they are concatenated.
 // Returns nil, nil for nil/empty input (empty result set).

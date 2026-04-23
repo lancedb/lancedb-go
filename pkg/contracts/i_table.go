@@ -51,6 +51,10 @@ type ITable interface {
 	// Delete removes records from the table that match the given filter
 	Delete(ctx context.Context, filter string) error
 
+	// MergeInsert returns a builder for a merge_insert (upsert) operation keyed
+	// on one or more columns. Configure the builder and call Execute to run.
+	MergeInsert(on []string) IMergeInsertBuilder
+
 	// CreateIndex creates an index on the specified columns using the given index type
 	CreateIndex(ctx context.Context, columns []string, indexType IndexType) error
 

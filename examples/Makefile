@@ -142,10 +142,16 @@ vector-search: check-libraries
 	@cd vector_search && \
 	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run vector_search.go
 
+merge-insert: check-libraries
+	@echo "🚀 Running Merge Insert (Upsert) example..."
+	@echo "Platform: $(PLATFORM_ARCH)"
+	@cd merge_insert && \
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run merge_insert.go
+
 # Build all examples (without running)
 build-all: check-libraries
 	@echo "🔨 Building all examples for $(PLATFORM_ARCH)..."
-	@for example in basic_crud batch_operations hybrid_search index_management storage_configuration vector_search; do \
+	@for example in basic_crud batch_operations hybrid_search index_management storage_configuration vector_search merge_insert; do \
 		echo "Building $$example..."; \
 		cd "$$example" && \
 		CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go build -o "../bin/$${example}_example" "$${example}.go" && \
