@@ -14,6 +14,12 @@ type IQueryBuilder interface {
 	Limit(limit int) IQueryBuilder
 	Columns(columns []string) IQueryBuilder
 	Offset(offset int) IQueryBuilder
+	// WithRowID adds the internal _rowid column to the result.
+	WithRowID() IQueryBuilder
+	// FastSearch skips rows not yet covered by an index.
+	FastSearch() IQueryBuilder
+	// Postfilter evaluates WHERE after the candidate set is built.
+	Postfilter() IQueryBuilder
 	Execute(ctx context.Context) (arrow.Record, error)
 	ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error)
 	ApplyOptions(options *QueryOptions) IQueryBuilder
@@ -24,6 +30,20 @@ type IVectorQueryBuilder interface {
 	Limit(limit int) IVectorQueryBuilder
 	Columns(columns []string) IVectorQueryBuilder
 	DistanceType(dt DistanceType) IVectorQueryBuilder
+	// Nprobes is the IVF partition scan count. 0 leaves the backend default.
+	Nprobes(n int) IVectorQueryBuilder
+	// RefineFactor multiplies the first-stage IVF k. 0 leaves the default off.
+	RefineFactor(n uint32) IVectorQueryBuilder
+	// Ef is the HNSW candidate list size. 0 leaves the backend default.
+	Ef(n int) IVectorQueryBuilder
+	// BypassVectorIndex forces a flat scan instead of the trained index.
+	BypassVectorIndex() IVectorQueryBuilder
+	// WithRowID adds the internal _rowid column to the result.
+	WithRowID() IVectorQueryBuilder
+	// FastSearch skips rows not yet covered by the index.
+	FastSearch() IVectorQueryBuilder
+	// Postfilter evaluates WHERE after the vector candidate set is built.
+	Postfilter() IVectorQueryBuilder
 	Execute(ctx context.Context) (arrow.Record, error)
 	ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error)
 	ApplyOptions(options *QueryOptions) IVectorQueryBuilder

@@ -33,6 +33,34 @@ fn parse_distance_type(dt: &str) -> Result<lancedb::DistanceType, lancedb::Error
     }
 }
 
+/// Apply top-level QueryBase flags (with_row_id, fast_search, postfilter)
+/// to any builder that implements QueryBase. Shared by the vector, FTS,
+/// and standard query paths.
+pub(crate) fn apply_query_base_flags<Q: QueryBase>(mut q: Q, config: &serde_json::Value) -> Q {
+    if config
+        .get("with_row_id")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        q = q.with_row_id();
+    }
+    if config
+        .get("fast_search")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        q = q.fast_search();
+    }
+    if config
+        .get("postfilter")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        q = q.postfilter();
+    }
+    q
+}
+
 /// Build and execute a query from JSON config, returning a record batch stream.
 ///
 /// Handles three query modes based on config contents:
@@ -92,6 +120,26 @@ async fn execute_query_from_config(
                         vector_query = vector_query.distance_type(parse_distance_type(dt)?);
                     }
 
+                    // Per-query vector tuning (IVF / HNSW specific)
+                    if let Some(n) = vector_search.get("nprobes").and_then(|v| v.as_u64()) {
+                        vector_query = vector_query.nprobes(n as usize);
+                    }
+                    if let Some(rf) = vector_search.get("refine_factor").and_then(|v| v.as_u64()) {
+                        vector_query = vector_query.refine_factor(rf as u32);
+                    }
+                    if let Some(ef) = vector_search.get("ef").and_then(|v| v.as_u64()) {
+                        vector_query = vector_query.ef(ef as usize);
+                    }
+                    if vector_search
+                        .get("bypass_vector_index")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    {
+                        vector_query = vector_query.bypass_vector_index();
+                    }
+
+                    vector_query = apply_query_base_flags(vector_query, query_config);
+
                     return vector_query.execute().await;
                 }
                 Err(e) => {
@@ -147,6 +195,8 @@ async fn execute_query_from_config(
             });
         }
 
+        fts_query = apply_query_base_flags(fts_query, query_config);
+
         return fts_query.execute().await;
     }
 
@@ -171,6 +221,8 @@ async fn execute_query_from_config(
     if let Some(filter) = query_config.get("where").and_then(|v| v.as_str()) {
         query = query.only_if(filter);
     }
+
+    query = apply_query_base_flags(query, query_config);
 
     query.execute().await
 }

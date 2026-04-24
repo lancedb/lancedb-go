@@ -252,6 +252,43 @@ pub fn convert_arrow_value_to_json(
                 typed_array.value(row_idx),
             )))
         }
+        DataType::UInt8 => {
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::UInt8Array>()
+                .ok_or("Failed to downcast to UInt8Array")?;
+            Ok(serde_json::Value::Number(serde_json::Number::from(
+                typed_array.value(row_idx),
+            )))
+        }
+        DataType::UInt16 => {
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::UInt16Array>()
+                .ok_or("Failed to downcast to UInt16Array")?;
+            Ok(serde_json::Value::Number(serde_json::Number::from(
+                typed_array.value(row_idx),
+            )))
+        }
+        DataType::UInt32 => {
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::UInt32Array>()
+                .ok_or("Failed to downcast to UInt32Array")?;
+            Ok(serde_json::Value::Number(serde_json::Number::from(
+                typed_array.value(row_idx),
+            )))
+        }
+        // UInt64 covers the _rowid meta column surfaced by QueryBase::with_row_id().
+        DataType::UInt64 => {
+            let typed_array = array
+                .as_any()
+                .downcast_ref::<arrow_array::UInt64Array>()
+                .ok_or("Failed to downcast to UInt64Array")?;
+            Ok(serde_json::Value::Number(serde_json::Number::from(
+                typed_array.value(row_idx),
+            )))
+        }
         DataType::Float32 => {
             let typed_array = array
                 .as_any()

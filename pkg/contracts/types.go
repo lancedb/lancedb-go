@@ -50,6 +50,17 @@ type QueryConfig struct {
 	Offset       *int          `json:"offset,omitempty"`
 	VectorSearch *VectorSearch `json:"vector_search,omitempty"`
 	FTSSearch    *FTSSearch    `json:"fts_search,omitempty"`
+
+	// WithRowID adds the internal _rowid column to the result. Maps to
+	// lancedb's QueryBase::with_row_id().
+	WithRowID bool `json:"with_row_id,omitempty"`
+	// FastSearch skips rows not yet covered by an index. Maps to
+	// lancedb's QueryBase::fast_search(). Weak consistency tradeoff.
+	FastSearch bool `json:"fast_search,omitempty"`
+	// Postfilter switches WHERE evaluation to run after the vector/FTS
+	// candidate set is materialised. Default is prefilter. Maps to
+	// QueryBase::postfilter().
+	Postfilter bool `json:"postfilter,omitempty"`
 }
 
 // VectorSearch represents vector similarity search parameters
@@ -58,6 +69,19 @@ type VectorSearch struct {
 	Vector       []float32 `json:"vector"`
 	K            int       `json:"k"`
 	DistanceType *string   `json:"distance_type,omitempty"`
+
+	// Nprobes is the IVF partition scan count. Larger => higher recall,
+	// higher latency. Maps to VectorQuery::nprobes().
+	Nprobes *int `json:"nprobes,omitempty"`
+	// RefineFactor multiplies the k passed to the first IVF stage. Maps
+	// to VectorQuery::refine_factor().
+	RefineFactor *uint32 `json:"refine_factor,omitempty"`
+	// Ef is the HNSW candidate list size. Larger => higher recall.
+	// Maps to VectorQuery::ef(). HNSW indices only.
+	Ef *int `json:"ef,omitempty"`
+	// BypassVectorIndex forces a flat (exhaustive) scan instead of the
+	// trained index. Maps to VectorQuery::bypass_vector_index().
+	BypassVectorIndex bool `json:"bypass_vector_index,omitempty"`
 }
 
 // FTSSearch represents full-text search parameters
