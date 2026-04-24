@@ -51,6 +51,11 @@ type IVectorQueryBuilder interface {
 	// Rerank installs a reranker on the query. Most useful in hybrid
 	// search where vector and FTS scores need to be fused.
 	Rerank(cfg RerankerConfig) IVectorQueryBuilder
+	// WithFullText turns the vector query into a hybrid vector+FTS
+	// query. The matching text column must have an FTS index.
+	// `column` may be empty to let lancedb pick the one indexed FTS
+	// column on the table.
+	WithFullText(query, column string) IVectorQueryBuilder
 	Execute(ctx context.Context) (arrow.Record, error)
 	ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error)
 	ApplyOptions(options *QueryOptions) IVectorQueryBuilder

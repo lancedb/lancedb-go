@@ -207,6 +207,16 @@ type VectorSearch struct {
 	// BypassVectorIndex forces a flat (exhaustive) scan instead of the
 	// trained index. Maps to VectorQuery::bypass_vector_index().
 	BypassVectorIndex bool `json:"bypass_vector_index,omitempty"`
+
+	// FullTextQuery, when non-empty alongside Vector, turns the query
+	// into a hybrid search: lancedb runs both the dense nearest_to and
+	// an FTS pass and fuses the results with the configured reranker
+	// (RRF by default). The table must have an FTS index on the
+	// matching text column; use CreateIndexWithParams(FTS, ...) first.
+	FullTextQuery string `json:"full_text_query,omitempty"`
+	// FullTextColumn optionally pins the FTS column. Empty lets lancedb
+	// pick the one FTS-indexed column on the table.
+	FullTextColumn string `json:"full_text_column,omitempty"`
 }
 
 // FTSSearch represents full-text search parameters

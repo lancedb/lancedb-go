@@ -172,6 +172,12 @@ reranker: check-libraries
 	@cd reranker && \
 	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run reranker.go
 
+hybrid-vector-fts: check-libraries
+	@echo "🚀 Running Hybrid (vector + FTS) Search example..."
+	@echo "Platform: $(PLATFORM_ARCH)"
+	@cd hybrid_vector_fts && \
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run hybrid_vector_fts.go
+
 # Build all examples (without running)
 build-all: check-libraries
 	@echo "🔨 Building all examples for $(PLATFORM_ARCH)..."
