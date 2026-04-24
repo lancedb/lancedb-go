@@ -20,6 +20,10 @@ type IQueryBuilder interface {
 	FastSearch() IQueryBuilder
 	// Postfilter evaluates WHERE after the candidate set is built.
 	Postfilter() IQueryBuilder
+	// Rerank installs a reranker on the query. Most useful in hybrid
+	// search where vector and FTS scores need to be fused; on a single
+	// channel the backend may noop.
+	Rerank(cfg RerankerConfig) IQueryBuilder
 	Execute(ctx context.Context) (arrow.Record, error)
 	ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error)
 	ApplyOptions(options *QueryOptions) IQueryBuilder
@@ -44,6 +48,9 @@ type IVectorQueryBuilder interface {
 	FastSearch() IVectorQueryBuilder
 	// Postfilter evaluates WHERE after the vector candidate set is built.
 	Postfilter() IVectorQueryBuilder
+	// Rerank installs a reranker on the query. Most useful in hybrid
+	// search where vector and FTS scores need to be fused.
+	Rerank(cfg RerankerConfig) IVectorQueryBuilder
 	Execute(ctx context.Context) (arrow.Record, error)
 	ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error)
 	ApplyOptions(options *QueryOptions) IVectorQueryBuilder
