@@ -17,6 +17,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/apache/arrow/go/v17/arrow"
@@ -484,6 +485,119 @@ func (t *Table) IndexStats(_ context.Context, indexName string) (*contracts.Inde
 	}
 
 	return &indexStats, nil
+}
+
+// WaitForIndex blocks until every index in `names` reports zero unindexed
+// rows or the deadline elapses. An empty `names` slice defers to the
+// backend's "all indices on this table" behaviour.
+//
+// Deadline composition (most-restrictive wins, then forwarded to the
+// Rust side as a single millisecond budget):
+//   - `timeout > 0`           — explicit upper bound from the caller.
+//   - `ctx` carries a deadline — narrows the budget to whichever expires
+//     first. This makes `context.WithTimeout` actually bound the FFI call,
+//     which it didn't in the prior revision.
+//   - `timeout < 0`           — treated as "no wait" (1ms floor).
+//   - `timeout == 0` and ctx has no deadline — wait forever (Rust's
+//     `Duration::MAX`); abort only via process exit.
+//
+// Sub-millisecond positive durations are rounded up to 1ms instead of
+// truncating to 0, which the Rust side would otherwise interpret as
+// "wait forever".
+//
+// Implementation note: lancedb-rust's wait_for_index isn't cancellation
+// aware once it starts, so a bare `ctx.Cancel()` (no deadline) will not
+// interrupt an in-flight call. Callers needing tight cancellation should
+// pass a deadline-bearing ctx or a positive `timeout`.
+//
+//nolint:gocritic
+func (t *Table) WaitForIndex(ctx context.Context, names []string, timeout time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.closed || t.handle == nil {
+		return fmt.Errorf("table is closed")
+	}
+
+	// Allocate C strings for each name; keep them alive until after the
+	// FFI call returns so the pointers we hand in stay valid.
+	cNames := make([]*C.char, len(names))
+	for i, n := range names {
+		cNames[i] = C.CString(n)
+	}
+	defer func() {
+		for _, p := range cNames {
+			// #nosec G103 - Required for freeing C allocated string memory
+			C.free(unsafe.Pointer(p))
+		}
+	}()
+
+	var namesPtr **C.char
+	if len(cNames) > 0 {
+		namesPtr = (**C.char)(unsafe.Pointer(&cNames[0]))
+	}
+
+	timeoutMs := ComputeWaitTimeoutMs(ctx, timeout)
+
+	result := C.simple_lancedb_table_wait_for_index(
+		t.handle,
+		namesPtr,
+		C.size_t(len(cNames)),
+		C.uint64_t(timeoutMs),
+	)
+	defer C.simple_lancedb_result_free(result)
+
+	if !result.SUCCESS {
+		if result.ERROR_MESSAGE != nil {
+			errorMsg := C.GoString(result.ERROR_MESSAGE)
+			return fmt.Errorf("wait_for_index failed: %s", errorMsg)
+		}
+		return fmt.Errorf("wait_for_index failed: unknown error")
+	}
+	return nil
+}
+
+// ComputeWaitTimeoutMs folds the caller's `timeout` and any deadline
+// carried by ctx into a single millisecond budget for the Rust side.
+// Returns 0 only when both the caller asks for no upper bound and ctx
+// carries no deadline — that's the only path the Rust side maps to
+// Duration::MAX. Sub-millisecond positive budgets are rounded up to 1
+// to avoid the truncation bug that would otherwise surface them as 0.
+//
+// Exported only so the table-tests package can pin these invariants
+// without spinning up a LanceDB connection per case; not part of the
+// public surface (the contracts package does not re-export it).
+func ComputeWaitTimeoutMs(ctx context.Context, timeout time.Duration) uint64 {
+	// Negative caller timeout: emulate "no wait" with a 1ms floor so the
+	// FFI call returns promptly instead of hanging on Duration::MAX.
+	if timeout < 0 {
+		return 1
+	}
+
+	effective := timeout
+	if dl, ok := ctx.Deadline(); ok {
+		remaining := time.Until(dl)
+		if remaining <= 0 {
+			return 1 // deadline already passed; let the FFI return ASAP
+		}
+		if effective == 0 || remaining < effective {
+			effective = remaining
+		}
+	}
+
+	if effective == 0 {
+		return 0 // caller wants unbounded and ctx has no deadline
+	}
+
+	ms := effective.Milliseconds()
+	if ms < 1 {
+		ms = 1 // floor sub-ms positive durations so they aren't truncated to 0
+	}
+	return uint64(ms)
 }
 
 // Select executes a select query with various predicates (vector search, filters, etc.)

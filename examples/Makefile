@@ -154,6 +154,12 @@ query-tuning: check-libraries
 	@cd query_tuning && \
 	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run query_tuning.go
 
+wait-for-index: check-libraries
+	@echo "🚀 Running WaitForIndex example..."
+	@echo "Platform: $(PLATFORM_ARCH)"
+	@cd wait_for_index && \
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run wait_for_index.go
+
 # Build all examples (without running)
 build-all: check-libraries
 	@echo "🔨 Building all examples for $(PLATFORM_ARCH)..."
