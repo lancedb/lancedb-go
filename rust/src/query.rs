@@ -21,12 +21,15 @@ fn parse_column_names(columns: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-/// Parse a distance type string into a LanceDB DistanceType.
-fn parse_distance_type(dt: &str) -> Result<lancedb::DistanceType, lancedb::Error> {
+/// Parse a distance type string into a LanceDB DistanceType. Shared by the
+/// query path and the index path (rust/src/index.rs), which wraps any
+/// error into String via map_err.
+pub(crate) fn parse_distance_type(dt: &str) -> Result<lancedb::DistanceType, lancedb::Error> {
     match dt {
         "l2" => Ok(lancedb::DistanceType::L2),
         "cosine" => Ok(lancedb::DistanceType::Cosine),
         "dot" => Ok(lancedb::DistanceType::Dot),
+        "hamming" => Ok(lancedb::DistanceType::Hamming),
         other => Err(lancedb::Error::InvalidInput {
             message: format!("Unknown distance type: {}", other),
         }),

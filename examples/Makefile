@@ -160,6 +160,12 @@ wait-for-index: check-libraries
 	@cd wait_for_index && \
 	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run wait_for_index.go
 
+index-builder: check-libraries
+	@echo "🚀 Running Index Builder (CreateIndexWithParams) example..."
+	@echo "Platform: $(PLATFORM_ARCH)"
+	@cd index_builder && \
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run index_builder.go
+
 # Build all examples (without running)
 build-all: check-libraries
 	@echo "🔨 Building all examples for $(PLATFORM_ARCH)..."

@@ -187,17 +187,20 @@ func (vq *VectorQueryBuilder) Columns(columns []string) lancedb.IVectorQueryBuil
 }
 
 // distanceTypeToString converts a DistanceType enum to the JSON string
-// expected by the Rust FFI. Caller guards against DistanceTypeUnspecified.
-func distanceTypeToString(dt lancedb.DistanceType) string {
+// expected by the Rust FFI. Returns an error for unknown values so an
+// out-of-range cast (e.g. lancedb.DistanceType(99)) surfaces as a normal
+// error to the caller instead of crashing the process.
+// DistanceTypeUnspecified is the caller's responsibility to filter out.
+func distanceTypeToString(dt lancedb.DistanceType) (string, error) {
 	switch dt {
 	case lancedb.DistanceTypeL2:
-		return "l2"
+		return "l2", nil
 	case lancedb.DistanceTypeCosine:
-		return "cosine"
+		return "cosine", nil
 	case lancedb.DistanceTypeDot:
-		return "dot"
+		return "dot", nil
 	default:
-		panic(fmt.Sprintf("unhandled DistanceType: %d", dt))
+		return "", fmt.Errorf("unknown DistanceType: %d", dt)
 	}
 }
 
@@ -285,7 +288,10 @@ func (vq *VectorQueryBuilder) Execute(ctx context.Context) (arrow.Record, error)
 		K:      k,
 	}
 	if vq.distanceType != nil && *vq.distanceType != lancedb.DistanceTypeUnspecified {
-		dt := distanceTypeToString(*vq.distanceType)
+		dt, err := distanceTypeToString(*vq.distanceType)
+		if err != nil {
+			return nil, err
+		}
 		config.VectorSearch.DistanceType = &dt
 	}
 	config.VectorSearch.Nprobes = vq.nprobes
