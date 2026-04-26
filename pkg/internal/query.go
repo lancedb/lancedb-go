@@ -15,11 +15,14 @@ import (
 
 // QueryBuilder provides a fluent interface for building queries
 type QueryBuilder struct {
-	table   *Table
-	filters []string
-	limit   int
-	offset  int
-	columns []string
+	table      *Table
+	filters    []string
+	limit      int
+	offset     int
+	columns    []string
+	withRowID  bool
+	fastSearch bool
+	postfilter bool
 }
 
 var _ lancedb.IQueryBuilder = (*QueryBuilder)(nil)
@@ -28,10 +31,14 @@ var _ lancedb.IVectorQueryBuilder = (*VectorQueryBuilder)(nil)
 // VectorQueryBuilder extends QueryBuilder for vector similarity searches
 type VectorQueryBuilder struct {
 	QueryBuilder
-	vector       []float32
-	column       string
-	limitSet     bool // tracks whether Limit() was explicitly called
-	distanceType *lancedb.DistanceType
+	vector            []float32
+	column            string
+	limitSet          bool // tracks whether Limit() was explicitly called
+	distanceType      *lancedb.DistanceType
+	nprobes           *int
+	refineFactor      *uint32
+	ef                *int
+	bypassVectorIndex bool
 }
 
 // Filter adds a filter condition to the query
@@ -55,6 +62,24 @@ func (q *QueryBuilder) Columns(columns []string) lancedb.IQueryBuilder {
 // Offset sets the number of rows to skip
 func (q *QueryBuilder) Offset(offset int) lancedb.IQueryBuilder {
 	q.offset = offset
+	return q
+}
+
+// WithRowID adds the _rowid column to the result.
+func (q *QueryBuilder) WithRowID() lancedb.IQueryBuilder {
+	q.withRowID = true
+	return q
+}
+
+// FastSearch skips rows not yet covered by an index.
+func (q *QueryBuilder) FastSearch() lancedb.IQueryBuilder {
+	q.fastSearch = true
+	return q
+}
+
+// Postfilter evaluates WHERE after the candidate set is built.
+func (q *QueryBuilder) Postfilter() lancedb.IQueryBuilder {
+	q.postfilter = true
 	return q
 }
 
@@ -135,6 +160,9 @@ func (q *QueryBuilder) buildConfig() lancedb.QueryConfig {
 	if len(q.columns) > 0 {
 		config.Columns = q.columns
 	}
+	config.WithRowID = q.withRowID
+	config.FastSearch = q.fastSearch
+	config.Postfilter = q.postfilter
 
 	return config
 }
@@ -179,6 +207,54 @@ func (vq *VectorQueryBuilder) DistanceType(dt lancedb.DistanceType) lancedb.IVec
 	return vq
 }
 
+// Nprobes sets the IVF partition scan count. n<=0 leaves the backend default.
+func (vq *VectorQueryBuilder) Nprobes(n int) lancedb.IVectorQueryBuilder {
+	if n > 0 {
+		vq.nprobes = &n
+	}
+	return vq
+}
+
+// RefineFactor sets the refine multiplier for the IVF first stage. 0 disables.
+func (vq *VectorQueryBuilder) RefineFactor(n uint32) lancedb.IVectorQueryBuilder {
+	if n > 0 {
+		vq.refineFactor = &n
+	}
+	return vq
+}
+
+// Ef sets the HNSW candidate list size. n<=0 leaves the backend default.
+func (vq *VectorQueryBuilder) Ef(n int) lancedb.IVectorQueryBuilder {
+	if n > 0 {
+		vq.ef = &n
+	}
+	return vq
+}
+
+// BypassVectorIndex forces a flat (exhaustive) scan.
+func (vq *VectorQueryBuilder) BypassVectorIndex() lancedb.IVectorQueryBuilder {
+	vq.bypassVectorIndex = true
+	return vq
+}
+
+// WithRowID adds the _rowid column to the result.
+func (vq *VectorQueryBuilder) WithRowID() lancedb.IVectorQueryBuilder {
+	vq.QueryBuilder.withRowID = true
+	return vq
+}
+
+// FastSearch skips rows not yet covered by the index.
+func (vq *VectorQueryBuilder) FastSearch() lancedb.IVectorQueryBuilder {
+	vq.QueryBuilder.fastSearch = true
+	return vq
+}
+
+// Postfilter evaluates WHERE after the vector candidate set is built.
+func (vq *VectorQueryBuilder) Postfilter() lancedb.IVectorQueryBuilder {
+	vq.QueryBuilder.postfilter = true
+	return vq
+}
+
 // Execute executes the vector search query and returns results.
 // Delegates to Table.SelectIPC() which holds the mutex and checks closed state.
 func (vq *VectorQueryBuilder) Execute(ctx context.Context) (arrow.Record, error) {
@@ -212,6 +288,10 @@ func (vq *VectorQueryBuilder) Execute(ctx context.Context) (arrow.Record, error)
 		dt := distanceTypeToString(*vq.distanceType)
 		config.VectorSearch.DistanceType = &dt
 	}
+	config.VectorSearch.Nprobes = vq.nprobes
+	config.VectorSearch.RefineFactor = vq.refineFactor
+	config.VectorSearch.Ef = vq.ef
+	config.VectorSearch.BypassVectorIndex = vq.bypassVectorIndex
 
 	ipcBytes, err := vq.table.SelectIPC(ctx, config)
 	if err != nil {
@@ -226,12 +306,18 @@ func (vq *VectorQueryBuilder) ExecuteAsync(ctx context.Context) (<-chan arrow.Re
 }
 
 // ApplyOptions applies query options to the vector query builder.
-// Only MaxResults is honoured; UseFullPrecision and BypassVectorIndex are
-// not yet wired through the Rust FFI query path and are silently ignored.
+// MaxResults maps to Limit; BypassVectorIndex is forwarded to the FFI.
+// UseFullPrecision is not exposed by upstream lancedb v0.24.0 and is ignored.
 func (vq *VectorQueryBuilder) ApplyOptions(options *lancedb.QueryOptions) lancedb.IVectorQueryBuilder {
-	if options != nil && options.MaxResults > 0 {
+	if options == nil {
+		return vq
+	}
+	if options.MaxResults > 0 {
 		// Call vq.Limit() (not QueryBuilder.Limit) so limitSet is updated.
 		vq.Limit(options.MaxResults)
+	}
+	if options.BypassVectorIndex {
+		vq.BypassVectorIndex()
 	}
 	return vq
 }
