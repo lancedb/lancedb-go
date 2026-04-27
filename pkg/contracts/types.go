@@ -1,5 +1,7 @@
 package contracts
 
+import "time"
+
 // IndexType represents the type of index to create
 type IndexType int
 
@@ -30,6 +32,54 @@ type IndexInfo struct {
 	Name      string   `json:"name"`
 	Columns   []string `json:"columns"`
 	IndexType string   `json:"index_type"`
+}
+
+// IndexParams carries per-type tuning knobs for CreateIndexWithParams.
+// All fields are optional — pointer fields treat nil as "backend default",
+// string fields treat empty as "unset". A field that does not apply to the
+// chosen IndexType (e.g. M on a BTree index) is silently ignored on the
+// Rust side.
+type IndexParams struct {
+	// IVF-family common
+	NumPartitions       *uint32 `json:"num_partitions,omitempty"`
+	SampleRate          *uint32 `json:"sample_rate,omitempty"`
+	MaxIterations       *uint32 `json:"max_iterations,omitempty"`
+	TargetPartitionSize *uint32 `json:"target_partition_size,omitempty"`
+	// PQ-specific (IvfPq, IvfRq, IvfHnswPq)
+	NumSubVectors *uint32 `json:"num_sub_vectors,omitempty"`
+	NumBits       *uint32 `json:"num_bits,omitempty"`
+	// HNSW-specific
+	M              *uint32 `json:"m,omitempty"`
+	EfConstruction *uint32 `json:"ef_construction,omitempty"`
+	// Distance metric for vector indices. Leave Unspecified for the
+	// backend default (L2).
+	DistanceType DistanceType `json:"-"`
+
+	// FTS-specific
+	FtsLanguage        string  `json:"language,omitempty"`
+	FtsWithPosition    *bool   `json:"with_position,omitempty"`
+	FtsStem            *bool   `json:"stem,omitempty"`
+	FtsRemoveStopWords *bool   `json:"remove_stop_words,omitempty"`
+	FtsLowerCase       *bool   `json:"lower_case,omitempty"`
+	FtsASCIIFolding    *bool   `json:"ascii_folding,omitempty"`
+	FtsBaseTokenizer   string  `json:"base_tokenizer,omitempty"`
+	FtsMaxTokenLength  *uint32 `json:"max_token_length,omitempty"`
+	FtsNgramMinLength  *uint32 `json:"ngram_min_length,omitempty"`
+	FtsNgramMaxLength  *uint32 `json:"ngram_max_length,omitempty"`
+	FtsNgramPrefixOnly *bool   `json:"ngram_prefix_only,omitempty"`
+}
+
+// CreateIndexOptions carries the top-level IndexBuilder knobs that live
+// outside of the per-type params (name, replace, wait_timeout).
+type CreateIndexOptions struct {
+	// Name overrides the default lancedb-chosen index name.
+	Name string
+	// Replace controls whether an existing index on the same columns
+	// with the same name is replaced. Matches lancedb::IndexBuilder::replace.
+	Replace bool
+	// WaitTimeout tells the backend to block until index build completes
+	// or the timeout elapses. Zero leaves the default (no wait).
+	WaitTimeout time.Duration
 }
 
 // IndexStatistics represents statistics about an index

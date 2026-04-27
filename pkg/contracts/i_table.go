@@ -62,6 +62,13 @@ type ITable interface {
 	// CreateIndexWithName creates an index with a custom name on the specified columns
 	CreateIndexWithName(ctx context.Context, columns []string, indexType IndexType, name string) error
 
+	// CreateIndexWithParams creates an index with full per-type tuning
+	// (IVF partition/PQ/HNSW/FTS parameters) plus top-level options
+	// (name / replace / wait timeout). Unset fields fall back to the
+	// backend default. Passing nil opts is equivalent to zero-valued
+	// CreateIndexOptions (no name override, replace=false, no wait).
+	CreateIndexWithParams(ctx context.Context, columns []string, indexType IndexType, params IndexParams, opts *CreateIndexOptions) error
+
 	// GetAllIndexes returns information about all indexes present on the table
 	GetAllIndexes(ctx context.Context) ([]IndexInfo, error)
 

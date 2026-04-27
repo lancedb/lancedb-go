@@ -830,6 +830,104 @@ func (t *Table) indexTypeToString(indexType contracts.IndexType) string {
 	}
 }
 
+// CreateIndexWithParams creates an index using the v2 FFI entry point,
+// which accepts a JSON config carrying per-type tuning parameters plus
+// name/replace/wait_timeout. `opts` may be nil for defaults.
+//
+//nolint:gocritic
+func (t *Table) CreateIndexWithParams(
+	_ context.Context,
+	columns []string,
+	indexType contracts.IndexType,
+	params contracts.IndexParams,
+	opts *contracts.CreateIndexOptions,
+) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.closed || t.handle == nil {
+		return fmt.Errorf("table is closed")
+	}
+
+	columnsJSON, err := json.Marshal(columns)
+	if err != nil {
+		return fmt.Errorf("failed to marshal columns: %w", err)
+	}
+
+	// Embed IndexParams' fields into an envelope carrying type +
+	// distance_type, which aren't part of the params struct's JSON
+	// surface. Single Marshal; no intermediate map.
+	envelope := struct {
+		Type         string `json:"type"`
+		DistanceType string `json:"distance_type,omitempty"`
+		contracts.IndexParams
+	}{
+		Type:        t.indexTypeToString(indexType),
+		IndexParams: params,
+	}
+	if params.DistanceType != contracts.DistanceTypeUnspecified {
+		dt, err := distanceTypeToString(params.DistanceType)
+		if err != nil {
+			return fmt.Errorf("invalid IndexParams.DistanceType: %w", err)
+		}
+		envelope.DistanceType = dt
+	}
+	cfgJSON, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("failed to marshal index config: %w", err)
+	}
+
+	var (
+		name          string
+		replace       bool
+		waitTimeoutMs uint64
+	)
+	if opts != nil {
+		name = opts.Name
+		replace = opts.Replace
+		if opts.WaitTimeout > 0 {
+			ms := opts.WaitTimeout.Milliseconds()
+			if ms > 0 {
+				waitTimeoutMs = uint64(ms)
+			}
+		}
+	}
+
+	cColumnsJSON := C.CString(string(columnsJSON))
+	// #nosec G103 - Required for freeing C allocated string memory
+	defer C.free(unsafe.Pointer(cColumnsJSON))
+
+	cConfigJSON := C.CString(string(cfgJSON))
+	// #nosec G103 - Required for freeing C allocated string memory
+	defer C.free(unsafe.Pointer(cConfigJSON))
+
+	var cName *C.char
+	if name != "" {
+		cName = C.CString(name)
+		// #nosec G103 - Required for freeing C allocated string memory
+		defer C.free(unsafe.Pointer(cName))
+	}
+
+	result := C.simple_lancedb_table_create_index_v2(
+		t.handle,
+		cColumnsJSON,
+		cConfigJSON,
+		cName,
+		C.bool(replace),
+		C.uint64_t(waitTimeoutMs),
+	)
+	defer C.simple_lancedb_result_free(result)
+
+	if !result.SUCCESS {
+		if result.ERROR_MESSAGE != nil {
+			errorMsg := C.GoString(result.ERROR_MESSAGE)
+			return fmt.Errorf("create_index_v2 failed: %s", errorMsg)
+		}
+		return fmt.Errorf("create_index_v2 failed: unknown error")
+	}
+	return nil
+}
+
 // recordToJSON converts an Arrow Record to JSON format
 func (t *Table) recordToJSON(record arrow.Record) (string, error) {
 	schema := record.Schema()

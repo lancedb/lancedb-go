@@ -162,6 +162,25 @@ struct SimpleResult *simple_lancedb_table_wait_for_index(void *table_handle,
                                                          uint64_t timeout_ms);
 
 /**
+ * Create an index with full tuning parameters. The `config_json` is the
+ * canonical surface for per-type tuning (num_partitions, m, ef_construction,
+ * FTS options, etc.); the small top-level knobs (name/replace/
+ * wait_timeout_ms) are passed as regular arguments so callers don't have to
+ * encode them into JSON just to change a single bool.
+ *
+ * - `name` may be NULL for the backend default.
+ * - `replace` matches lancedb's IndexBuilder::replace (default true in
+ *   upstream; we forward the caller's choice verbatim).
+ * - `wait_timeout_ms == 0` leaves the backend default (no wait).
+ */
+struct SimpleResult *simple_lancedb_table_create_index_v2(void *table_handle,
+                                                          const char *columns_json,
+                                                          const char *config_json,
+                                                          const char *name,
+                                                          bool replace,
+                                                          uint64_t wait_timeout_ms);
+
+/**
  * Count rows in a table (simple version)
  */
 struct SimpleResult *simple_lancedb_table_count_rows(void *table_handle, int64_t *count);
