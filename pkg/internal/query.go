@@ -23,6 +23,7 @@ type QueryBuilder struct {
 	withRowID  bool
 	fastSearch bool
 	postfilter bool
+	reranker   *lancedb.RerankerConfig
 }
 
 var _ lancedb.IQueryBuilder = (*QueryBuilder)(nil)
@@ -80,6 +81,13 @@ func (q *QueryBuilder) FastSearch() lancedb.IQueryBuilder {
 // Postfilter evaluates WHERE after the candidate set is built.
 func (q *QueryBuilder) Postfilter() lancedb.IQueryBuilder {
 	q.postfilter = true
+	return q
+}
+
+// Rerank installs a reranker on the query.
+func (q *QueryBuilder) Rerank(cfg lancedb.RerankerConfig) lancedb.IQueryBuilder {
+	c := cfg
+	q.reranker = &c
 	return q
 }
 
@@ -163,6 +171,10 @@ func (q *QueryBuilder) buildConfig() lancedb.QueryConfig {
 	config.WithRowID = q.withRowID
 	config.FastSearch = q.fastSearch
 	config.Postfilter = q.postfilter
+	if q.reranker != nil && q.reranker.Kind != lancedb.RerankerNone {
+		rc := *q.reranker
+		config.Reranker = &rc
+	}
 
 	return config
 }
@@ -255,6 +267,13 @@ func (vq *VectorQueryBuilder) FastSearch() lancedb.IVectorQueryBuilder {
 // Postfilter evaluates WHERE after the vector candidate set is built.
 func (vq *VectorQueryBuilder) Postfilter() lancedb.IVectorQueryBuilder {
 	vq.QueryBuilder.postfilter = true
+	return vq
+}
+
+// Rerank installs a reranker on the vector query.
+func (vq *VectorQueryBuilder) Rerank(cfg lancedb.RerankerConfig) lancedb.IVectorQueryBuilder {
+	c := cfg
+	vq.QueryBuilder.reranker = &c
 	return vq
 }
 

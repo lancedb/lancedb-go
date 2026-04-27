@@ -8,8 +8,11 @@ use crate::ffi::{from_c_str, SimpleResult};
 use crate::runtime::get_simple_runtime;
 use lancedb::index::scalar::FullTextSearchQuery;
 use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::rerankers::rrf::RRFReranker;
+use lancedb::rerankers::{NormalizeMethod, Reranker};
 use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
+use std::sync::Arc;
 use tokio_stream::StreamExt;
 
 /// Parse a JSON array of column name strings.
@@ -36,10 +39,73 @@ pub(crate) fn parse_distance_type(dt: &str) -> Result<lancedb::DistanceType, lan
     }
 }
 
-/// Apply top-level QueryBase flags (with_row_id, fast_search, postfilter)
-/// to any builder that implements QueryBase. Shared by the vector, FTS,
-/// and standard query paths.
-pub(crate) fn apply_query_base_flags<Q: QueryBase>(mut q: Q, config: &serde_json::Value) -> Q {
+/// Default RRF k parameter. Matches lancedb::rerankers::rrf::RRFReranker's
+/// own default so an omitted k produces identical behaviour.
+const DEFAULT_RRF_K: f32 = 60.0;
+
+/// Result type for parse_reranker. Pulled out to tame clippy::type_complexity.
+type RerankerParse = (Option<Arc<dyn Reranker>>, Option<NormalizeMethod>);
+
+/// Parse the top-level `reranker` / `norm` section of a query config.
+/// Returns Ok((None, None)) as the fast path when no reranker is
+/// configured — the only cost in that case is a single map lookup.
+fn parse_reranker(config: &serde_json::Value) -> Result<RerankerParse, lancedb::Error> {
+    let Some(reranker_cfg) = config.get("reranker") else {
+        return Ok((None, None));
+    };
+    // Treat an explicit null the same as a missing key. Go's omitempty
+    // can't drop a non-nil *RerankerConfig pointer, so callers who pass
+    // QueryConfig{Reranker: &RerankerConfig{Kind: RerankerNone}} land
+    // here with `null` — that's intent to skip reranking, not an error.
+    if reranker_cfg.is_null() {
+        return Ok((None, None));
+    }
+
+    let kind = reranker_cfg
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| lancedb::Error::InvalidInput {
+            message: "reranker requires a 'kind' field".to_string(),
+        })?;
+
+    let reranker: Arc<dyn Reranker> = match kind {
+        "rrf" => {
+            let k = reranker_cfg
+                .get("k")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .unwrap_or(DEFAULT_RRF_K);
+            Arc::new(RRFReranker::new(k))
+        }
+        other => {
+            return Err(lancedb::Error::InvalidInput {
+                message: format!("Unknown reranker kind: {}", other),
+            })
+        }
+    };
+
+    let norm = match reranker_cfg.get("norm").and_then(|v| v.as_str()) {
+        Some("rank") => Some(NormalizeMethod::Rank),
+        Some("score") => Some(NormalizeMethod::Score),
+        Some(other) => {
+            return Err(lancedb::Error::InvalidInput {
+                message: format!("Unknown reranker norm method: {}", other),
+            })
+        }
+        None => None,
+    };
+
+    Ok((Some(reranker), norm))
+}
+
+/// Apply top-level QueryBase flags (with_row_id, fast_search, postfilter,
+/// reranker, norm) to any builder implementing lancedb's QueryBase trait.
+/// Shared by the vector, FTS, and standard query paths — all three use
+/// VectorQuery or Query which both implement QueryBase.
+pub(crate) fn apply_query_base_flags<Q: QueryBase>(
+    mut q: Q,
+    config: &serde_json::Value,
+) -> Result<Q, lancedb::Error> {
     if config
         .get("with_row_id")
         .and_then(|v| v.as_bool())
@@ -61,7 +127,14 @@ pub(crate) fn apply_query_base_flags<Q: QueryBase>(mut q: Q, config: &serde_json
     {
         q = q.postfilter();
     }
-    q
+    let (reranker, norm) = parse_reranker(config)?;
+    if let Some(r) = reranker {
+        q = q.rerank(r);
+    }
+    if let Some(n) = norm {
+        q = q.norm(n);
+    }
+    Ok(q)
 }
 
 /// Build and execute a query from JSON config, returning a record batch stream.
@@ -141,7 +214,7 @@ async fn execute_query_from_config(
                         vector_query = vector_query.bypass_vector_index();
                     }
 
-                    vector_query = apply_query_base_flags(vector_query, query_config);
+                    vector_query = apply_query_base_flags(vector_query, query_config)?;
 
                     return vector_query.execute().await;
                 }
@@ -198,7 +271,7 @@ async fn execute_query_from_config(
             });
         }
 
-        fts_query = apply_query_base_flags(fts_query, query_config);
+        fts_query = apply_query_base_flags(fts_query, query_config)?;
 
         return fts_query.execute().await;
     }
@@ -225,7 +298,7 @@ async fn execute_query_from_config(
         query = query.only_if(filter);
     }
 
-    query = apply_query_base_flags(query, query_config);
+    query = apply_query_base_flags(query, query_config)?;
 
     query.execute().await
 }
@@ -442,5 +515,33 @@ pub extern "C" fn simple_lancedb_table_select_query_ipc(
         Err(_) => Box::into_raw(Box::new(SimpleResult::error(
             "Panic in simple_lancedb_table_select_query_ipc".to_string(),
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Both a missing reranker key and an explicit null must be treated
+    // as "no reranker configured". Go's omitempty cannot drop a non-nil
+    // *RerankerConfig pointer, so users who hand-build QueryConfig with
+    // RerankerNone end up sending the null form.
+    #[test]
+    fn parse_reranker_treats_missing_and_null_as_none() {
+        let no_key = serde_json::json!({});
+        let (r, n) = parse_reranker(&no_key).unwrap();
+        assert!(r.is_none() && n.is_none(), "missing reranker key");
+
+        let null = serde_json::json!({"reranker": null});
+        let (r, n) = parse_reranker(&null).unwrap();
+        assert!(r.is_none() && n.is_none(), "explicit null reranker");
+    }
+
+    #[test]
+    fn parse_reranker_rejects_unknown_kind() {
+        let bad = serde_json::json!({"reranker": {"kind": "what"}});
+        let err = parse_reranker(&bad).expect_err("unknown kind must error");
+        let msg = err.to_string();
+        assert!(msg.contains("Unknown reranker kind"), "got: {}", msg);
     }
 }

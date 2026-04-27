@@ -166,6 +166,12 @@ index-builder: check-libraries
 	@cd index_builder && \
 	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run index_builder.go
 
+reranker: check-libraries
+	@echo "🚀 Running Reranker (RRF) example..."
+	@echo "Platform: $(PLATFORM_ARCH)"
+	@cd reranker && \
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run reranker.go
+
 # Build all examples (without running)
 build-all: check-libraries
 	@echo "🔨 Building all examples for $(PLATFORM_ARCH)..."

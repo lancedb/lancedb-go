@@ -1,6 +1,9 @@
 package contracts
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // IndexType represents the type of index to create
 type IndexType int
@@ -82,6 +85,73 @@ type CreateIndexOptions struct {
 	WaitTimeout time.Duration
 }
 
+// RerankerKind identifies the reranker to apply to a query's results. The
+// upstream lancedb v0.24.0 ships RRF as its only built-in; this enum
+// leaves room for future kinds without breaking callers.
+type RerankerKind int
+
+const (
+	// RerankerNone leaves the query un-reranked.
+	RerankerNone RerankerKind = iota
+	// RerankerRRF is Reciprocal Rank Fusion. Good default for hybrid
+	// vector+FTS queries.
+	RerankerRRF
+)
+
+// NormalizeMethod maps to lancedb::rerankers::NormalizeMethod. Controls
+// how the reranker combines scores across modalities.
+type NormalizeMethod int
+
+const (
+	// NormalizeDefault leaves the reranker's own default behaviour.
+	NormalizeDefault NormalizeMethod = iota
+	// NormalizeScore normalises by raw score.
+	NormalizeScore
+	// NormalizeRank normalises by rank (typical for RRF).
+	NormalizeRank
+)
+
+// RerankerConfig describes how to rerank query results. Kind selects the
+// reranker; the remaining fields are per-kind. Leave RerankerNone to skip
+// reranking.
+type RerankerConfig struct {
+	Kind RerankerKind
+	// RRFK maps to lancedb::rerankers::RRFReranker::new(k). Defaults to
+	// 60.0 when zero and Kind == RerankerRRF (matches upstream).
+	RRFK float32
+	// Norm sets the normalization method for the reranker.
+	Norm NormalizeMethod
+}
+
+// MarshalJSON emits the wire shape consumed by the Rust FFI
+// ({"kind":"rrf","k":...,"norm":...}). RerankerNone marshals to null so
+// omitempty on the parent field drops the section entirely.
+func (rc *RerankerConfig) MarshalJSON() ([]byte, error) {
+	if rc == nil || rc.Kind == RerankerNone {
+		return []byte("null"), nil
+	}
+	var wire struct {
+		Kind string   `json:"kind"`
+		K    *float32 `json:"k,omitempty"`
+		Norm string   `json:"norm,omitempty"`
+	}
+	switch rc.Kind {
+	case RerankerRRF:
+		wire.Kind = "rrf"
+	}
+	if rc.RRFK > 0 {
+		k := rc.RRFK
+		wire.K = &k
+	}
+	switch rc.Norm {
+	case NormalizeScore:
+		wire.Norm = "score"
+	case NormalizeRank:
+		wire.Norm = "rank"
+	}
+	return json.Marshal(wire)
+}
+
 // IndexStatistics represents statistics about an index
 type IndexStatistics struct {
 	NumIndexedRows   int64    `json:"num_indexed_rows"`
@@ -111,6 +181,11 @@ type QueryConfig struct {
 	// candidate set is materialised. Default is prefilter. Maps to
 	// QueryBase::postfilter().
 	Postfilter bool `json:"postfilter,omitempty"`
+
+	// Reranker attaches a reranker to the query. Nil leaves the backend
+	// default (no reranker on single-channel queries; automatic RRF on
+	// hybrid nearest_to + full_text_search queries).
+	Reranker *RerankerConfig `json:"reranker,omitempty"`
 }
 
 // VectorSearch represents vector similarity search parameters
