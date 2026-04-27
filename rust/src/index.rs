@@ -7,6 +7,7 @@ use crate::ffi::{from_c_str, SimpleResult};
 use crate::runtime::get_simple_runtime;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
+use std::time::Duration;
 
 /// Create an index on the specified columns
 #[no_mangle]
@@ -293,6 +294,79 @@ pub extern "C" fn simple_lancedb_table_index_stats(
         Ok(res) => Box::into_raw(Box::new(res)),
         Err(_) => Box::into_raw(Box::new(SimpleResult::error(
             "Panic in simple_lancedb_table_index_stats".to_string(),
+        ))),
+    }
+}
+
+/// Wait for the named indices to finish building, with a timeout in
+/// milliseconds. An empty `index_names` array defaults to all indices on
+/// the table. A `timeout_ms` value of 0 means "wait essentially forever"
+/// (Duration::MAX). The call blocks the calling thread until either all
+/// listed indices report no unindexed rows or the deadline elapses.
+///
+/// Returns SimpleResult::ok() on success, or SimpleResult::error() with a
+/// backend-supplied message on timeout / missing index / I/O failure.
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn simple_lancedb_table_wait_for_index(
+    table_handle: *mut c_void,
+    index_names: *const *const c_char,
+    index_names_count: usize,
+    timeout_ms: u64,
+) -> *mut SimpleResult {
+    let result = std::panic::catch_unwind(|| -> SimpleResult {
+        if table_handle.is_null() {
+            return SimpleResult::error("Invalid null table handle".to_string());
+        }
+        if index_names_count > 0 && index_names.is_null() {
+            return SimpleResult::error(
+                "Non-zero index_names_count requires a non-null array".to_string(),
+            );
+        }
+
+        // Materialise the C string array into Vec<String> so we own the
+        // backing memory for the borrowed Vec<&str> we hand to lancedb.
+        let mut names_owned: Vec<String> = Vec::with_capacity(index_names_count);
+        for i in 0..index_names_count {
+            // SAFETY: caller guarantees index_names points to at least
+            // index_names_count valid *const c_char entries.
+            let raw = unsafe { *index_names.add(i) };
+            if raw.is_null() {
+                return SimpleResult::error(format!("index_names[{}] is a null pointer", i));
+            }
+            match from_c_str(raw) {
+                Ok(s) => names_owned.push(s),
+                Err(e) => {
+                    return SimpleResult::error(format!(
+                        "Invalid UTF-8 in index_names[{}]: {}",
+                        i, e
+                    ))
+                }
+            }
+        }
+        let names_borrowed: Vec<&str> = names_owned.iter().map(String::as_str).collect();
+
+        // 0 means "effectively forever"; the caller can still cancel from
+        // the Go side by letting the table drop.
+        let timeout = if timeout_ms == 0 {
+            Duration::MAX
+        } else {
+            Duration::from_millis(timeout_ms)
+        };
+
+        let table = unsafe { &*(table_handle as *const lancedb::Table) };
+        let rt = get_simple_runtime();
+
+        match rt.block_on(async { table.wait_for_index(&names_borrowed, timeout).await }) {
+            Ok(()) => SimpleResult::ok(),
+            Err(e) => SimpleResult::error(format!("wait_for_index failed: {}", e)),
+        }
+    });
+
+    match result {
+        Ok(res) => Box::into_raw(Box::new(res)),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_wait_for_index".to_string(),
         ))),
     }
 }

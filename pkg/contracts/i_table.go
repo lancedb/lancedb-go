@@ -5,6 +5,7 @@ package contracts
 
 import (
 	"context"
+	"time"
 
 	"github.com/apache/arrow/go/v17/arrow"
 )
@@ -66,6 +67,13 @@ type ITable interface {
 
 	// Retrieve statistics about an index
 	IndexStats(ctx context.Context, indexName string) (*IndexStatistics, error)
+
+	// WaitForIndex blocks until the named indexes have finished building
+	// or the timeout elapses. An empty names slice waits for every index
+	// on the table. A zero timeout means "no upper bound" — rely on ctx
+	// cancellation to abort early. Returns an error on timeout, missing
+	// index, or backend failure.
+	WaitForIndex(ctx context.Context, names []string, timeout time.Duration) error
 
 	// Select executes a query with the provided configuration and returns the results
 	Select(ctx context.Context, config QueryConfig) ([]map[string]interface{}, error)

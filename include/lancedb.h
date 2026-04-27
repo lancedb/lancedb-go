@@ -147,6 +147,21 @@ struct SimpleResult *simple_lancedb_table_index_stats(void *table_handle,
                                                       char **index_stats_json);
 
 /**
+ * Wait for the named indices to finish building, with a timeout in
+ * milliseconds. An empty `index_names` array defaults to all indices on
+ * the table. A `timeout_ms` value of 0 means "wait essentially forever"
+ * (Duration::MAX). The call blocks the calling thread until either all
+ * listed indices report no unindexed rows or the deadline elapses.
+ *
+ * Returns SimpleResult::ok() on success, or SimpleResult::error() with a
+ * backend-supplied message on timeout / missing index / I/O failure.
+ */
+struct SimpleResult *simple_lancedb_table_wait_for_index(void *table_handle,
+                                                         const char *const *index_names,
+                                                         size_t index_names_count,
+                                                         uint64_t timeout_ms);
+
+/**
  * Count rows in a table (simple version)
  */
 struct SimpleResult *simple_lancedb_table_count_rows(void *table_handle, int64_t *count);
