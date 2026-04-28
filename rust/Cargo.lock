@@ -3990,6 +3990,7 @@ dependencies = [
  "arrow-ord",
  "arrow-schema",
  "cbindgen",
+ "chrono",
  "env_logger",
  "lancedb",
  "libc",

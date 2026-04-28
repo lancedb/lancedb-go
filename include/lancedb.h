@@ -260,6 +260,17 @@ struct SimpleResult *simple_lancedb_table_close(void *table_handle);
 struct SimpleResult *simple_lancedb_table_optimize(void *table_handle, char **optimize_stats_json);
 
 /**
+ * Optimize the on-disk data and indices with a configurable
+ * OptimizeAction. The `action_json` argument selects the sub-action and
+ * carries its options; `OptimizeAction::All` (the original behaviour
+ * available via `simple_lancedb_table_optimize`) corresponds to
+ * `{"type":"all"}`.
+ */
+struct SimpleResult *simple_lancedb_table_optimize_v2(void *table_handle,
+                                                      const char *action_json,
+                                                      char **optimize_stats_json);
+
+/**
  * Free a VersionInfo structure
  */
 void lancedb_version_info_free(struct VersionInfo *version);

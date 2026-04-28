@@ -148,6 +148,12 @@ merge-insert: check-libraries
 	@cd merge_insert && \
 	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run merge_insert.go
 
+optimize-action: check-libraries
+	@echo "🚀 Running OptimizeWithAction example..."
+	@echo "Platform: $(PLATFORM_ARCH)"
+	@cd optimize_action && \
+	CGO_CFLAGS="$(CGO_CFLAGS)" CGO_LDFLAGS="$(CGO_LDFLAGS)" go run optimize_action.go
+
 query-tuning: check-libraries
 	@echo "🚀 Running Per-Query Tuning example..."
 	@echo "Platform: $(PLATFORM_ARCH)"
