@@ -107,8 +107,15 @@ type ITable interface {
 	// SelectWithLimit returns a limited number of records with optional offset
 	SelectWithLimit(ctx context.Context, limit int, offset int) ([]map[string]interface{}, error)
 
-	// Optimize the on-disk data and indices for better performance
+	// Optimize the on-disk data and indices for better performance.
+	// Equivalent to OptimizeWithAction(ctx, OptimizeAction{Kind: OptimizeAll}).
 	Optimize(ctx context.Context) (*OptimizeStats, error)
+
+	// OptimizeWithAction runs a configurable optimize action — Compact,
+	// Prune, Index, or All. Use this when you need to control which
+	// sub-pass runs (e.g. only Prune to reclaim disk after deletions)
+	// or to tune per-action parameters.
+	OptimizeWithAction(ctx context.Context, action OptimizeAction) (*OptimizeStats, error)
 }
 
 // AddDataOptions configures how data is added to a Table

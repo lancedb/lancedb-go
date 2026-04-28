@@ -767,8 +767,17 @@ func (t *Table) SelectWithLimit(ctx context.Context, limit int, offset int) ([]m
 	})
 }
 
-// Optimize the on-disk data and indices for better performance
-func (t *Table) Optimize(_ context.Context) (*contracts.OptimizeStats, error) {
+// Optimize the on-disk data and indices for better performance.
+// Equivalent to OptimizeWithAction(ctx, OptimizeAction{Kind: OptimizeAll}).
+func (t *Table) Optimize(ctx context.Context) (*contracts.OptimizeStats, error) {
+	return t.OptimizeWithAction(ctx, contracts.OptimizeAction{Kind: contracts.OptimizeAll})
+}
+
+// OptimizeWithAction runs the configured OptimizeAction (All / Compact /
+// Prune / Index) and returns the resulting stats.
+//
+//nolint:gocritic
+func (t *Table) OptimizeWithAction(_ context.Context, action contracts.OptimizeAction) (*contracts.OptimizeStats, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -776,8 +785,16 @@ func (t *Table) Optimize(_ context.Context) (*contracts.OptimizeStats, error) {
 		return nil, fmt.Errorf("table is closed")
 	}
 
+	actionJSON, err := optimizeActionToJSON(action)
+	if err != nil {
+		return nil, err
+	}
+	cActionJSON := C.CString(string(actionJSON))
+	// #nosec G103 - Required for freeing C allocated string memory
+	defer C.free(unsafe.Pointer(cActionJSON))
+
 	var optimizeStatsJSON *C.char
-	result := C.simple_lancedb_table_optimize(t.handle, &optimizeStatsJSON)
+	result := C.simple_lancedb_table_optimize_v2(t.handle, cActionJSON, &optimizeStatsJSON)
 	defer C.simple_lancedb_result_free(result)
 
 	if !result.SUCCESS {
@@ -795,13 +812,68 @@ func (t *Table) Optimize(_ context.Context) (*contracts.OptimizeStats, error) {
 	jsonStr := C.GoString(optimizeStatsJSON)
 	C.simple_lancedb_free_string(optimizeStatsJSON)
 
-	// Parse JSON response
 	var optimizeStats contracts.OptimizeStats
 	if err := json.Unmarshal([]byte(jsonStr), &optimizeStats); err != nil {
 		return nil, fmt.Errorf("failed to parse optimize stats JSON: %w", err)
 	}
-
 	return &optimizeStats, nil
+}
+
+// optimizeActionToJSON converts the public OptimizeAction into the wire
+// shape consumed by simple_lancedb_table_optimize_v2. Per-kind fields
+// from CompactionParams / PruneParams that are nil are omitted so the
+// Rust side falls back to its defaults.
+//
+// Exported only as a private helper; callers should use
+// OptimizeWithAction (or Optimize for the All shortcut).
+func optimizeActionToJSON(action contracts.OptimizeAction) ([]byte, error) {
+	switch action.Kind {
+	case contracts.OptimizeAll:
+		return json.Marshal(struct {
+			Type string `json:"type"`
+		}{Type: "all"})
+
+	case contracts.OptimizeCompact:
+		envelope := struct {
+			Type string `json:"type"`
+			contracts.CompactionParams
+		}{
+			Type:             "compact",
+			CompactionParams: action.Compaction,
+		}
+		return json.Marshal(envelope)
+
+	case contracts.OptimizePrune:
+		envelope := struct {
+			Type                     string  `json:"type"`
+			OlderThanSeconds         *uint64 `json:"older_than_seconds,omitempty"`
+			DeleteUnverified         *bool   `json:"delete_unverified,omitempty"`
+			ErrorIfTaggedOldVersions *bool   `json:"error_if_tagged_old_versions,omitempty"`
+		}{Type: "prune"}
+		if action.Prune.OlderThan > 0 {
+			// Floor sub-second positive durations to 1s instead of
+			// truncating to 0 — the Rust side maps 0 to
+			// TimeDelta::seconds(0) (immediate cutoff), which would
+			// silently prune very recent versions when callers pass a
+			// small duration like 500*time.Millisecond.
+			secs := uint64(action.Prune.OlderThan / time.Second)
+			if secs == 0 {
+				secs = 1
+			}
+			envelope.OlderThanSeconds = &secs
+		}
+		envelope.DeleteUnverified = action.Prune.DeleteUnverified
+		envelope.ErrorIfTaggedOldVersions = action.Prune.ErrorIfTaggedOldVersions
+		return json.Marshal(envelope)
+
+	case contracts.OptimizeIndex:
+		return json.Marshal(struct {
+			Type string `json:"type"`
+		}{Type: "index"})
+
+	default:
+		return nil, fmt.Errorf("unknown OptimizeActionKind: %d", action.Kind)
+	}
 }
 
 // indexTypeToString converts IndexType enum to string representation

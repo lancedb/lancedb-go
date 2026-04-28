@@ -6,7 +6,8 @@
 use crate::ffi::{from_c_str, SimpleResult};
 use crate::runtime::get_simple_runtime;
 use crate::schema::create_arrow_schema_from_json;
-use lancedb::table::OptimizeAction;
+use chrono::TimeDelta;
+use lancedb::table::{CompactionOptions, OptimizeAction, OptimizeOptions};
 use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
 use std::sync::Arc;
@@ -281,5 +282,254 @@ pub extern "C" fn simple_lancedb_table_optimize(
         Err(_) => Box::into_raw(Box::new(SimpleResult::error(
             "Panic in simple_lancedb_table_optimize".to_string(),
         ))),
+    }
+}
+
+/// Build a lancedb::table::OptimizeAction from the action JSON. Shape:
+///   {"type": "all"}                                  -> OptimizeAction::All
+///   {"type": "compact",
+///    "target_rows_per_fragment": <usize>?,
+///    "max_rows_per_group": <usize>?,
+///    "max_bytes_per_file": <usize>?,
+///    "materialize_deletions": <bool>?,
+///    "materialize_deletions_threshold": <f32>?,
+///    "num_threads": <usize>?,
+///    "batch_size": <usize>?}                          -> OptimizeAction::Compact
+///   {"type": "prune",
+///    "older_than_seconds": <u64>?,
+///    "delete_unverified": <bool>?,
+///    "error_if_tagged_old_versions": <bool>?}        -> OptimizeAction::Prune
+///   {"type": "index"}                                 -> OptimizeAction::Index
+///
+/// Unknown fields per branch are ignored. Returns Err(String) on a
+/// missing/unknown "type" or a value that doesn't fit the expected
+/// integer width.
+fn build_optimize_action(cfg: &serde_json::Value) -> Result<OptimizeAction, String> {
+    let kind = cfg
+        .get("type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "OptimizeAction config requires a 'type' field".to_string())?;
+
+    let usize_opt = |k: &str| -> Result<Option<usize>, String> {
+        match cfg.get(k).and_then(|v| v.as_u64()) {
+            None => Ok(None),
+            Some(n) => usize::try_from(n)
+                .map(Some)
+                .map_err(|_| format!("'{}' value {} does not fit in usize", k, n)),
+        }
+    };
+    let bool_opt = |k: &str| -> Option<bool> { cfg.get(k).and_then(|v| v.as_bool()) };
+
+    match kind {
+        "all" => Ok(OptimizeAction::All),
+
+        "compact" => {
+            let mut options = CompactionOptions::default();
+            if let Some(n) = usize_opt("target_rows_per_fragment")? {
+                options.target_rows_per_fragment = n;
+            }
+            if let Some(n) = usize_opt("max_rows_per_group")? {
+                options.max_rows_per_group = n;
+            }
+            if let Some(n) = usize_opt("max_bytes_per_file")? {
+                options.max_bytes_per_file = Some(n);
+            }
+            if let Some(v) = bool_opt("materialize_deletions") {
+                options.materialize_deletions = v;
+            }
+            if let Some(f) = cfg
+                .get("materialize_deletions_threshold")
+                .and_then(|v| v.as_f64())
+            {
+                options.materialize_deletions_threshold = f as f32;
+            }
+            if let Some(n) = usize_opt("num_threads")? {
+                options.num_threads = Some(n);
+            }
+            if let Some(n) = usize_opt("batch_size")? {
+                options.batch_size = Some(n);
+            }
+            Ok(OptimizeAction::Compact {
+                options,
+                remap_options: None,
+            })
+        }
+
+        "prune" => {
+            let older_than = match cfg.get("older_than_seconds").and_then(|v| v.as_u64()) {
+                None => None,
+                Some(secs) => {
+                    // TimeDelta::try_seconds is fallible because the
+                    // chrono internal range is finite; wrap with a clear
+                    // error when the caller hands in something absurd.
+                    let i = i64::try_from(secs).map_err(|_| {
+                        format!("'older_than_seconds' value {} does not fit in i64", secs)
+                    })?;
+                    Some(TimeDelta::try_seconds(i).ok_or_else(|| {
+                        format!(
+                            "'older_than_seconds' value {} is out of TimeDelta range",
+                            secs
+                        )
+                    })?)
+                }
+            };
+            Ok(OptimizeAction::Prune {
+                older_than,
+                delete_unverified: bool_opt("delete_unverified"),
+                error_if_tagged_old_versions: bool_opt("error_if_tagged_old_versions"),
+            })
+        }
+
+        "index" => Ok(OptimizeAction::Index(OptimizeOptions::default())),
+
+        other => Err(format!("Unknown OptimizeAction type: {}", other)),
+    }
+}
+
+/// Optimize the on-disk data and indices with a configurable
+/// OptimizeAction. The `action_json` argument selects the sub-action and
+/// carries its options; `OptimizeAction::All` (the original behaviour
+/// available via `simple_lancedb_table_optimize`) corresponds to
+/// `{"type":"all"}`.
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn simple_lancedb_table_optimize_v2(
+    table_handle: *mut c_void,
+    action_json: *const c_char,
+    optimize_stats_json: *mut *mut c_char,
+) -> *mut SimpleResult {
+    let result = std::panic::catch_unwind(|| -> SimpleResult {
+        if table_handle.is_null() || action_json.is_null() || optimize_stats_json.is_null() {
+            return SimpleResult::error("Invalid null arguments".to_string());
+        }
+
+        let cfg_str = match from_c_str(action_json) {
+            Ok(s) => s,
+            Err(e) => return SimpleResult::error(format!("Invalid action JSON: {}", e)),
+        };
+        let cfg: serde_json::Value = match serde_json::from_str(&cfg_str) {
+            Ok(v) => v,
+            Err(e) => return SimpleResult::error(format!("Failed to parse action JSON: {}", e)),
+        };
+        let action = match build_optimize_action(&cfg) {
+            Ok(a) => a,
+            Err(e) => return SimpleResult::error(e),
+        };
+
+        let table = unsafe { &*(table_handle as *const lancedb::Table) };
+        let rt = get_simple_runtime();
+
+        match rt.block_on(async { table.optimize(action).await }) {
+            Ok(stats) => {
+                let mut stats_json = serde_json::json!({});
+                if let Some(c) = stats.compaction {
+                    stats_json["compaction"] = serde_json::json!({
+                        "fragments_removed": c.fragments_removed,
+                        "fragments_added": c.fragments_added,
+                        "files_removed": c.files_removed,
+                        "files_added": c.files_added,
+                    });
+                }
+                if let Some(p) = stats.prune {
+                    stats_json["prune"] = serde_json::json!({
+                        "bytes_removed": p.bytes_removed,
+                        "old_versions": p.old_versions,
+                    });
+                }
+                match serde_json::to_string(&stats_json) {
+                    Ok(s) => match CString::new(s) {
+                        Ok(c) => {
+                            unsafe {
+                                *optimize_stats_json = c.into_raw();
+                            }
+                            SimpleResult::ok()
+                        }
+                        Err(_) => {
+                            SimpleResult::error("Failed to convert JSON to C string".to_string())
+                        }
+                    },
+                    Err(e) => {
+                        SimpleResult::error(format!("Failed to serialize optimize stats: {}", e))
+                    }
+                }
+            }
+            Err(e) => SimpleResult::error(format!("optimize_v2 failed: {}", e)),
+        }
+    });
+
+    match result {
+        Ok(res) => Box::into_raw(Box::new(res)),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_optimize_v2".to_string(),
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_optimize_action_all() {
+        let a = build_optimize_action(&serde_json::json!({"type": "all"})).unwrap();
+        assert!(matches!(a, OptimizeAction::All));
+    }
+
+    #[test]
+    fn build_optimize_action_prune_with_options() {
+        let a = build_optimize_action(&serde_json::json!({
+            "type": "prune",
+            "older_than_seconds": 86400,
+            "delete_unverified": true,
+            "error_if_tagged_old_versions": false,
+        }))
+        .unwrap();
+        match a {
+            OptimizeAction::Prune {
+                older_than,
+                delete_unverified,
+                error_if_tagged_old_versions,
+            } => {
+                assert_eq!(older_than, Some(TimeDelta::try_seconds(86400).unwrap()));
+                assert_eq!(delete_unverified, Some(true));
+                assert_eq!(error_if_tagged_old_versions, Some(false));
+            }
+            other => panic!("expected Prune, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn build_optimize_action_compact_with_options() {
+        let a = build_optimize_action(&serde_json::json!({
+            "type": "compact",
+            "target_rows_per_fragment": 200000,
+            "materialize_deletions": false,
+        }))
+        .unwrap();
+        match a {
+            OptimizeAction::Compact { options, .. } => {
+                assert_eq!(options.target_rows_per_fragment, 200000);
+                assert!(!options.materialize_deletions);
+            }
+            other => panic!("expected Compact, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    // OptimizeAction does not implement Debug, so the error-path tests
+    // can't use expect_err; pattern-match on the Result directly.
+    #[test]
+    fn build_optimize_action_unknown_kind_errors() {
+        match build_optimize_action(&serde_json::json!({"type": "what"})) {
+            Err(e) => assert!(e.contains("Unknown"), "got: {}", e),
+            Ok(_) => panic!("unknown type must error"),
+        }
+    }
+
+    #[test]
+    fn build_optimize_action_missing_type_errors() {
+        match build_optimize_action(&serde_json::json!({})) {
+            Err(e) => assert!(e.contains("'type'"), "got: {}", e),
+            Ok(_) => panic!("missing type must error"),
+        }
     }
 }

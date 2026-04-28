@@ -234,6 +234,61 @@ type RemovalStats struct {
 	OldVersions  *int64 `json:"old_versions,omitempty"`
 }
 
+// OptimizeActionKind picks which sub-action OptimizeWithAction performs.
+// Mirrors lancedb::table::OptimizeAction.
+type OptimizeActionKind int
+
+const (
+	// OptimizeAll runs every optimization with default values (the same
+	// as the existing Optimize(ctx) entry point).
+	OptimizeAll OptimizeActionKind = iota
+	// OptimizeCompact merges small fragments into larger ones. Useful
+	// after a burst of writes; not needed for read-only tables.
+	OptimizeCompact
+	// OptimizePrune removes old dataset versions. Reclaims disk
+	// previously kept around for time travel.
+	OptimizePrune
+	// OptimizeIndex incrementally folds unindexed rows into existing
+	// indices. Faster than rebuilding the index from scratch.
+	OptimizeIndex
+)
+
+// CompactionParams carries CompactionOptions for OptimizeCompact. All
+// fields are optional — pointer fields treat nil as "backend default".
+type CompactionParams struct {
+	TargetRowsPerFragment         *uint64  `json:"target_rows_per_fragment,omitempty"`
+	MaxRowsPerGroup               *uint64  `json:"max_rows_per_group,omitempty"`
+	MaxBytesPerFile               *uint64  `json:"max_bytes_per_file,omitempty"`
+	MaterializeDeletions          *bool    `json:"materialize_deletions,omitempty"`
+	MaterializeDeletionsThreshold *float32 `json:"materialize_deletions_threshold,omitempty"`
+	NumThreads                    *uint64  `json:"num_threads,omitempty"`
+	BatchSize                     *uint64  `json:"batch_size,omitempty"`
+}
+
+// PruneParams carries the OptimizeAction::Prune options.
+type PruneParams struct {
+	// OlderThan is the minimum age a version must reach before it's
+	// eligible for pruning. Zero leaves the lancedb default.
+	OlderThan time.Duration
+	// DeleteUnverified pairs with OlderThan to override lancedb's
+	// 7-day safety margin for in-progress transactions. nil leaves the
+	// backend default.
+	DeleteUnverified *bool
+	// ErrorIfTaggedOldVersions makes prune fail when an old version is
+	// referenced by a dataset tag. nil leaves the backend default.
+	ErrorIfTaggedOldVersions *bool
+}
+
+// OptimizeAction picks the sub-action and (when relevant) carries its
+// parameters. Use one of the OptimizeAll/OptimizeCompact/OptimizePrune/
+// OptimizeIndex constants for Kind; the matching params field is read
+// only for that kind.
+type OptimizeAction struct {
+	Kind       OptimizeActionKind
+	Compaction CompactionParams
+	Prune      PruneParams
+}
+
 // OptimizeStats represents stats of the version pruning
 type OptimizeStats struct {
 	Compaction *CompactionMetrics `json:"compaction,omitempty"`
