@@ -40,6 +40,8 @@ type VectorQueryBuilder struct {
 	refineFactor      *uint32
 	ef                *int
 	bypassVectorIndex bool
+	fullTextQuery     string
+	fullTextColumn    string
 }
 
 // Filter adds a filter condition to the query
@@ -277,6 +279,24 @@ func (vq *VectorQueryBuilder) Rerank(cfg lancedb.RerankerConfig) lancedb.IVector
 	return vq
 }
 
+// WithFullText turns the vector query into a hybrid vector+FTS query.
+// `column` may be empty to let lancedb pick the FTS-indexed column.
+//
+// `query` is trimmed; whitespace-only input is treated the same as the
+// empty string and falls back to a pure vector search (matches the
+// Rust-side guard that protects FullTextSearchQuery::new from an empty
+// tokenizer result).
+//
+// VectorQueryBuilder is single-use: calling Execute consumes the
+// configured state. Reusing a builder after Execute keeps any prior
+// WithFullText / Nprobes / etc. intact, which is rarely the intent;
+// build a fresh VectorQuery for each call site.
+func (vq *VectorQueryBuilder) WithFullText(query, column string) lancedb.IVectorQueryBuilder {
+	vq.fullTextQuery = strings.TrimSpace(query)
+	vq.fullTextColumn = column
+	return vq
+}
+
 // Execute executes the vector search query and returns results.
 // Delegates to Table.SelectIPC() which holds the mutex and checks closed state.
 func (vq *VectorQueryBuilder) Execute(ctx context.Context) (arrow.Record, error) {
@@ -317,6 +337,8 @@ func (vq *VectorQueryBuilder) Execute(ctx context.Context) (arrow.Record, error)
 	config.VectorSearch.RefineFactor = vq.refineFactor
 	config.VectorSearch.Ef = vq.ef
 	config.VectorSearch.BypassVectorIndex = vq.bypassVectorIndex
+	config.VectorSearch.FullTextQuery = vq.fullTextQuery
+	config.VectorSearch.FullTextColumn = vq.fullTextColumn
 
 	ipcBytes, err := vq.table.SelectIPC(ctx, config)
 	if err != nil {

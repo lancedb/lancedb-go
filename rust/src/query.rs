@@ -214,6 +214,39 @@ async fn execute_query_from_config(
                         vector_query = vector_query.bypass_vector_index();
                     }
 
+                    // Hybrid: when a full_text_query is present alongside the
+                    // vector, chain .full_text_search() so lancedb's
+                    // execute_hybrid path fuses the two channels. The default
+                    // reranker is RRF; the caller can override via the
+                    // top-level "reranker" config.
+                    if let Some(fts_text) = vector_search
+                        .get("full_text_query")
+                        .and_then(|v| v.as_str())
+                    {
+                        // Trim before the empty check: a whitespace-only
+                        // query like "   " would otherwise reach
+                        // FullTextSearchQuery::new and produce an empty
+                        // tokenizer result, surfacing as either no rows
+                        // or a backend error depending on the FTS index.
+                        let trimmed = fts_text.trim();
+                        if !trimmed.is_empty() {
+                            let mut fts = FullTextSearchQuery::new(trimmed.to_string());
+                            if let Some(col) = vector_search
+                                .get("full_text_column")
+                                .and_then(|v| v.as_str())
+                            {
+                                if !col.is_empty() {
+                                    fts = fts.with_column(col.to_string()).map_err(|e| {
+                                        lancedb::Error::InvalidInput {
+                                            message: format!("Invalid FTS column: {}", e),
+                                        }
+                                    })?;
+                                }
+                            }
+                            vector_query = vector_query.full_text_search(fts);
+                        }
+                    }
+
                     vector_query = apply_query_base_flags(vector_query, query_config)?;
 
                     return vector_query.execute().await;
