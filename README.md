@@ -185,8 +185,8 @@ The [`examples/`](./examples) directory contains comprehensive examples demonstr
    - `WhenMatchedUpdateAll`, `WhenNotMatchedInsertAll`, `WhenNotMatchedBySourceDelete`
    - Idempotent upsert pipelines
 
-8. **[Index Builder](./examples/index_builder/index_builder.go)** - `CreateIndexV2` with full tuning
-   - Named indexes and replace semantics
+8. **[Index Builder](./examples/index_builder/index_builder.go)** - `CreateIndexWithParams` with full tuning
+   - Named indexes via `CreateIndexWithName` and replace semantics via `CreateIndexOptions.Replace`
    - IVF tuning (`num_partitions`, `num_sub_vectors`) and HNSW tuning (`m`, `ef_construction`)
 
 9. **[Wait For Index](./examples/wait_for_index/wait_for_index.go)** - Block until an index is ready
