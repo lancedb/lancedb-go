@@ -15,7 +15,7 @@ First, download the platform-specific native libraries and C header files:
 curl -sSL https://raw.githubusercontent.com/lancedb/lancedb-go/main/scripts/download-artifacts.sh | bash
 
 # Or download a specific version
-curl -sSL https://raw.githubusercontent.com/lancedb/lancedb-go/main/scripts/download-artifacts.sh | bash -s v1.0.0
+curl -sSL https://raw.githubusercontent.com/lancedb/lancedb-go/main/scripts/download-artifacts.sh | bash -s v0.1.2
 ```
 
 Alternatively, you can download the script and run it manually:
@@ -29,7 +29,7 @@ chmod +x download-artifacts.sh
 ./download-artifacts.sh
 
 # Or specify a version
-./download-artifacts.sh v1.0.0
+./download-artifacts.sh v0.1.2
 ```
 
 This will create the following directory structure in your project:
@@ -163,8 +163,8 @@ The [`examples/`](./examples) directory contains comprehensive examples demonstr
    - Real-world search scenarios
 
 4. **[Index Management](./examples/index_management/index_management.go)** - Creating and managing indexes
-   - Vector indexes: IVF-PQ, IVF-Flat, HNSW-PQ
-   - Scalar indexes: BTree for range queries, Bitmap for categorical data
+   - Vector indexes: IVF-PQ, IVF-Flat, HNSW-PQ, HNSW-SQ
+   - Scalar indexes: BTree for range queries, Bitmap for categorical data, Label List for multi-label fields
    - Full-text search indexes
    - Performance comparison and optimization
 
@@ -178,7 +178,36 @@ The [`examples/`](./examples) directory contains comprehensive examples demonstr
    - Local file system storage optimization
    - AWS S3 configuration with authentication methods
    - MinIO object storage for local development
+   - Azure Blob Storage (`az://`) and Google Cloud Storage (`gs://`)
    - Performance comparison and optimization
+
+7. **[Merge Insert (Upsert)](./examples/merge_insert/merge_insert.go)** - Update-or-insert by key
+   - `WhenMatchedUpdateAll`, `WhenNotMatchedInsertAll`, `WhenNotMatchedBySourceDelete`
+   - Idempotent upsert pipelines
+
+8. **[Index Builder](./examples/index_builder/index_builder.go)** - `CreateIndexWithParams` with full tuning
+   - Named indexes via `CreateIndexWithName` and replace semantics via `CreateIndexOptions.Replace`
+   - IVF tuning (`num_partitions`, `num_sub_vectors`) and HNSW tuning (`m`, `ef_construction`)
+
+9. **[Wait For Index](./examples/wait_for_index/wait_for_index.go)** - Block until an index is ready
+   - Polls index build status with timeout
+   - Useful right after `CreateIndex` on large tables
+
+10. **[Query Tuning](./examples/query_tuning/query_tuning.go)** - Per-query vector knobs
+    - `nprobes`, `ef`, `refine_factor` overrides at query time
+    - Trade off recall vs latency without rebuilding the index
+
+11. **[Reranker (RRF)](./examples/reranker/reranker.go)** - Reciprocal Rank Fusion
+    - Apply RRF on hybrid result sets
+    - `RRFK` parameter tuning
+
+12. **[Hybrid Vector + FTS](./examples/hybrid_vector_fts/hybrid_vector_fts.go)** - Combine vector and full-text search
+    - `WithFullText` on `VectorQuery`
+    - Automatic RRF fusion across vector and FTS channels
+
+13. **[Optimize Action](./examples/optimize_action/optimize_action.go)** - Targeted maintenance sub-actions
+    - `OptimizeCompact`, `OptimizeIndex`, `OptimizePrune`
+    - Run individual optimizations instead of the full pipeline
 
 ### 🚀 Quick Start
 
