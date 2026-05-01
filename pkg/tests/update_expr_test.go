@@ -44,7 +44,11 @@ func TestUpdateExpr(t *testing.T) {
 
 	pool := memory.NewGoAllocator()
 
-	seed := func(t *testing.T, name string) contracts.ITable {
+	// Returns the seeded ITable plus the same backing object asserted to
+	// the optional ITableUpdateExpr extension. Sub-tests use the second
+	// return for UpdateExpr calls and the first for everything else
+	// (SelectWithFilter, Close, ...).
+	seed := func(t *testing.T, name string) (contracts.ITable, contracts.ITableUpdateExpr) {
 		t.Helper()
 		table, err := conn.CreateTable(context.Background(), name, schema)
 		if err != nil {
@@ -60,12 +64,16 @@ func TestUpdateExpr(t *testing.T) {
 		if err := table.Add(context.Background(), rec, nil); err != nil {
 			t.Fatalf("seed add: %v", err)
 		}
-		return table
+		updater, ok := table.(contracts.ITableUpdateExpr)
+		if !ok {
+			t.Fatalf("table does not implement contracts.ITableUpdateExpr")
+		}
+		return table, updater
 	}
 
 	t.Run("FilterAndStringLiteral", func(t *testing.T) {
-		table := seed(t, "update_expr_filter_literal")
-		res, err := table.UpdateExpr(context.Background(), "id > 3",
+		table, updater := seed(t, "update_expr_filter_literal")
+		res, err := updater.UpdateExpr(context.Background(), "id > 3",
 			[]contracts.UpdateAssignment{
 				{Column: "name", Expr: "'updated'"},
 			})
@@ -102,8 +110,8 @@ func TestUpdateExpr(t *testing.T) {
 		// JSON-literal Update path (it would auto-quote to `'score + 100'`
 		// and DataFusion would reject the cast). UpdateExpr forwards the
 		// expression verbatim so the per-row score doubles-plus-100 lands.
-		table := seed(t, "update_expr_sql")
-		res, err := table.UpdateExpr(context.Background(), "id <= 3",
+		table, updater := seed(t, "update_expr_sql")
+		res, err := updater.UpdateExpr(context.Background(), "id <= 3",
 			[]contracts.UpdateAssignment{
 				{Column: "score", Expr: "score + 100"},
 			})
@@ -148,8 +156,8 @@ func TestUpdateExpr(t *testing.T) {
 		// upper(name) — another expression that the JSON-literal Update
 		// path cannot represent. Verifies that arbitrary scalar UDFs
 		// reach the DataFusion planner intact.
-		table := seed(t, "update_expr_func")
-		res, err := table.UpdateExpr(context.Background(), "id = 1",
+		table, updater := seed(t, "update_expr_func")
+		res, err := updater.UpdateExpr(context.Background(), "id = 1",
 			[]contracts.UpdateAssignment{
 				{Column: "name", Expr: "upper(name)"},
 			})
@@ -173,8 +181,8 @@ func TestUpdateExpr(t *testing.T) {
 	})
 
 	t.Run("EmptyFilterUpdatesEveryRow", func(t *testing.T) {
-		table := seed(t, "update_expr_no_filter")
-		res, err := table.UpdateExpr(context.Background(), "",
+		table, updater := seed(t, "update_expr_no_filter")
+		res, err := updater.UpdateExpr(context.Background(), "",
 			[]contracts.UpdateAssignment{
 				{Column: "score", Expr: "0"},
 			})
@@ -198,8 +206,8 @@ func TestUpdateExpr(t *testing.T) {
 		// Both columns updated in one call. Verifies that the JSON
 		// array→Vec path keeps both pairs and applies them in the same
 		// commit.
-		table := seed(t, "update_expr_multi")
-		res, err := table.UpdateExpr(context.Background(), "id = 2",
+		table, updater := seed(t, "update_expr_multi")
+		res, err := updater.UpdateExpr(context.Background(), "id = 2",
 			[]contracts.UpdateAssignment{
 				{Column: "name", Expr: "'multi'"},
 				{Column: "score", Expr: "999.5"},
@@ -224,16 +232,16 @@ func TestUpdateExpr(t *testing.T) {
 	})
 
 	t.Run("EmptyAssignmentsRejected", func(t *testing.T) {
-		table := seed(t, "update_expr_empty_assign")
-		_, err := table.UpdateExpr(context.Background(), "id = 1", nil)
+		_, updater := seed(t, "update_expr_empty_assign")
+		_, err := updater.UpdateExpr(context.Background(), "id = 1", nil)
 		if err == nil {
 			t.Fatal("expected error for empty assignments")
 		}
 	})
 
 	t.Run("EmptyColumnNameRejected", func(t *testing.T) {
-		table := seed(t, "update_expr_empty_col")
-		_, err := table.UpdateExpr(context.Background(), "id = 1",
+		_, updater := seed(t, "update_expr_empty_col")
+		_, err := updater.UpdateExpr(context.Background(), "id = 1",
 			[]contracts.UpdateAssignment{{Column: "", Expr: "1"}})
 		if err == nil {
 			t.Fatal("expected error for empty column name")
@@ -241,8 +249,8 @@ func TestUpdateExpr(t *testing.T) {
 	})
 
 	t.Run("InvalidFilterReturnsError", func(t *testing.T) {
-		table := seed(t, "update_expr_bad_filter")
-		_, err := table.UpdateExpr(context.Background(), "this is not sql $$",
+		_, updater := seed(t, "update_expr_bad_filter")
+		_, err := updater.UpdateExpr(context.Background(), "this is not sql $$",
 			[]contracts.UpdateAssignment{{Column: "score", Expr: "1"}})
 		if err == nil {
 			t.Fatal("expected error for invalid filter")
@@ -253,8 +261,8 @@ func TestUpdateExpr(t *testing.T) {
 		// Reference a column that does not exist — DataFusion should
 		// return a binder error which the FFI surfaces as a normal Go
 		// error rather than a panic.
-		table := seed(t, "update_expr_bad_expr")
-		_, err := table.UpdateExpr(context.Background(), "id = 1",
+		_, updater := seed(t, "update_expr_bad_expr")
+		_, err := updater.UpdateExpr(context.Background(), "id = 1",
 			[]contracts.UpdateAssignment{{Column: "score", Expr: "no_such_column + 1"}})
 		if err == nil {
 			t.Fatal("expected error for unknown column reference")
@@ -262,11 +270,11 @@ func TestUpdateExpr(t *testing.T) {
 	})
 
 	t.Run("ClosedTableReturnsError", func(t *testing.T) {
-		table := seed(t, "update_expr_closed")
+		table, updater := seed(t, "update_expr_closed")
 		if err := table.Close(); err != nil {
 			t.Fatalf("close: %v", err)
 		}
-		_, err := table.UpdateExpr(context.Background(), "id = 1",
+		_, err := updater.UpdateExpr(context.Background(), "id = 1",
 			[]contracts.UpdateAssignment{{Column: "score", Expr: "1"}})
 		if err == nil {
 			t.Fatal("expected error for update on closed table")

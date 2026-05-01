@@ -40,6 +40,10 @@ type Table struct {
 // Compile-time check to ensure Table implements ITable interface
 var _ contracts.ITable = (*Table)(nil)
 
+// Compile-time check that Table also implements the optional
+// raw-SQL-expression update capability extension.
+var _ contracts.ITableUpdateExpr = (*Table)(nil)
+
 // Name returns the name of the Table
 func (t *Table) Name() string {
 	return t.name
