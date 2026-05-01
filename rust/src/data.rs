@@ -202,9 +202,7 @@ pub extern "C" fn simple_lancedb_table_update_expr(
             }
         };
         if arr.is_empty() {
-            return SimpleResult::error(
-                "at least one assignment must be specified".to_string(),
-            );
+            return SimpleResult::error("at least one assignment must be specified".to_string());
         }
         let mut pairs: Vec<(String, String)> = Vec::with_capacity(arr.len());
         for (idx, item) in arr.iter().enumerate() {
