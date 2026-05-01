@@ -351,6 +351,38 @@ func (t *Table) Delete(_ context.Context, filter string) error {
 	return nil
 }
 
+// DropIndex removes the named index from the table. Caller-side IF EXISTS
+// semantics are not implemented here — propagate the not-found error and
+// let the caller decide whether to swallow it.
+func (t *Table) DropIndex(_ context.Context, name string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.closed || t.handle == nil {
+		return fmt.Errorf("table is closed")
+	}
+
+	if name == "" {
+		return fmt.Errorf("index name cannot be empty")
+	}
+
+	cName := C.CString(name)
+	// #nosec G103 - Required for freeing C allocated string memory
+	defer C.free(unsafe.Pointer(cName))
+
+	result := C.simple_lancedb_table_drop_index(t.handle, cName)
+	defer C.simple_lancedb_result_free(result)
+
+	if !result.SUCCESS {
+		if result.ERROR_MESSAGE != nil {
+			errorMsg := C.GoString(result.ERROR_MESSAGE)
+			return fmt.Errorf("failed to drop index: %s", errorMsg)
+		}
+		return fmt.Errorf("failed to drop index: unknown error")
+	}
+	return nil
+}
+
 // CreateIndex creates an index on the specified columns
 func (t *Table) CreateIndex(ctx context.Context, columns []string, indexType contracts.IndexType) error {
 	return t.CreateIndexWithName(ctx, columns, indexType, "")

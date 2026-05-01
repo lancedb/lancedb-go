@@ -298,6 +298,43 @@ pub extern "C" fn simple_lancedb_table_index_stats(
     }
 }
 
+/// Drop the named index from the table. Returns SimpleResult::ok() when
+/// the backend reports success, or SimpleResult::error() with a
+/// backend-supplied message on a missing index / I/O failure / cancelled
+/// runtime. The Go layer is responsible for swallowing the not-found
+/// error when the caller asked for IF EXISTS semantics.
+#[no_mangle]
+pub extern "C" fn simple_lancedb_table_drop_index(
+    table_handle: *mut c_void,
+    index_name: *const c_char,
+) -> *mut SimpleResult {
+    let result = std::panic::catch_unwind(|| -> SimpleResult {
+        if table_handle.is_null() || index_name.is_null() {
+            return SimpleResult::error("Invalid null arguments".to_string());
+        }
+
+        let index_name_str = match from_c_str(index_name) {
+            Ok(s) => s,
+            Err(e) => return SimpleResult::error(format!("Invalid index name: {}", e)),
+        };
+
+        let table = unsafe { &*(table_handle as *const lancedb::Table) };
+        let rt = get_simple_runtime();
+
+        match rt.block_on(async { table.drop_index(&index_name_str).await }) {
+            Ok(()) => SimpleResult::ok(),
+            Err(e) => SimpleResult::error(format!("drop_index failed: {}", e)),
+        }
+    });
+
+    match result {
+        Ok(res) => Box::into_raw(Box::new(res)),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_drop_index".to_string(),
+        ))),
+    }
+}
+
 /// Wait for the named indices to finish building, with a timeout in
 /// milliseconds. An empty `index_names` array defaults to all indices on
 /// the table. A `timeout_ms` value of 0 means "wait essentially forever"

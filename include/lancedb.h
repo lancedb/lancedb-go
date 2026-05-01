@@ -147,6 +147,15 @@ struct SimpleResult *simple_lancedb_table_index_stats(void *table_handle,
                                                       char **index_stats_json);
 
 /**
+ * Drop the named index from the table. Returns SimpleResult::ok() when
+ * the backend reports success, or SimpleResult::error() with a
+ * backend-supplied message on a missing index / I/O failure / cancelled
+ * runtime. The Go layer is responsible for swallowing the not-found
+ * error when the caller asked for IF EXISTS semantics.
+ */
+struct SimpleResult *simple_lancedb_table_drop_index(void *table_handle, const char *index_name);
+
+/**
  * Wait for the named indices to finish building, with a timeout in
  * milliseconds. An empty `index_names` array defaults to all indices on
  * the table. A `timeout_ms` value of 0 means "wait essentially forever"
