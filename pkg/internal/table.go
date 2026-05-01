@@ -321,6 +321,73 @@ func (t *Table) Update(_ context.Context, filter string, updates map[string]inte
 	return nil
 }
 
+// UpdateExpr forwards each assignment.Expr to lancedb's UpdateBuilder
+// verbatim and returns the resulting rows_updated / version pair.
+//
+// Empty filter == "" updates every row (no WHERE).
+//
+// Empty assignments is rejected — a SET-less UPDATE is almost always a
+// caller bug, and lancedb's own UpdateBuilder.execute() already enforces
+// the same precondition.
+func (t *Table) UpdateExpr(_ context.Context, filter string, assignments []contracts.UpdateAssignment) (*contracts.UpdateResult, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.closed || t.handle == nil {
+		return nil, fmt.Errorf("table is closed")
+	}
+
+	if len(assignments) == 0 {
+		return nil, fmt.Errorf("at least one assignment must be specified")
+	}
+	for i, a := range assignments {
+		if a.Column == "" {
+			return nil, fmt.Errorf("assignment #%d: column name cannot be empty", i)
+		}
+	}
+
+	assignmentsJSON, err := json.Marshal(assignments)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal assignments to JSON: %w", err)
+	}
+
+	// A null predicate ptr signals "update all rows" on the Rust side.
+	// CString("") would also work but allocates a 1-byte block for nothing.
+	var cFilter *C.char
+	if filter != "" {
+		cFilter = C.CString(filter)
+		// #nosec G103 - Required for freeing C allocated string memory
+		defer C.free(unsafe.Pointer(cFilter))
+	}
+
+	cAssignments := C.CString(string(assignmentsJSON))
+	// #nosec G103 - Required for freeing C allocated string memory
+	defer C.free(unsafe.Pointer(cAssignments))
+
+	var resultJSON *C.char
+	result := C.simple_lancedb_table_update_expr(t.handle, cFilter, cAssignments, &resultJSON)
+	defer C.simple_lancedb_result_free(result)
+
+	if !result.SUCCESS {
+		if result.ERROR_MESSAGE != nil {
+			return nil, fmt.Errorf("failed to update rows: %s", C.GoString(result.ERROR_MESSAGE))
+		}
+		return nil, fmt.Errorf("failed to update rows: unknown error")
+	}
+
+	if resultJSON == nil {
+		return &contracts.UpdateResult{}, nil
+	}
+	jsonStr := C.GoString(resultJSON)
+	C.simple_lancedb_free_string(resultJSON)
+
+	var ur contracts.UpdateResult
+	if err := json.Unmarshal([]byte(jsonStr), &ur); err != nil {
+		return nil, fmt.Errorf("update_expr: failed to parse result JSON: %w", err)
+	}
+	return &ur, nil
+}
+
 // Delete deletes records from the Table based on a filter
 func (t *Table) Delete(_ context.Context, filter string) error {
 	t.mu.RLock()

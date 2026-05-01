@@ -313,3 +313,18 @@ type MergeResult struct {
 	NumDeletedRows  uint64 `json:"num_deleted_rows"`
 	NumAttempts     uint32 `json:"num_attempts"`
 }
+
+// UpdateAssignment is a single SET clause forwarded to lancedb's
+// UpdateBuilder.column(name, expr). Expr is a raw SQL expression — the
+// caller must quote string literals (`'foo'`) and format vector
+// literals (`[1.0, 2.0, ...]`).
+type UpdateAssignment struct {
+	Column string `json:"column"`
+	Expr   string `json:"expr"`
+}
+
+// UpdateResult mirrors lancedb::table::update::UpdateResult's serde form.
+type UpdateResult struct {
+	RowsUpdated uint64 `json:"rows_updated"`
+	Version     uint64 `json:"version"`
+}

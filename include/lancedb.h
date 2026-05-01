@@ -62,6 +62,37 @@ struct SimpleResult *simple_lancedb_table_update(void *table_handle,
                                                  const char *updates_json);
 
 /**
+ * Update rows using raw SQL expressions per column, with an optional
+ * predicate. Unlike `simple_lancedb_table_update`, the per-column values
+ * are passed through to lancedb's `UpdateBuilder.column(name, expr)`
+ * verbatim — the caller is responsible for quoting string literals
+ * (`'foo'`) and formatting vector literals (`[1.0, 2.0, ...]`). This
+ * matches the Rust `Table::update()` builder's semantics one-for-one and
+ * unlocks SQL expressions like `counter + 1` or `upper(name)` that the
+ * JSON-literal path cannot represent.
+ *
+ * `predicate` may be NULL or empty to update every row (no WHERE).
+ *
+ * `assignments_json` schema:
+ * ```json
+ * [
+ *   {"column": "i",    "expr": "i + 1"},
+ *   {"column": "name", "expr": "'foo'"}
+ * ]
+ * ```
+ * An array (not a map) preserves caller order and avoids `serde_json`
+ * `Map` ordering surprises across versions.
+ *
+ * On success `result_json` is set to a CString containing
+ * `{"rows_updated": <u64>, "version": <u64>}` which the caller must free
+ * via `simple_lancedb_free_string`.
+ */
+struct SimpleResult *simple_lancedb_table_update_expr(void *table_handle,
+                                                      const char *predicate,
+                                                      const char *assignments_json,
+                                                      char **result_json);
+
+/**
  * Add JSON data to a table (simple version)
  * Converts JSON array of objects to Arrow RecordBatch and adds to table
  */
