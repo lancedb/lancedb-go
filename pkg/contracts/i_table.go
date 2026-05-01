@@ -69,6 +69,11 @@ type ITable interface {
 	// CreateIndexOptions (no name override, replace=false, no wait).
 	CreateIndexWithParams(ctx context.Context, columns []string, indexType IndexType, params IndexParams, opts *CreateIndexOptions) error
 
+	// DropIndex removes the named index from the table. Returns an error
+	// if the index does not exist or the backend operation fails — IF
+	// EXISTS semantics are the caller's responsibility.
+	DropIndex(ctx context.Context, name string) error
+
 	// GetAllIndexes returns information about all indexes present on the table
 	GetAllIndexes(ctx context.Context) ([]IndexInfo, error)
 
