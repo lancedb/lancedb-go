@@ -123,6 +123,39 @@ type ITable interface {
 	OptimizeWithAction(ctx context.Context, action OptimizeAction) (*OptimizeStats, error)
 }
 
+// ITableUpdateExpr is an optional capability extension layered on top of
+// ITable. Backends that support lancedb's raw-SQL-expression update
+// builder implement it; backends that don't are unaffected.
+//
+// Kept out of ITable so adding the capability to a downstream backend
+// (or removing it later) is not a source-breaking change for existing
+// ITable mocks/stubs. Callers detect the capability with a type
+// assertion:
+//
+//	if u, ok := table.(contracts.ITableUpdateExpr); ok {
+//	    res, err := u.UpdateExpr(ctx, filter, assignments)
+//	}
+//
+// The shipped *internal.Table implements this interface.
+type ITableUpdateExpr interface {
+	// UpdateExpr is a thin pass-through to lancedb's Table::update
+	// builder that exposes raw SQL expressions per column and an
+	// optional filter.
+	//
+	// Differences from ITable.Update:
+	//   - filter == "" updates every row (no WHERE).
+	//   - assignments[i].Expr is forwarded verbatim — the caller quotes
+	//     string literals (`'foo'`) and formats vector literals
+	//     (`[1.0, 2.0, ...]`). This unlocks expressions the Update path
+	//     auto-quotes away, e.g. `counter + 1`, `upper(name)`,
+	//     `coalesce(other, 0)`.
+	//   - Returns rows_updated and the new commit version.
+	//
+	// An empty assignments slice is rejected — UPDATE with no SET is
+	// semantically a no-op and almost always a caller bug.
+	UpdateExpr(ctx context.Context, filter string, assignments []UpdateAssignment) (*UpdateResult, error)
+}
+
 // AddDataOptions configures how data is added to a Table
 type AddDataOptions struct {
 	Mode WriteMode

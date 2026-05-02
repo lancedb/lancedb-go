@@ -130,6 +130,162 @@ pub extern "C" fn simple_lancedb_table_update(
     }
 }
 
+/// Update rows using raw SQL expressions per column, with an optional
+/// predicate. Unlike `simple_lancedb_table_update`, the per-column values
+/// are passed through to lancedb's `UpdateBuilder.column(name, expr)`
+/// verbatim — the caller is responsible for quoting string literals
+/// (`'foo'`) and formatting vector literals (`[1.0, 2.0, ...]`). This
+/// matches the Rust `Table::update()` builder's semantics one-for-one and
+/// unlocks SQL expressions like `counter + 1` or `upper(name)` that the
+/// JSON-literal path cannot represent.
+///
+/// `predicate` may be NULL or empty to update every row (no WHERE).
+///
+/// `assignments_json` schema:
+/// ```json
+/// [
+///   {"column": "i",    "expr": "i + 1"},
+///   {"column": "name", "expr": "'foo'"}
+/// ]
+/// ```
+/// An array (not a map) preserves caller order and avoids `serde_json`
+/// `Map` ordering surprises across versions.
+///
+/// On success `result_json` is set to a CString containing
+/// `{"rows_updated": <u64>, "version": <u64>}` which the caller must free
+/// via `simple_lancedb_free_string`.
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn simple_lancedb_table_update_expr(
+    table_handle: *mut c_void,
+    predicate: *const c_char,
+    assignments_json: *const c_char,
+    result_json: *mut *mut c_char,
+) -> *mut SimpleResult {
+    let result = std::panic::catch_unwind(|| -> SimpleResult {
+        if table_handle.is_null() || assignments_json.is_null() || result_json.is_null() {
+            return SimpleResult::error("Invalid null arguments".to_string());
+        }
+
+        // Empty / null predicate is the documented "update all rows" form.
+        // A null predicate ptr is allowed and treated identically to "".
+        let predicate_str = if predicate.is_null() {
+            String::new()
+        } else {
+            match from_c_str(predicate) {
+                Ok(s) => s,
+                Err(e) => return SimpleResult::error(format!("Invalid predicate: {}", e)),
+            }
+        };
+
+        let assignments_str = match from_c_str(assignments_json) {
+            Ok(s) => s,
+            Err(e) => return SimpleResult::error(format!("Invalid assignments JSON: {}", e)),
+        };
+
+        // Parse `[{"column":"...", "expr":"..."}]` while rejecting unknown
+        // shapes loudly — silent acceptance of a stray map or missing key
+        // would forward an empty SET clause to lancedb and quietly succeed
+        // with rows_updated=0.
+        let parsed: serde_json::Value = match serde_json::from_str(&assignments_str) {
+            Ok(v) => v,
+            Err(e) => {
+                return SimpleResult::error(format!("Failed to parse assignments JSON: {}", e))
+            }
+        };
+        let arr = match parsed.as_array() {
+            Some(a) => a,
+            None => {
+                return SimpleResult::error(
+                    "assignments JSON must be an array of {column, expr} objects".to_string(),
+                )
+            }
+        };
+        if arr.is_empty() {
+            return SimpleResult::error("at least one assignment must be specified".to_string());
+        }
+        let mut pairs: Vec<(String, String)> = Vec::with_capacity(arr.len());
+        for (idx, item) in arr.iter().enumerate() {
+            let obj = match item.as_object() {
+                Some(o) => o,
+                None => {
+                    return SimpleResult::error(format!(
+                        "assignment #{} must be an object with `column` and `expr` keys",
+                        idx
+                    ))
+                }
+            };
+            let column = match obj.get("column").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => {
+                    return SimpleResult::error(format!(
+                        "assignment #{}: `column` must be a non-empty string",
+                        idx
+                    ))
+                }
+            };
+            let expr = match obj.get("expr").and_then(|v| v.as_str()) {
+                Some(s) => s.to_string(),
+                _ => {
+                    return SimpleResult::error(format!(
+                        "assignment #{}: `expr` must be a string",
+                        idx
+                    ))
+                }
+            };
+            pairs.push((column, expr));
+        }
+
+        let table = unsafe { &*(table_handle as *const lancedb::Table) };
+        let rt = get_simple_runtime();
+
+        let exec_result = rt.block_on(async {
+            let mut builder = table.update();
+            if !predicate_str.is_empty() {
+                builder = builder.only_if(predicate_str);
+            }
+            for (col, expr) in pairs {
+                builder = builder.column(col, expr);
+            }
+            builder.execute().await
+        });
+
+        match exec_result {
+            Ok(ur) => {
+                let payload = serde_json::json!({
+                    "rows_updated": ur.rows_updated,
+                    "version": ur.version,
+                });
+                let json_str = match serde_json::to_string(&payload) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return SimpleResult::error(format!(
+                            "Failed to serialize UpdateResult: {}",
+                            e
+                        ))
+                    }
+                };
+                let cstr = match std::ffi::CString::new(json_str) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return SimpleResult::error(format!("Failed to build C string: {}", e))
+                    }
+                };
+                unsafe { *result_json = cstr.into_raw() };
+                SimpleResult::ok()
+            }
+            Err(e) => SimpleResult::error(format!("Failed to update rows: {}", e)),
+        }
+    });
+
+    match result {
+        Ok(res) => Box::into_raw(Box::new(res)),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_update_expr".to_string(),
+        ))),
+    }
+}
+
 /// Add JSON data to a table (simple version)
 /// Converts JSON array of objects to Arrow RecordBatch and adds to table
 #[no_mangle]
