@@ -168,3 +168,76 @@ const (
 	WriteModeAppend WriteMode = iota
 	WriteModeOverwrite
 )
+
+// ITableTimeTravel is an optional capability extension layered on top
+// of ITable. It exposes lancedb's version-history surface — listing
+// past versions, pinning the table to a specific version (read-only
+// view), restoring that version as the new latest, plus tag CRUD that
+// gives stable human-readable references to versions.
+//
+// Kept out of ITable so adding the capability to a downstream backend
+// (or removing it later) is not a source-breaking change for existing
+// ITable mocks/stubs. Callers detect the capability with a type
+// assertion:
+//
+//	if tt, ok := table.(contracts.ITableTimeTravel); ok {
+//	    versions, err := tt.ListVersions(ctx)
+//	}
+//
+// Semantic notes that mirror lancedb::Table:
+//
+//   - Checkout / CheckoutTag pin the table to a snapshot. Reads see
+//     that snapshot; writes are rejected until the table is brought
+//     back with CheckoutLatest or promoted with Restore.
+//   - Restore promotes the currently checked-out version to a new
+//     latest manifest (i.e. "make this the live data"). It errors when
+//     the table is not in a checked-out state. There is no
+//     restore(version) overload — do Checkout(N) -> Restore() in two
+//     steps.
+//   - Tags are pure metadata: creating, deleting, or moving a tag does
+//     not produce a new dataset version.
+//   - Tag-protected versions interact with prune via
+//     OptimizePrune.ErrorIfTaggedOldVersions — see types.go.
+//
+// The shipped *internal.Table implements this interface.
+type ITableTimeTravel interface {
+	// ListVersions returns the full version history known to the
+	// dataset. Order matches the backend's response.
+	ListVersions(ctx context.Context) ([]VersionInfo, error)
+
+	// Checkout pins the table to the given version. Subsequent reads
+	// see that snapshot. Writes are rejected until the pin is dropped
+	// with CheckoutLatest or promoted with Restore.
+	Checkout(ctx context.Context, version uint64) error
+
+	// CheckoutTag pins the table to the version referenced by the
+	// given tag. Same constraints as Checkout.
+	CheckoutTag(ctx context.Context, tag string) error
+
+	// CheckoutLatest drops any prior checkout pin and resumes
+	// tracking the latest manifest.
+	CheckoutLatest(ctx context.Context) error
+
+	// Restore promotes the currently checked-out version to a new
+	// latest manifest. Errors when the table is not in a checked-out
+	// state. After Restore the table is no longer pinned.
+	Restore(ctx context.Context) error
+
+	// TagList returns every tag on the table, keyed by tag name.
+	TagList(ctx context.Context) (map[string]TagInfo, error)
+
+	// TagGetVersion resolves a tag to its pinned version. Errors when
+	// the tag does not exist.
+	TagGetVersion(ctx context.Context, tag string) (uint64, error)
+
+	// TagCreate creates a new tag pointing at the given version.
+	// Errors when the tag already exists or the version is unknown.
+	TagCreate(ctx context.Context, tag string, version uint64) error
+
+	// TagDelete deletes a tag. Errors when the tag does not exist.
+	TagDelete(ctx context.Context, tag string) error
+
+	// TagUpdate moves an existing tag to a new version. Errors when
+	// the tag does not exist or the version is unknown.
+	TagUpdate(ctx context.Context, tag string, version uint64) error
+}

@@ -328,3 +328,22 @@ type UpdateResult struct {
 	RowsUpdated uint64 `json:"rows_updated"`
 	Version     uint64 `json:"version"`
 }
+
+// VersionInfo describes one entry in the dataset version history. The
+// Timestamp field is unmarshaled from the backend's RFC3339 string
+// (UTC).
+type VersionInfo struct {
+	Version   uint64            `json:"version"`
+	Timestamp time.Time         `json:"timestamp"`
+	Metadata  map[string]string `json:"metadata"`
+}
+
+// TagInfo describes one tag entry. ManifestSize is the byte size of
+// the manifest file the tag references. Branch is currently always
+// empty for tags created through the FFI but is preserved here for
+// forward compatibility with upstream lance::dataset::refs::TagContents.
+type TagInfo struct {
+	Version      uint64 `json:"version"`
+	ManifestSize uint64 `json:"manifest_size"`
+	Branch       string `json:"branch,omitempty"`
+}

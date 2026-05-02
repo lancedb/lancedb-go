@@ -263,6 +263,78 @@ struct SimpleResult *simple_lancedb_table_select_query_ipc(void *table_handle,
                                                            size_t *result_ipc_len);
 
 /**
+ * List every version reachable from the dataset. Returns a JSON array
+ * of {version, timestamp, metadata} objects ordered as reported by the
+ * backend. Caller owns versions_json and must free it with
+ * simple_lancedb_free_string.
+ */
+struct SimpleResult *simple_lancedb_table_list_versions(void *table_handle, char **versions_json);
+
+/**
+ * Pin the table to a specific version. Subsequent reads see that
+ * snapshot; writes are rejected until the table is brought back with
+ * either checkout_latest or restore. Mirrors lancedb::Table::checkout.
+ */
+struct SimpleResult *simple_lancedb_table_checkout(void *table_handle, uint64_t version);
+
+/**
+ * Pin the table to the version referenced by the given tag.
+ */
+struct SimpleResult *simple_lancedb_table_checkout_tag(void *table_handle, const char *tag);
+
+/**
+ * Drop any prior checkout pin and resume tracking the latest manifest.
+ */
+struct SimpleResult *simple_lancedb_table_checkout_latest(void *table_handle);
+
+/**
+ * Promote the currently checked-out version to a new latest manifest.
+ * Errors if the table is not in a checked-out state. Mirrors
+ * lancedb::Table::restore exactly — the Python `restore(version)`
+ * convenience overload is not available here; callers do
+ * checkout(N) -> restore() in two steps.
+ */
+struct SimpleResult *simple_lancedb_table_restore(void *table_handle);
+
+/**
+ * List every tag on the table as a JSON object keyed by tag name.
+ * Each value carries the pinned version, manifest_size, and an
+ * optional branch (currently always absent for tags created via the
+ * FFI). Caller owns tags_json and must free it with
+ * simple_lancedb_free_string.
+ */
+struct SimpleResult *simple_lancedb_table_tags_list(void *table_handle, char **tags_json);
+
+/**
+ * Resolve a tag to its pinned version. Errors when the tag does not
+ * exist. The version is written to *version_out on success.
+ */
+struct SimpleResult *simple_lancedb_table_tags_get_version(void *table_handle,
+                                                           const char *tag,
+                                                           uint64_t *version_out);
+
+/**
+ * Create a new tag pointing at the given version. Errors if the tag
+ * already exists or the version is unknown.
+ */
+struct SimpleResult *simple_lancedb_table_tags_create(void *table_handle,
+                                                      const char *tag,
+                                                      uint64_t version);
+
+/**
+ * Delete a tag. Errors if the tag does not exist.
+ */
+struct SimpleResult *simple_lancedb_table_tags_delete(void *table_handle, const char *tag);
+
+/**
+ * Move an existing tag to a new version. Errors if the tag does not
+ * exist or the version is unknown.
+ */
+struct SimpleResult *simple_lancedb_table_tags_update(void *table_handle,
+                                                      const char *tag,
+                                                      uint64_t version);
+
+/**
  * Create a table with a simple JSON schema
  */
 struct SimpleResult *simple_lancedb_create_table(void *handle,
