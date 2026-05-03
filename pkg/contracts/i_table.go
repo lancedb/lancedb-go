@@ -290,5 +290,13 @@ type ITableSchemaEvolve interface {
 	// underlying bytes are reclaimed on the next OptimizeCompact.
 	// Returns the new commit version. An empty names slice is
 	// rejected; empty/whitespace-only names are rejected per-entry.
+	//
+	// Cascade behavior: any indexes whose only columns are dropped
+	// are removed as well — the caller does not need to DropIndex
+	// first. This is enforced by lance's Operation::Project commit
+	// path, which calls retain_relevant_indices when materializing
+	// the new manifest. Indexes covering a mix of dropped and
+	// surviving columns are not currently exercised here; assume
+	// they may be invalidated and rebuild explicitly if needed.
 	DropColumns(ctx context.Context, names []string) (uint64, error)
 }

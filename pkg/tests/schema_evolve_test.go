@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/memory"
@@ -394,6 +395,58 @@ func TestSchemaEvolve(t *testing.T) {
 		for _, n := range got {
 			if !want[n] {
 				t.Errorf("unexpected field after round-trip: %q", n)
+			}
+		}
+	})
+
+	// Property: dropping a column that has an index also clears that
+	// index from the table's index list. Lance handles this in the
+	// Operation::Project commit path via retain_relevant_indices —
+	// no explicit DropIndex call is required from the caller.
+	t.Run("DropColumnsCascadesToIndex", func(t *testing.T) {
+		table, se := seed(t, "se_drop_cascades_index")
+
+		// Build a scalar index on `score`; BTree is the cheapest to
+		// build on a 5-row table.
+		if err := table.CreateIndex(context.Background(),
+			[]string{"score"}, contracts.IndexTypeBTree); err != nil {
+			t.Fatalf("CreateIndex(BTree, score): %v", err)
+		}
+		// Wait for the index to be ready before checking GetAllIndexes
+		// — index build is async on the backend.
+		if err := table.WaitForIndex(context.Background(), nil, 30*time.Second); err != nil {
+			t.Fatalf("WaitForIndex: %v", err)
+		}
+
+		before, err := table.GetAllIndexes(context.Background())
+		if err != nil {
+			t.Fatalf("GetAllIndexes (before drop): %v", err)
+		}
+		var hadScoreIdx bool
+		for _, ix := range before {
+			for _, c := range ix.Columns {
+				if c == "score" {
+					hadScoreIdx = true
+				}
+			}
+		}
+		if !hadScoreIdx {
+			t.Fatalf("test precondition failed: no index on 'score' before drop. Indexes=%+v", before)
+		}
+
+		if _, err := se.DropColumns(context.Background(), []string{"score"}); err != nil {
+			t.Fatalf("DropColumns(score): %v", err)
+		}
+
+		after, err := table.GetAllIndexes(context.Background())
+		if err != nil {
+			t.Fatalf("GetAllIndexes (after drop): %v", err)
+		}
+		for _, ix := range after {
+			for _, c := range ix.Columns {
+				if c == "score" {
+					t.Errorf("index on dropped column 'score' still present: %+v", ix)
+				}
 			}
 		}
 	})

@@ -76,7 +76,9 @@ pub extern "C" fn simple_lancedb_table_add_columns(
         };
         let entries: Vec<SqlExprEntry> = match serde_json::from_str(&json) {
             Ok(v) => v,
-            Err(e) => return SimpleResult::error(format!("Failed to parse transforms_json: {}", e)),
+            Err(e) => {
+                return SimpleResult::error(format!("Failed to parse transforms_json: {}", e))
+            }
         };
         if entries.is_empty() {
             return SimpleResult::error(
