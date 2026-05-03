@@ -335,6 +335,49 @@ struct SimpleResult *simple_lancedb_table_tags_update(void *table_handle,
                                                       uint64_t version);
 
 /**
+ * Add new columns to the table by evaluating SQL expressions over
+ * existing rows. `transforms_json` is a JSON array of
+ * {"name": "<col>", "expression": "<sql>"} objects. Empty arrays are
+ * rejected as a caller bug — adding zero columns is a no-op that
+ * almost always indicates a missing argument.
+ *
+ * On success, the new commit version is written to *version_out. A
+ * version of 0 indicates compatibility with legacy backends that do
+ * not report a commit version (mirrors AddColumnsResult::version
+ * semantics in lancedb).
+ */
+struct SimpleResult *simple_lancedb_table_add_columns(void *table_handle,
+                                                      const char *transforms_json,
+                                                      uint64_t *version_out);
+
+/**
+ * Alter existing columns — rename and/or change nullability.
+ * `alterations_json` is a JSON array of {"path": "<col>", "rename":
+ * "<new>", "nullable": <bool>} objects; rename and nullable are both
+ * optional and "unset" means "leave that attribute alone". Empty
+ * arrays are rejected.
+ *
+ * data_type casts are intentionally not exposed in v1 — they require
+ * Arrow DataType serialization and are slated for a follow-up. Callers
+ * who need a cast can drop and re-add the column through add_columns.
+ *
+ * On success, the new commit version is written to *version_out.
+ */
+struct SimpleResult *simple_lancedb_table_alter_columns(void *table_handle,
+                                                        const char *alterations_json,
+                                                        uint64_t *version_out);
+
+/**
+ * Drop columns from the table. `columns_json` is a JSON array of
+ * strings naming the columns to remove. Empty arrays are rejected.
+ *
+ * On success, the new commit version is written to *version_out.
+ */
+struct SimpleResult *simple_lancedb_table_drop_columns(void *table_handle,
+                                                       const char *columns_json,
+                                                       uint64_t *version_out);
+
+/**
  * Create a table with a simple JSON schema
  */
 struct SimpleResult *simple_lancedb_create_table(void *handle,

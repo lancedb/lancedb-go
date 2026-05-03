@@ -44,6 +44,9 @@ include = [
     "simple_lancedb_table_tags_create",
     "simple_lancedb_table_tags_delete",
     "simple_lancedb_table_tags_update",
+    "simple_lancedb_table_add_columns",
+    "simple_lancedb_table_alter_columns",
+    "simple_lancedb_table_drop_columns",
     "simple_lancedb_result_free",
     "simple_lancedb_free_string",
 ]
