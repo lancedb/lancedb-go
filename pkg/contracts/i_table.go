@@ -241,3 +241,62 @@ type ITableTimeTravel interface {
 	// the tag does not exist or the version is unknown.
 	TagUpdate(ctx context.Context, tag string, version uint64) error
 }
+
+// ITableSchemaEvolve is an optional capability extension layered on
+// top of ITable. It exposes lancedb's schema-evolution surface — adding
+// derived columns, renaming columns, toggling nullability, and
+// dropping columns. Each operation is a metadata commit (drop_columns
+// in particular only updates the manifest; the on-disk bytes are
+// reclaimed on the next compaction).
+//
+// Kept out of ITable so adding the capability to a downstream backend
+// (or removing it later) is not a source-breaking change for existing
+// ITable mocks/stubs. Callers detect the capability with a type
+// assertion:
+//
+//	if se, ok := table.(contracts.ITableSchemaEvolve); ok {
+//	    res, err := se.AddColumns(ctx, []NewColumnTransform{
+//	        {Name: "score_x2", Expression: "score * 2"},
+//	    })
+//	}
+//
+// Scope (v1):
+//   - AddColumns supports only the SqlExpressions transform
+//     (lance::dataset::NewColumnTransform::SqlExpressions). The
+//     BatchUDF / Stream / Reader / AllNulls variants are not exposed
+//     because they require closures or full Arrow IPC plumbing across
+//     the FFI boundary.
+//   - AlterColumns supports rename and nullable changes only. The
+//     data_type cast variant is deliberately deferred — it requires
+//     Arrow DataType serialization. Until then, callers needing a
+//     cast must AddColumns(<new-with-cast-expr>) → DropColumns(<old>).
+//   - DropColumns is the full surface.
+//
+// The shipped *internal.Table implements this interface.
+type ITableSchemaEvolve interface {
+	// AddColumns adds new columns to the table by evaluating SQL
+	// expressions over existing rows. Returns the new commit version.
+	// An empty transforms slice is rejected — adding zero columns is
+	// a no-op and almost always a caller bug.
+	AddColumns(ctx context.Context, transforms []NewColumnTransform) (uint64, error)
+
+	// AlterColumns renames columns and/or toggles their nullability.
+	// Returns the new commit version. Each entry must change at least
+	// one attribute; a no-op alteration is rejected. An empty
+	// alterations slice is rejected.
+	AlterColumns(ctx context.Context, alterations []ColumnAlteration) (uint64, error)
+
+	// DropColumns removes the named columns from the table. The
+	// underlying bytes are reclaimed on the next OptimizeCompact.
+	// Returns the new commit version. An empty names slice is
+	// rejected; empty/whitespace-only names are rejected per-entry.
+	//
+	// Cascade behavior: any indexes whose only columns are dropped
+	// are removed as well — the caller does not need to DropIndex
+	// first. This is enforced by lance's Operation::Project commit
+	// path, which calls retain_relevant_indices when materializing
+	// the new manifest. Indexes covering a mix of dropped and
+	// surviving columns are not currently exercised here; assume
+	// they may be invalidated and rebuild explicitly if needed.
+	DropColumns(ctx context.Context, names []string) (uint64, error)
+}

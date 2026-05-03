@@ -347,3 +347,31 @@ type TagInfo struct {
 	ManifestSize uint64 `json:"manifest_size"`
 	Branch       string `json:"branch,omitempty"`
 }
+
+// NewColumnTransform describes one new column to derive from existing
+// rows via a SQL expression. Mirrors the SqlExpressions variant of
+// lance::dataset::NewColumnTransform — the only variant exposed
+// through the FFI in v1.
+//
+// Name is the new column's name. Expression is a SQL expression
+// evaluated against existing columns to produce the values; e.g.
+// `score * 2`, `date_trunc('day', ts)`, `coalesce(other, 0)`.
+type NewColumnTransform struct {
+	Name       string `json:"name"`
+	Expression string `json:"expression"`
+}
+
+// ColumnAlteration describes one in-place change to an existing
+// column. Mirrors the rename + nullable subset of
+// lance::dataset::ColumnAlteration. The data_type cast variant is
+// deliberately not exposed in v1.
+//
+// Path is the existing column's name. Rename, when non-nil, sets a
+// new name. Nullable, when non-nil, toggles the column's nullability.
+// At least one of Rename or Nullable must be set per entry — an
+// alteration with neither is rejected as a caller bug.
+type ColumnAlteration struct {
+	Path     string  `json:"path"`
+	Rename   *string `json:"rename,omitempty"`
+	Nullable *bool   `json:"nullable,omitempty"`
+}

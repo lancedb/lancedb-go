@@ -14,6 +14,7 @@ pub mod query;
 pub mod refs;
 pub mod runtime;
 pub mod schema;
+pub mod schema_evolve;
 pub mod table;
 pub mod types;
 
@@ -26,5 +27,6 @@ pub use index::*;
 pub use metadata::*;
 pub use query::*;
 pub use refs::*;
+pub use schema_evolve::*;
 pub use table::*;
 pub use types::*;
