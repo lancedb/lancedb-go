@@ -300,3 +300,26 @@ type ITableSchemaEvolve interface {
 	// they may be invalidated and rebuild explicitly if needed.
 	DropColumns(ctx context.Context, names []string) (uint64, error)
 }
+
+// ITablePrewarmIndex is an optional capability extension layered on top
+// of ITable. Backends that can warm an index's on-disk pages into the
+// index cache implement it; backends that don't are unaffected.
+//
+// Kept out of ITable so adding the capability to a downstream backend
+// (or removing it later) is not a source-breaking change for existing
+// ITable mocks/stubs. Callers detect the capability with a type
+// assertion:
+//
+//	if p, ok := table.(contracts.ITablePrewarmIndex); ok {
+//	    err := p.PrewarmIndex(ctx, "emb_ivf_pq")
+//	}
+//
+// The shipped *internal.Table implements this interface.
+type ITablePrewarmIndex interface {
+	// PrewarmIndex loads pages of the named index into the index cache
+	// so the first query after a cold start does not pay the I/O cost.
+	// The call returns once the backend has accepted the request; pages
+	// are loaded up to the available cache. Not all index types support
+	// prewarming — unsupported types surface as a backend error.
+	PrewarmIndex(ctx context.Context, name string) error
+}

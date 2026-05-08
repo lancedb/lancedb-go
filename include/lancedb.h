@@ -187,6 +187,19 @@ struct SimpleResult *simple_lancedb_table_index_stats(void *table_handle,
 struct SimpleResult *simple_lancedb_table_drop_index(void *table_handle, const char *index_name);
 
 /**
+ * Prewarm the named index by loading its on-disk pages into the index
+ * cache. The call initiates prewarming and returns once the request is
+ * accepted by the backend; pages are loaded up to the available cache
+ * capacity. Not all index types support prewarming — unsupported types
+ * surface as a backend error which is forwarded to the caller verbatim.
+ *
+ * Returns SimpleResult::ok() when prewarming was accepted, or
+ * SimpleResult::error() with a backend-supplied message on a missing
+ * index / unsupported type / I/O failure / cancelled runtime.
+ */
+struct SimpleResult *simple_lancedb_table_prewarm_index(void *table_handle, const char *index_name);
+
+/**
  * Wait for the named indices to finish building, with a timeout in
  * milliseconds. An empty `index_names` array defaults to all indices on
  * the table. A `timeout_ms` value of 0 means "wait essentially forever"
