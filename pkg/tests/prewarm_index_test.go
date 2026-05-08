@@ -88,7 +88,9 @@ func setupPrewarmIndexTable(t *testing.T) (*internal.Table, func()) {
 // index, wait for it to materialise, then ask the backend to load its
 // pages into the cache. The call must accept and return without error;
 // pages-loaded count is not exposed by the FFI so we only assert the
-// happy path completes.
+// happy path completes. Goes through the optional capability interface
+// so the source-compat contract (caller code does `t.(ITablePrewarmIndex)`,
+// not `t.PrewarmIndex(...)` directly) is exercised here too.
 func TestPrewarmIndex_AfterBuild_Succeeds(t *testing.T) {
 	table, cleanup := setupPrewarmIndexTable(t)
 	defer cleanup()
@@ -98,7 +100,10 @@ func TestPrewarmIndex_AfterBuild_Succeeds(t *testing.T) {
 	require.NoError(t, table.CreateIndexWithName(ctx, []string{"embedding"}, contracts.IndexTypeIvfPq, "emb_ivf_pq"))
 	require.NoError(t, table.WaitForIndex(ctx, []string{"emb_ivf_pq"}, 60*time.Second))
 
-	require.NoError(t, table.PrewarmIndex(ctx, "emb_ivf_pq"))
+	var iface contracts.ITable = table
+	p, ok := iface.(contracts.ITablePrewarmIndex)
+	require.True(t, ok, "*internal.Table must implement ITablePrewarmIndex")
+	require.NoError(t, p.PrewarmIndex(ctx, "emb_ivf_pq"))
 }
 
 // TestPrewarmIndex_MissingIndex_ReturnsError — Strategy 1 (Edge): asking
