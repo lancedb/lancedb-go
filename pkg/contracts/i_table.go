@@ -74,6 +74,13 @@ type ITable interface {
 	// EXISTS semantics are the caller's responsibility.
 	DropIndex(ctx context.Context, name string) error
 
+	// PrewarmIndex loads pages of the named index into the index cache so
+	// the first query after a cold start does not pay the I/O cost. The
+	// call returns once the backend has accepted the request; pages are
+	// loaded up to the available cache. Not all index types support
+	// prewarming — unsupported types surface as a backend error.
+	PrewarmIndex(ctx context.Context, name string) error
+
 	// GetAllIndexes returns information about all indexes present on the table
 	GetAllIndexes(ctx context.Context) ([]IndexInfo, error)
 

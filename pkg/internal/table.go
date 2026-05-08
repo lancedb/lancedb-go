@@ -454,6 +454,39 @@ func (t *Table) DropIndex(_ context.Context, name string) error {
 	return nil
 }
 
+// PrewarmIndex loads pages of the named index into the index cache. The
+// backend reports success once the request is accepted; pages are loaded
+// up to the available cache. Not all index types support prewarming —
+// unsupported types are propagated as a backend error.
+func (t *Table) PrewarmIndex(_ context.Context, name string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.closed || t.handle == nil {
+		return fmt.Errorf("table is closed")
+	}
+
+	if name == "" {
+		return fmt.Errorf("index name cannot be empty")
+	}
+
+	cName := C.CString(name)
+	// #nosec G103 - Required for freeing C allocated string memory
+	defer C.free(unsafe.Pointer(cName))
+
+	result := C.simple_lancedb_table_prewarm_index(t.handle, cName)
+	defer C.simple_lancedb_result_free(result)
+
+	if !result.SUCCESS {
+		if result.ERROR_MESSAGE != nil {
+			errorMsg := C.GoString(result.ERROR_MESSAGE)
+			return fmt.Errorf("failed to prewarm index: %s", errorMsg)
+		}
+		return fmt.Errorf("failed to prewarm index: unknown error")
+	}
+	return nil
+}
+
 // CreateIndex creates an index on the specified columns
 func (t *Table) CreateIndex(ctx context.Context, columns []string, indexType contracts.IndexType) error {
 	return t.CreateIndexWithName(ctx, columns, indexType, "")
