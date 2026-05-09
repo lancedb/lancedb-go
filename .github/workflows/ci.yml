@@ -83,6 +83,12 @@ jobs:
           go-version: '1.24'
           cache: true
 
+      # Required by scripts/build-native.sh to bootstrap cargo-zigbuild via pip.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       # Install system dependencies
       - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
