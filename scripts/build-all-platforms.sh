@@ -20,7 +20,8 @@ PLATFORMS=(
     "darwin arm64" 
     "linux amd64"
     "linux arm64"
-    # "windows amd64"  # Uncomment if building on Windows or with cross-compilation setup
+    "windows amd64"  # Uncomment if building on Windows or with cross-compilation setup
+    "windows arm64"
 )
 
 # Check prerequisites

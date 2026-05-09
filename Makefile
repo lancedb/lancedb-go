@@ -40,16 +40,13 @@ else ifeq ($(UNAME_S),Linux)
 	CGO_LDFLAGS := $(CURRENT_DIR)/lib/linux_$(ARCH)/liblancedb_go.a $(SYSTEM_LIBS)
 else ifneq (,$(findstring MINGW,$(UNAME_S)))
 	PLATFORM := windows
-	ARCH := amd64
-	CGO_LDFLAGS := $(CURRENT_DIR)/lib/windows_amd64/liblancedb_go.a
+	CGO_LDFLAGS := $(CURRENT_DIR)/lib/windows_$(ARCH)/liblancedb_go.a
 else ifneq (,$(findstring MSYS,$(UNAME_S)))
 	PLATFORM := windows
-	ARCH := amd64
-	CGO_LDFLAGS := $(CURRENT_DIR)/lib/windows_amd64/liblancedb_go.a
+	CGO_LDFLAGS := $(CURRENT_DIR)/lib/windows_$(ARCH)/liblancedb_go.a
 else ifneq (,$(findstring CYGWIN,$(UNAME_S)))
 	PLATFORM := windows
-	ARCH := amd64
-	CGO_LDFLAGS := $(CURRENT_DIR)/lib/windows_amd64/liblancedb_go.a
+	CGO_LDFLAGS := $(CURRENT_DIR)/lib/windows_$(ARCH)/liblancedb_go.a
 else
 	$(error Unsupported platform: $(UNAME_S))
 endif

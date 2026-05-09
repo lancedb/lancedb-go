@@ -13,7 +13,7 @@ publish = false
 
 [lib]
 name = "lancedb_go"
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["staticlib"]
 path = "src/lib_simple.rs"
 
 [dependencies]

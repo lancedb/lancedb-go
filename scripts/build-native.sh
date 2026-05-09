@@ -15,6 +15,19 @@ RUST_DIR="$PROJECT_ROOT/rust"
 LIB_DIR="$PROJECT_ROOT/lib"
 INCLUDE_DIR="$PROJECT_ROOT/include"
 
+# Auto-install cargo-zigbuild if missing. `pip install cargo-zigbuild` pulls
+# `ziglang` (the zig binary) as a dependency, so one pip call bootstraps both.
+# Requires bash + Python 3 — Windows users run via Git Bash or WSL.
+if ! command -v cargo-zigbuild >/dev/null 2>&1; then
+    if command -v python3 >/dev/null 2>&1; then PY=python3
+    elif command -v python  >/dev/null 2>&1; then PY=python
+    else echo "❌ Python 3 required: https://www.python.org/downloads/" >&2; exit 1
+    fi
+    echo "📦 Installing cargo-zigbuild via pip..."
+    "$PY" -m pip install --break-system-packages cargo-zigbuild
+    export PATH="$("$PY" -c 'import sysconfig; print(sysconfig.get_path("scripts"))'):$PATH"
+fi
+
 # Default to current platform if not specified
 PLATFORM="${1:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
 ARCH="${2:-$(uname -m)}"
@@ -55,6 +68,7 @@ case "$PLATFORM-$ARCH" in
     "linux-amd64") RUST_TARGET="x86_64-unknown-linux-gnu" ;;
     "linux-arm64") RUST_TARGET="aarch64-unknown-linux-gnu" ;;
     "windows-amd64") RUST_TARGET="x86_64-pc-windows-gnu" ;;
+    "windows-arm64") RUST_TARGET="aarch64-pc-windows-gnullvm" ;;
     "windows-gnu-amd64") RUST_TARGET="x86_64-pc-windows-gnu" ;;
     "windows-msvc-amd64") RUST_TARGET="x86_64-pc-windows-msvc" ;;
     *) echo "Unsupported target: $PLATFORM-$ARCH" >&2; exit 1 ;;
@@ -74,7 +88,7 @@ if [[ "$PLATFORM" == "darwin" ]]; then
 fi
 
 # Build the library
-CARGO_TARGET_DIR="$RUST_DIR/target" cargo build --release --target "$RUST_TARGET" \
+CARGO_TARGET_DIR="$RUST_DIR/target" cargo zigbuild --release --target "$RUST_TARGET" \
     --features aws,gcs,azure
 
 # Copy library to distribution directory
