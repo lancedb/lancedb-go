@@ -357,3 +357,28 @@ type ITableMultiDtypeVectorQuery interface {
 	// into vectorF16Bits.
 	VectorQueryF16(column string, vectorF16Bits []uint16) IVectorQueryBuilder
 }
+
+// ITableUint8VectorQuery is an optional capability extension layered
+// on top of ITable for u8 (binary / quantized) query vectors. Kept
+// separate from ITableMultiDtypeVectorQuery so the float-only
+// interface stays source-compatible for existing downstream impls.
+//
+// Unlike the float dtypes, lancedb v0.29 has no IntoQueryVector impl
+// for Vec<u8>; the Rust dispatch constructs a 1-D UInt8 Arrow array
+// and routes through the Arc<dyn Array> impl. The column on the table
+// must be FixedSizeList<UInt8>.
+//
+// Callers detect support with a type assertion:
+//
+//	if uq, ok := table.(contracts.ITableUint8VectorQuery); ok {
+//	    qb := uq.VectorQueryU8(column, vec)
+//	    // ...
+//	}
+//
+// The shipped *internal.Table implements this interface.
+type ITableUint8VectorQuery interface {
+	// VectorQueryU8 is the uint8 counterpart of ITable.VectorQuery.
+	// Each element of vector is a u8 (0..=255). Empty or nil slices
+	// are rejected at Execute().
+	VectorQueryU8(column string, vector []uint8) IVectorQueryBuilder
+}

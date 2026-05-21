@@ -171,7 +171,7 @@ func TestVectorQueryF16_CastsToF32Column(t *testing.T) {
 }
 
 // TestVectorQuery_EmptyVector_RejectedByAllDtypes — the existing f32
-// guard is extended to f64 and f16: an empty input slice must be
+// guard is extended to f64, f16, and u8: an empty input slice must be
 // rejected before the FFI call, with a consistent error message.
 func TestVectorQuery_EmptyVector_RejectedByAllDtypes(t *testing.T) {
 	table, cleanup := setupVectorQueryTestTable(t)
@@ -193,6 +193,10 @@ func TestVectorQuery_EmptyVector_RejectedByAllDtypes(t *testing.T) {
 			_, e := table.VectorQueryF16("embedding", []uint16{}).Limit(1).Execute(context.Background())
 			return e
 		}},
+		{"u8", func() error {
+			_, e := table.VectorQueryU8("embedding", []uint8{}).Limit(1).Execute(context.Background())
+			return e
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -200,6 +204,118 @@ func TestVectorQuery_EmptyVector_RejectedByAllDtypes(t *testing.T) {
 			require.Error(t, err, "%s: empty vector must be rejected", c.name)
 			require.Contains(t, err.Error(), "non-empty",
 				"%s: error message should reference non-empty contract; got: %v", c.name, err)
+		})
+	}
+}
+
+// setupU8EmbeddingTable seeds a small table whose `embedding` column is
+// FixedSizeList<UInt8>. Used to verify VectorQueryU8 against a column
+// whose dtype actually matches.
+func setupU8EmbeddingTable(t *testing.T) (*internal.Table, func()) {
+	t.Helper()
+
+	tempDir, err := os.MkdirTemp("", "lancedb_test_vqu8_")
+	require.NoError(t, err)
+
+	conn, err := lancedb.Connect(context.Background(), tempDir, nil)
+	if err != nil {
+		os.RemoveAll(tempDir)
+		t.Fatalf("connect: %v", err)
+	}
+
+	fields := []arrow.Field{
+		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
+		{Name: "embedding", Type: arrow.FixedSizeListOf(8, arrow.PrimitiveTypes.Uint8), Nullable: false},
+	}
+	arrowSchema := arrow.NewSchema(fields, nil)
+	schema, err := internal.NewSchema(arrowSchema)
+	if err != nil {
+		conn.Close()
+		os.RemoveAll(tempDir)
+		t.Fatalf("schema: %v", err)
+	}
+
+	table, err := conn.CreateTable(context.Background(), "vqu8", schema)
+	if err != nil {
+		conn.Close()
+		os.RemoveAll(tempDir)
+		t.Fatalf("create table: %v", err)
+	}
+
+	const n = 16
+	pool := memory.NewGoAllocator()
+	idB := array.NewInt32Builder(pool)
+	embB := array.NewFixedSizeListBuilder(pool, 8, arrow.PrimitiveTypes.Uint8)
+	embValB := embB.ValueBuilder().(*array.Uint8Builder)
+	for i := 0; i < n; i++ {
+		idB.Append(int32(i))
+		embB.Append(true)
+		for j := 0; j < 8; j++ {
+			embValB.Append(uint8((i*8 + j) & 0xff))
+		}
+	}
+	rec := array.NewRecord(arrowSchema, []arrow.Array{idB.NewArray(), embB.NewArray()}, n)
+	defer rec.Release()
+	if err := table.Add(context.Background(), rec, nil); err != nil {
+		table.Close()
+		conn.Close()
+		os.RemoveAll(tempDir)
+		t.Fatalf("add: %v", err)
+	}
+
+	cleanup := func() {
+		table.Close()
+		conn.Close()
+		os.RemoveAll(tempDir)
+	}
+	return table.(*internal.Table), cleanup
+}
+
+// TestVectorQueryU8_MatchingColumn — happy path: query a UInt8 column
+// with a u8 query vector. Rust constructs a 1-D Arrow UInt8 array and
+// routes it through lancedb's IntoQueryVector for Arc<dyn Array>. Also
+// exercises the capability-interface contract for ITableUint8VectorQuery
+// (mirroring the F64 test's discovery pattern).
+func TestVectorQueryU8_MatchingColumn(t *testing.T) {
+	table, cleanup := setupU8EmbeddingTable(t)
+	defer cleanup()
+
+	var iface contracts.ITable = table
+	uq, ok := iface.(contracts.ITableUint8VectorQuery)
+	require.True(t, ok, "*internal.Table must implement ITableUint8VectorQuery")
+
+	q := []uint8{10, 20, 30, 40, 50, 60, 70, 80}
+	rec, err := uq.VectorQueryU8("embedding", q).Limit(3).Execute(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	defer rec.Release()
+	require.Equal(t, int64(3), rec.NumRows(), "expected K=3 rows from u8 vector query")
+}
+
+// TestVectorQueryU8_BoundaryValues — Strategy 1 (Edge): probe the 0 and
+// 255 boundary values that exercise the u8 range without exceeding it.
+// The Rust side validates the JSON wire numbers are 0..=255, so both
+// extremes must round-trip cleanly.
+func TestVectorQueryU8_BoundaryValues(t *testing.T) {
+	table, cleanup := setupU8EmbeddingTable(t)
+	defer cleanup()
+
+	cases := []struct {
+		name string
+		vec  []uint8
+	}{
+		{"all_zero", []uint8{0, 0, 0, 0, 0, 0, 0, 0}},
+		{"all_max", []uint8{255, 255, 255, 255, 255, 255, 255, 255}},
+		{"mixed", []uint8{0, 255, 1, 254, 127, 128, 63, 192}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec, err := table.VectorQueryU8("embedding", c.vec).Limit(1).
+				Execute(context.Background())
+			require.NoError(t, err)
+			require.NotNil(t, rec)
+			defer rec.Release()
+			require.Equal(t, int64(1), rec.NumRows())
 		})
 	}
 }

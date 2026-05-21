@@ -49,6 +49,11 @@ var _ contracts.ITableUpdateExpr = (*Table)(nil)
 // beyond the default Float32 ITable.VectorQuery path).
 var _ contracts.ITableMultiDtypeVectorQuery = (*Table)(nil)
 
+// Compile-time check that Table implements the optional uint8 vector
+// query capability extension (binary / quantized query vectors against
+// FixedSizeList<UInt8> columns).
+var _ contracts.ITableUint8VectorQuery = (*Table)(nil)
+
 // Name returns the name of the Table
 func (t *Table) Name() string {
 	return t.name
@@ -284,6 +289,32 @@ func (t *Table) VectorQueryF16(column string, vectorF16Bits []uint16) contracts.
 		},
 		vectorF16: vectorCopy,
 		column:    column,
+	}
+}
+
+// VectorQueryU8 creates a new vector query builder with a UInt8 query
+// vector. Each input element is widened to uint16 for the JSON wire
+// (matching the VectorF16 carrier convention) so the wire stays an
+// array of numbers rather than Go's default base64 encoding for
+// []byte. The Rust side validates the 0..=255 range and constructs a
+// 1-D Arrow UInt8 array routed through lancedb's IntoQueryVector for
+// Arc<dyn Array>.
+func (t *Table) VectorQueryU8(column string, vector []uint8) contracts.IVectorQueryBuilder {
+	var vectorCopy []uint16
+	if vector != nil {
+		vectorCopy = make([]uint16, len(vector))
+		for i, v := range vector {
+			vectorCopy[i] = uint16(v)
+		}
+	}
+	return &VectorQueryBuilder{
+		QueryBuilder: QueryBuilder{
+			table:   t,
+			filters: make([]string, 0),
+			columns: nil,
+		},
+		vectorU8: vectorCopy,
+		column:   column,
 	}
 }
 

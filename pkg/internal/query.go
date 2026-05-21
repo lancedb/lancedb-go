@@ -31,13 +31,16 @@ var _ lancedb.IVectorQueryBuilder = (*VectorQueryBuilder)(nil)
 
 // VectorQueryBuilder extends QueryBuilder for vector similarity searches.
 //
-// At most one of vector / vectorF64 / vectorF16 is populated by the
-// constructors on *Table. Execute() picks whichever is non-empty.
+// At most one of vector / vectorF64 / vectorF16 / vectorU8 is populated
+// by the constructors on *Table. Execute() picks whichever is non-empty.
+// The vectorU8 slice carries u8 values widened to uint16 — see
+// (*Table).VectorQueryU8 for the wire-format rationale.
 type VectorQueryBuilder struct {
 	QueryBuilder
 	vector            []float32
 	vectorF64         []float64
 	vectorF16         []uint16
+	vectorU8          []uint16
 	column            string
 	limitSet          bool // tracks whether Limit() was explicitly called
 	distanceType      *lancedb.DistanceType
@@ -308,14 +311,30 @@ func (vq *VectorQueryBuilder) WithFullText(query, column string) lancedb.IVector
 // keep the per-call cyclomatic complexity of Execute below the
 // project's gocyclo budget (15).
 func (vq *VectorQueryBuilder) validate() error {
-	hasF32 := len(vq.vector) > 0
-	hasF64 := len(vq.vectorF64) > 0
-	hasF16 := len(vq.vectorF16) > 0
-	switch {
-	case !hasF32 && !hasF64 && !hasF16:
+	// Count populated dtype slices instead of expanding the conjunction
+	// matrix. With 4 dtypes (f32 / f64 / f16 / u8), the previous
+	// pairwise conjunction approach would scale combinatorially and
+	// blow the gocyclo budget. Each non-empty slice contributes one.
+	populated := 0
+	if len(vq.vector) > 0 {
+		populated++
+	}
+	if len(vq.vectorF64) > 0 {
+		populated++
+	}
+	if len(vq.vectorF16) > 0 {
+		populated++
+	}
+	if len(vq.vectorU8) > 0 {
+		populated++
+	}
+	switch populated {
+	case 0:
 		return fmt.Errorf("vector search requires a non-empty query vector")
-	case (hasF32 && (hasF64 || hasF16)) || (hasF64 && hasF16):
-		return fmt.Errorf("vector search must use exactly one of vector / vectorF64 / vectorF16")
+	case 1:
+		// ok
+	default:
+		return fmt.Errorf("vector search must use exactly one of vector / vectorF64 / vectorF16 / vectorU8 (got %d populated)", populated)
 	}
 	if vq.column == "" {
 		return fmt.Errorf("vector search requires a non-empty column name")
@@ -342,6 +361,7 @@ func (vq *VectorQueryBuilder) buildVectorSearch(k int) (*lancedb.VectorSearch, e
 		Vector:            vq.vector,
 		VectorF64:         vq.vectorF64,
 		VectorF16:         vq.vectorF16,
+		VectorU8:          vq.vectorU8,
 		K:                 k,
 		Nprobes:           vq.nprobes,
 		RefineFactor:      vq.refineFactor,

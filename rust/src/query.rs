@@ -153,9 +153,9 @@ async fn execute_query_from_config(
     // Vector search
     if let Some(vector_search) = query_config.get("vector_search") {
         // Pick the query-vector dtype. Exactly one of vector / vector_f64 /
-        // vector_f16 must be a non-empty array; the Go side guards this
-        // before serialising, but we re-check here so a hand-crafted JSON
-        // config doesn't silently fall through.
+        // vector_f16 / vector_u8 must be a non-empty array; the Go side
+        // guards this before serialising, but we re-check here so a
+        // hand-crafted JSON config doesn't silently fall through.
         let vec_f32_arr = vector_search
             .get("vector")
             .and_then(|v| v.as_array())
@@ -168,16 +168,22 @@ async fn execute_query_from_config(
             .get("vector_f16")
             .and_then(|v| v.as_array())
             .filter(|a| !a.is_empty());
+        let vec_u8_arr = vector_search
+            .get("vector_u8")
+            .and_then(|v| v.as_array())
+            .filter(|a| !a.is_empty());
         let column_opt = vector_search.get("column").and_then(|v| v.as_str());
         let k_opt = vector_search.get("k").and_then(|v| v.as_u64());
-        let dtype_count =
-            vec_f32_arr.is_some() as u8 + vec_f64_arr.is_some() as u8 + vec_f16_arr.is_some() as u8;
+        let dtype_count = vec_f32_arr.is_some() as u8
+            + vec_f64_arr.is_some() as u8
+            + vec_f16_arr.is_some() as u8
+            + vec_u8_arr.is_some() as u8;
 
         if let (Some(column), Some(k)) = (column_opt, k_opt) {
             if dtype_count != 1 {
                 return Err(lancedb::Error::InvalidInput {
                     message: format!(
-                        "vector_search must set exactly one of vector / vector_f64 / vector_f16 (found {})",
+                        "vector_search must set exactly one of vector / vector_f64 / vector_f16 / vector_u8 (found {})",
                         dtype_count
                     ),
                 });
@@ -191,8 +197,9 @@ async fn execute_query_from_config(
 
             // Build the VectorQuery from whichever dtype was supplied.
             // lancedb's IntoQueryVector is implemented for Vec<f32>,
-            // Vec<f64>, and Vec<half::f16>; the matching impl handles
-            // any column-dtype cast the column requires.
+            // Vec<f64>, and Vec<half::f16>; for u8 we hand a 1-D Arrow
+            // UInt8 array through the Arc<dyn Array> impl. Each impl
+            // handles any column-dtype cast the target column requires.
             let invalid = |msg: String| lancedb::Error::InvalidInput { message: msg };
             let nearest_built = if let Some(arr) = vec_f64_arr {
                 let v: Result<Vec<f64>, String> = arr
@@ -221,6 +228,29 @@ async fn execute_query_from_config(
                 table.query().nearest_to(
                     v.map_err(|e| invalid(format!("Failed to parse vector_f16: {}", e)))?,
                 )?
+            } else if let Some(arr) = vec_u8_arr {
+                // u8 vectors travel as a JSON array of unsigned numbers
+                // (each value in 0..=255). lancedb v0.29 has no
+                // IntoQueryVector impl for &[u8], so we build a 1-D
+                // Arrow UInt8 array and route through the Arc<dyn Array>
+                // impl. Strict range validation: any element outside
+                // 0..=255 — string, negative, float, oversized integer —
+                // surfaces as a clear error rather than wrapping.
+                use std::sync::Arc;
+                let v: Result<Vec<u8>, String> = arr
+                    .iter()
+                    .map(|x| {
+                        x.as_u64()
+                            .and_then(|u| u8::try_from(u).ok())
+                            .ok_or_else(|| {
+                                format!("Invalid u8 element (must be 0..=255), got {}", x)
+                            })
+                    })
+                    .collect();
+                let bytes = v.map_err(|e| invalid(format!("Failed to parse vector_u8: {}", e)))?;
+                let arr_obj: Arc<dyn arrow_array::Array> =
+                    Arc::new(arrow_array::UInt8Array::from(bytes));
+                table.query().nearest_to(arr_obj)?
             } else {
                 // f32 default (also covers the legacy {"vector": [...]} shape).
                 let arr = vec_f32_arr.expect("dtype_count == 1 guard ensures vec_f32_arr is set");

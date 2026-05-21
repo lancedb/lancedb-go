@@ -190,9 +190,10 @@ type QueryConfig struct {
 
 // VectorSearch represents vector similarity search parameters.
 //
-// The Vector / VectorF64 / VectorF16 fields are mutually exclusive: set
-// exactly one to choose the query-vector element type. The matching
-// lancedb IntoQueryVector impl is dispatched on the Rust side.
+// The Vector / VectorF64 / VectorF16 / VectorU8 fields are mutually
+// exclusive: set exactly one to choose the query-vector element type.
+// The matching lancedb IntoQueryVector impl is dispatched on the Rust
+// side.
 //
 //   - Vector ([]float32): default; matches FixedSizeList<Float32> columns
 //   - VectorF64 ([]float64): matches FixedSizeList<Float64> columns;
@@ -203,16 +204,19 @@ type QueryConfig struct {
 //     Go has no native f16 type — callers convert through their own
 //     half-precision lib (e.g. github.com/x448/float16) and pass the
 //     resulting f16.Bits() into this slice.
-//
-// Uint8 (binary / quantized) vector queries are intentionally not
-// exposed here yet — lancedb v0.29 has no IntoQueryVector impl for
-// &[u8] and the path requires constructing a FixedSizeListArray on the
-// Rust side. Tracked as a follow-up.
+//   - VectorU8 ([]uint16): each element holds a u8 value (0..=255) in
+//     the low byte. lancedb v0.29 has no IntoQueryVector impl for
+//     &[u8], so the Rust side constructs a 1-D UInt8 Arrow array and
+//     routes through the Arc<dyn Array> impl. Matches
+//     FixedSizeList<UInt8> columns. The []uint16 carrier matches the
+//     VectorF16 wire pattern so the JSON stays an array of numbers
+//     (rather than Go's default base64 encoding for []byte).
 type VectorSearch struct {
 	Column       string    `json:"column"`
 	Vector       []float32 `json:"vector,omitempty"`
 	VectorF64    []float64 `json:"vector_f64,omitempty"`
 	VectorF16    []uint16  `json:"vector_f16,omitempty"`
+	VectorU8     []uint16  `json:"vector_u8,omitempty"`
 	K            int       `json:"k"`
 	DistanceType *string   `json:"distance_type,omitempty"`
 
