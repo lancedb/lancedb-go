@@ -44,6 +44,11 @@ var _ contracts.ITable = (*Table)(nil)
 // raw-SQL-expression update capability extension.
 var _ contracts.ITableUpdateExpr = (*Table)(nil)
 
+// Compile-time check that Table implements the optional multi-dtype
+// vector query capability extension (Float64 / Float16 query vectors
+// beyond the default Float32 ITable.VectorQuery path).
+var _ contracts.ITableMultiDtypeVectorQuery = (*Table)(nil)
+
 // Name returns the name of the Table
 func (t *Table) Name() string {
 	return t.name
@@ -222,7 +227,7 @@ func (t *Table) Query() contracts.IQueryBuilder {
 	}
 }
 
-// VectorQuery creates a new vector query builder for this Table
+// VectorQuery creates a new vector query builder for this Table (f32).
 func (t *Table) VectorQuery(column string, vector []float32) contracts.IVectorQueryBuilder {
 	var vectorCopy []float32
 	if vector != nil {
@@ -237,6 +242,48 @@ func (t *Table) VectorQuery(column string, vector []float32) contracts.IVectorQu
 		},
 		vector: vectorCopy,
 		column: column,
+	}
+}
+
+// VectorQueryF64 creates a new vector query builder with a Float64
+// query vector. Use for FixedSizeList<Float64> columns; lancedb's
+// IntoQueryVector will also cast to f32 / f16 if the column expects
+// them.
+func (t *Table) VectorQueryF64(column string, vector []float64) contracts.IVectorQueryBuilder {
+	var vectorCopy []float64
+	if vector != nil {
+		vectorCopy = make([]float64, len(vector))
+		copy(vectorCopy, vector)
+	}
+	return &VectorQueryBuilder{
+		QueryBuilder: QueryBuilder{
+			table:   t,
+			filters: make([]string, 0),
+			columns: nil,
+		},
+		vectorF64: vectorCopy,
+		column:    column,
+	}
+}
+
+// VectorQueryF16 creates a new vector query builder with a Float16
+// query vector encoded as raw IEEE 754 half-precision bits. Go has no
+// native f16 type — convert through a half-precision lib and pass the
+// resulting Bits() into vectorF16Bits.
+func (t *Table) VectorQueryF16(column string, vectorF16Bits []uint16) contracts.IVectorQueryBuilder {
+	var vectorCopy []uint16
+	if vectorF16Bits != nil {
+		vectorCopy = make([]uint16, len(vectorF16Bits))
+		copy(vectorCopy, vectorF16Bits)
+	}
+	return &VectorQueryBuilder{
+		QueryBuilder: QueryBuilder{
+			table:   t,
+			filters: make([]string, 0),
+			columns: nil,
+		},
+		vectorF16: vectorCopy,
+		column:    column,
 	}
 }
 

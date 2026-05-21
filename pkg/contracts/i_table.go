@@ -36,7 +36,10 @@ type ITable interface {
 	// Query creates a new query builder for constructing complex queries
 	Query() IQueryBuilder
 
-	// VectorQuery creates a new vector query builder for similarity searches on the specified column
+	// VectorQuery creates a new vector query builder for similarity
+	// searches on the specified column. The query vector is f32; matches
+	// FixedSizeList<Float32> columns. For other element dtypes (Float64,
+	// Float16), use the optional ITableMultiDtypeVectorQuery extension.
 	VectorQuery(column string, vector []float32) IVectorQueryBuilder
 
 	// Count returns the total number of rows in the table
@@ -322,4 +325,35 @@ type ITablePrewarmIndex interface {
 	// are loaded up to the available cache. Not all index types support
 	// prewarming — unsupported types surface as a backend error.
 	PrewarmIndex(ctx context.Context, name string) error
+}
+
+// ITableMultiDtypeVectorQuery is an optional capability extension
+// layered on top of ITable. Backends that can dispatch query vectors
+// of multiple element dtypes (Float64, Float16) — beyond the default
+// Float32 path on ITable.VectorQuery — implement it.
+//
+// Kept out of ITable for the same source-compat reasons as
+// ITablePrewarmIndex: adding methods directly to ITable would break
+// every downstream mock or alternate implementation of the interface.
+// Callers detect the capability with a type assertion:
+//
+//	if mq, ok := table.(contracts.ITableMultiDtypeVectorQuery); ok {
+//	    qb := mq.VectorQueryF64(column, vec)
+//	    // ...
+//	}
+//
+// The shipped *internal.Table implements this interface.
+type ITableMultiDtypeVectorQuery interface {
+	// VectorQueryF64 is the float64 counterpart of ITable.VectorQuery.
+	// Use for FixedSizeList<Float64> columns; lancedb's IntoQueryVector
+	// will also cast to f32 / f16 if the column expects those.
+	VectorQueryF64(column string, vector []float64) IVectorQueryBuilder
+
+	// VectorQueryF16 is the half-precision counterpart of
+	// ITable.VectorQuery. The vector slice carries raw IEEE 754
+	// half-precision bits per element. Go has no native f16 type —
+	// callers convert through a half-precision lib (e.g.
+	// github.com/x448/float16) and pass the resulting Bits() values
+	// into vectorF16Bits.
+	VectorQueryF16(column string, vectorF16Bits []uint16) IVectorQueryBuilder
 }

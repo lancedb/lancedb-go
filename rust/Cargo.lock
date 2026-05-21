@@ -3914,6 +3914,7 @@ dependencies = [
  "cbindgen",
  "chrono",
  "env_logger",
+ "half",
  "lancedb",
  "libc",
  "log",

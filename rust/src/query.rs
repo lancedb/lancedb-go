@@ -152,111 +152,163 @@ async fn execute_query_from_config(
 > {
     // Vector search
     if let Some(vector_search) = query_config.get("vector_search") {
-        if let (Some(column), Some(vector_values), Some(k)) = (
-            vector_search.get("column").and_then(|v| v.as_str()),
-            vector_search.get("vector").and_then(|v| v.as_array()),
-            vector_search.get("k").and_then(|v| v.as_u64()),
-        ) {
-            let vector: Result<Vec<f32>, String> = vector_values
-                .iter()
-                .map(|v| {
-                    v.as_f64()
-                        .map(|f| f as f32)
-                        .ok_or_else(|| "Invalid vector element".to_string())
-                })
-                .collect();
+        // Pick the query-vector dtype. Exactly one of vector / vector_f64 /
+        // vector_f16 must be a non-empty array; the Go side guards this
+        // before serialising, but we re-check here so a hand-crafted JSON
+        // config doesn't silently fall through.
+        let vec_f32_arr = vector_search
+            .get("vector")
+            .and_then(|v| v.as_array())
+            .filter(|a| !a.is_empty());
+        let vec_f64_arr = vector_search
+            .get("vector_f64")
+            .and_then(|v| v.as_array())
+            .filter(|a| !a.is_empty());
+        let vec_f16_arr = vector_search
+            .get("vector_f16")
+            .and_then(|v| v.as_array())
+            .filter(|a| !a.is_empty());
+        let column_opt = vector_search.get("column").and_then(|v| v.as_str());
+        let k_opt = vector_search.get("k").and_then(|v| v.as_u64());
+        let dtype_count =
+            vec_f32_arr.is_some() as u8 + vec_f64_arr.is_some() as u8 + vec_f16_arr.is_some() as u8;
 
-            match vector {
-                Ok(vec) => {
-                    let effective_limit = query_config
-                        .get("limit")
-                        .and_then(|v| v.as_u64())
-                        .map(|l| l as usize)
-                        .unwrap_or(k as usize);
+        if let (Some(column), Some(k)) = (column_opt, k_opt) {
+            if dtype_count != 1 {
+                return Err(lancedb::Error::InvalidInput {
+                    message: format!(
+                        "vector_search must set exactly one of vector / vector_f64 / vector_f16 (found {})",
+                        dtype_count
+                    ),
+                });
+            }
 
-                    let mut vector_query = table
-                        .query()
-                        .nearest_to(vec)?
-                        .column(column)
-                        .limit(effective_limit);
+            let effective_limit = query_config
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|l| l as usize)
+                .unwrap_or(k as usize);
 
-                    if let Some(filter) = query_config.get("where").and_then(|v| v.as_str()) {
-                        vector_query = vector_query.only_if(filter);
-                    }
-
-                    if let Some(columns) = query_config.get("columns").and_then(|v| v.as_array()) {
-                        let column_names = parse_column_names(columns);
-                        if !column_names.is_empty() {
-                            vector_query =
-                                vector_query.select(lancedb::query::Select::Columns(column_names));
-                        }
-                    }
-
-                    if let Some(dt) = vector_search.get("distance_type").and_then(|v| v.as_str()) {
-                        vector_query = vector_query.distance_type(parse_distance_type(dt)?);
-                    }
-
-                    // Per-query vector tuning (IVF / HNSW specific)
-                    if let Some(n) = vector_search.get("nprobes").and_then(|v| v.as_u64()) {
-                        vector_query = vector_query.nprobes(n as usize);
-                    }
-                    if let Some(rf) = vector_search.get("refine_factor").and_then(|v| v.as_u64()) {
-                        vector_query = vector_query.refine_factor(rf as u32);
-                    }
-                    if let Some(ef) = vector_search.get("ef").and_then(|v| v.as_u64()) {
-                        vector_query = vector_query.ef(ef as usize);
-                    }
-                    if vector_search
-                        .get("bypass_vector_index")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                    {
-                        vector_query = vector_query.bypass_vector_index();
-                    }
-
-                    // Hybrid: when a full_text_query is present alongside the
-                    // vector, chain .full_text_search() so lancedb's
-                    // execute_hybrid path fuses the two channels. The default
-                    // reranker is RRF; the caller can override via the
-                    // top-level "reranker" config.
-                    if let Some(fts_text) = vector_search
-                        .get("full_text_query")
-                        .and_then(|v| v.as_str())
-                    {
-                        // Trim before the empty check: a whitespace-only
-                        // query like "   " would otherwise reach
-                        // FullTextSearchQuery::new and produce an empty
-                        // tokenizer result, surfacing as either no rows
-                        // or a backend error depending on the FTS index.
-                        let trimmed = fts_text.trim();
-                        if !trimmed.is_empty() {
-                            let mut fts = FullTextSearchQuery::new(trimmed.to_string());
-                            if let Some(col) = vector_search
-                                .get("full_text_column")
-                                .and_then(|v| v.as_str())
-                            {
-                                if !col.is_empty() {
-                                    fts = fts.with_column(col.to_string()).map_err(|e| {
-                                        lancedb::Error::InvalidInput {
-                                            message: format!("Invalid FTS column: {}", e),
-                                        }
-                                    })?;
-                                }
-                            }
-                            vector_query = vector_query.full_text_search(fts);
-                        }
-                    }
-
-                    vector_query = apply_query_base_flags(vector_query, query_config)?;
-
-                    return vector_query.execute().await;
-                }
-                Err(e) => {
-                    return Err(lancedb::Error::InvalidInput {
-                        message: format!("Failed to parse vector: {}", e),
+            // Build the VectorQuery from whichever dtype was supplied.
+            // lancedb's IntoQueryVector is implemented for Vec<f32>,
+            // Vec<f64>, and Vec<half::f16>; the matching impl handles
+            // any column-dtype cast the column requires.
+            let invalid = |msg: String| lancedb::Error::InvalidInput { message: msg };
+            let nearest_built = if let Some(arr) = vec_f64_arr {
+                let v: Result<Vec<f64>, String> = arr
+                    .iter()
+                    .map(|x| x.as_f64().ok_or_else(|| "Invalid f64 element".to_string()))
+                    .collect();
+                table.query().nearest_to(
+                    v.map_err(|e| invalid(format!("Failed to parse vector_f64: {}", e)))?,
+                )?
+            } else if let Some(arr) = vec_f16_arr {
+                // f16 vectors travel as raw IEEE 754 half-precision bits
+                // in a JSON array of unsigned 16-bit numbers.
+                // half::f16::from_bits turns each back into the canonical
+                // f16 value.
+                let v: Result<Vec<half::f16>, String> = arr
+                    .iter()
+                    .map(|x| {
+                        x.as_u64()
+                            .and_then(|u| u16::try_from(u).ok())
+                            .map(half::f16::from_bits)
+                            .ok_or_else(|| {
+                                "Invalid f16 bits element (must be 0..=65535)".to_string()
+                            })
                     })
+                    .collect();
+                table.query().nearest_to(
+                    v.map_err(|e| invalid(format!("Failed to parse vector_f16: {}", e)))?,
+                )?
+            } else {
+                // f32 default (also covers the legacy {"vector": [...]} shape).
+                let arr = vec_f32_arr.expect("dtype_count == 1 guard ensures vec_f32_arr is set");
+                let v: Result<Vec<f32>, String> = arr
+                    .iter()
+                    .map(|x| {
+                        x.as_f64()
+                            .map(|f| f as f32)
+                            .ok_or_else(|| "Invalid f32 element".to_string())
+                    })
+                    .collect();
+                table
+                    .query()
+                    .nearest_to(v.map_err(|e| invalid(format!("Failed to parse vector: {}", e)))?)?
+            };
+
+            let mut vector_query = nearest_built.column(column).limit(effective_limit);
+
+            if let Some(filter) = query_config.get("where").and_then(|v| v.as_str()) {
+                vector_query = vector_query.only_if(filter);
+            }
+
+            if let Some(columns) = query_config.get("columns").and_then(|v| v.as_array()) {
+                let column_names = parse_column_names(columns);
+                if !column_names.is_empty() {
+                    vector_query =
+                        vector_query.select(lancedb::query::Select::Columns(column_names));
                 }
             }
+
+            if let Some(dt) = vector_search.get("distance_type").and_then(|v| v.as_str()) {
+                vector_query = vector_query.distance_type(parse_distance_type(dt)?);
+            }
+
+            // Per-query vector tuning (IVF / HNSW specific)
+            if let Some(n) = vector_search.get("nprobes").and_then(|v| v.as_u64()) {
+                vector_query = vector_query.nprobes(n as usize);
+            }
+            if let Some(rf) = vector_search.get("refine_factor").and_then(|v| v.as_u64()) {
+                vector_query = vector_query.refine_factor(rf as u32);
+            }
+            if let Some(ef) = vector_search.get("ef").and_then(|v| v.as_u64()) {
+                vector_query = vector_query.ef(ef as usize);
+            }
+            if vector_search
+                .get("bypass_vector_index")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                vector_query = vector_query.bypass_vector_index();
+            }
+
+            // Hybrid: when a full_text_query is present alongside the
+            // vector, chain .full_text_search() so lancedb's
+            // execute_hybrid path fuses the two channels. The default
+            // reranker is RRF; the caller can override via the
+            // top-level "reranker" config.
+            if let Some(fts_text) = vector_search
+                .get("full_text_query")
+                .and_then(|v| v.as_str())
+            {
+                // Trim before the empty check: a whitespace-only
+                // query like "   " would otherwise reach
+                // FullTextSearchQuery::new and produce an empty
+                // tokenizer result, surfacing as either no rows
+                // or a backend error depending on the FTS index.
+                let trimmed = fts_text.trim();
+                if !trimmed.is_empty() {
+                    let mut fts = FullTextSearchQuery::new(trimmed.to_string());
+                    if let Some(col) = vector_search
+                        .get("full_text_column")
+                        .and_then(|v| v.as_str())
+                    {
+                        if !col.is_empty() {
+                            fts = fts.with_column(col.to_string()).map_err(|e| {
+                                lancedb::Error::InvalidInput {
+                                    message: format!("Invalid FTS column: {}", e),
+                                }
+                            })?;
+                        }
+                    }
+                    vector_query = vector_query.full_text_search(fts);
+                }
+            }
+
+            vector_query = apply_query_base_flags(vector_query, query_config)?;
+
+            return vector_query.execute().await;
         }
     }
 

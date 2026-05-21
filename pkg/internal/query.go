@@ -29,10 +29,15 @@ type QueryBuilder struct {
 var _ lancedb.IQueryBuilder = (*QueryBuilder)(nil)
 var _ lancedb.IVectorQueryBuilder = (*VectorQueryBuilder)(nil)
 
-// VectorQueryBuilder extends QueryBuilder for vector similarity searches
+// VectorQueryBuilder extends QueryBuilder for vector similarity searches.
+//
+// At most one of vector / vectorF64 / vectorF16 is populated by the
+// constructors on *Table. Execute() picks whichever is non-empty.
 type VectorQueryBuilder struct {
 	QueryBuilder
 	vector            []float32
+	vectorF64         []float64
+	vectorF16         []uint16
 	column            string
 	limitSet          bool // tracks whether Limit() was explicitly called
 	distanceType      *lancedb.DistanceType
@@ -297,48 +302,78 @@ func (vq *VectorQueryBuilder) WithFullText(query, column string) lancedb.IVector
 	return vq
 }
 
-// Execute executes the vector search query and returns results.
-// Delegates to Table.SelectIPC() which holds the mutex and checks closed state.
-func (vq *VectorQueryBuilder) Execute(ctx context.Context) (arrow.Record, error) {
-	if len(vq.vector) == 0 {
-		return nil, fmt.Errorf("vector search requires a non-empty query vector")
+// validate checks the invariants the public Execute path depends on:
+// exactly one query-vector dtype slice non-empty, non-empty column,
+// positive K via explicit Limit, no Offset. Extracted to a method to
+// keep the per-call cyclomatic complexity of Execute below the
+// project's gocyclo budget (15).
+func (vq *VectorQueryBuilder) validate() error {
+	hasF32 := len(vq.vector) > 0
+	hasF64 := len(vq.vectorF64) > 0
+	hasF16 := len(vq.vectorF16) > 0
+	switch {
+	case !hasF32 && !hasF64 && !hasF16:
+		return fmt.Errorf("vector search requires a non-empty query vector")
+	case (hasF32 && (hasF64 || hasF16)) || (hasF64 && hasF16):
+		return fmt.Errorf("vector search must use exactly one of vector / vectorF64 / vectorF16")
 	}
 	if vq.column == "" {
-		return nil, fmt.Errorf("vector search requires a non-empty column name")
+		return fmt.Errorf("vector search requires a non-empty column name")
 	}
-
-	k := vq.limit
 	if !vq.limitSet {
-		return nil, fmt.Errorf("vector search requires a positive K value: call .Limit(k) before .Execute()")
+		return fmt.Errorf("vector search requires a positive K value: call .Limit(k) before .Execute()")
 	}
-	if k <= 0 {
-		return nil, fmt.Errorf("K must be a positive integer, got %d", k)
+	if vq.limit <= 0 {
+		return fmt.Errorf("K must be a positive integer, got %d", vq.limit)
 	}
-
 	if vq.offset != 0 {
-		return nil, fmt.Errorf("VectorQueryBuilder does not support Offset(); use QueryBuilder for offset-based pagination")
+		return fmt.Errorf("VectorQueryBuilder does not support Offset(); use QueryBuilder for offset-based pagination")
 	}
+	return nil
+}
 
-	config := vq.buildConfig()
-	config.Limit = nil // K controls result count for vector search, not Limit
-	config.VectorSearch = &lancedb.VectorSearch{
-		Column: vq.column,
-		Vector: vq.vector,
-		K:      k,
+// buildVectorSearch assembles the lancedb.VectorSearch payload from the
+// builder's accumulated state. Pulled out of Execute so the public
+// method stays under the gocyclo budget after the multi-dtype branches
+// were added.
+func (vq *VectorQueryBuilder) buildVectorSearch(k int) (*lancedb.VectorSearch, error) {
+	vs := &lancedb.VectorSearch{
+		Column:            vq.column,
+		Vector:            vq.vector,
+		VectorF64:         vq.vectorF64,
+		VectorF16:         vq.vectorF16,
+		K:                 k,
+		Nprobes:           vq.nprobes,
+		RefineFactor:      vq.refineFactor,
+		Ef:                vq.ef,
+		BypassVectorIndex: vq.bypassVectorIndex,
+		FullTextQuery:     vq.fullTextQuery,
+		FullTextColumn:    vq.fullTextColumn,
 	}
 	if vq.distanceType != nil && *vq.distanceType != lancedb.DistanceTypeUnspecified {
 		dt, err := distanceTypeToString(*vq.distanceType)
 		if err != nil {
 			return nil, err
 		}
-		config.VectorSearch.DistanceType = &dt
+		vs.DistanceType = &dt
 	}
-	config.VectorSearch.Nprobes = vq.nprobes
-	config.VectorSearch.RefineFactor = vq.refineFactor
-	config.VectorSearch.Ef = vq.ef
-	config.VectorSearch.BypassVectorIndex = vq.bypassVectorIndex
-	config.VectorSearch.FullTextQuery = vq.fullTextQuery
-	config.VectorSearch.FullTextColumn = vq.fullTextColumn
+	return vs, nil
+}
+
+// Execute executes the vector search query and returns results.
+// Delegates to Table.SelectIPC() which holds the mutex and checks closed state.
+func (vq *VectorQueryBuilder) Execute(ctx context.Context) (arrow.Record, error) {
+	if err := vq.validate(); err != nil {
+		return nil, err
+	}
+
+	config := vq.buildConfig()
+	config.Limit = nil // K controls result count for vector search, not Limit
+	vs, err := vq.buildVectorSearch(vq.limit)
+	if err != nil {
+		return nil, err
+	}
+	config.VectorSearch = vs
 
 	ipcBytes, err := vq.table.SelectIPC(ctx, config)
 	if err != nil {

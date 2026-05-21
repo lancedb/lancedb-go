@@ -30,6 +30,9 @@ arrow-ord = "58.0"
 arrow-cast = "58.0"
 arrow-ipc = "58.0"
 arrow-select = "58.0"
+# Required to convert raw f16 bits ([]uint16 on the Go side) into
+# half::f16 values for lancedb::query::IntoQueryVector for Vec<f16>.
+half = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio-stream = "0.1"
