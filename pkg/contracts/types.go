@@ -18,6 +18,11 @@ const (
 	IndexTypeBitmap
 	IndexTypeLabelList
 	IndexTypeFts
+	// IndexTypeHnswFlat is appended at the end to preserve the numeric
+	// values of the constants above. Callers that persist or deserialize
+	// IndexType as an integer (config files, RPC payloads, etc.) must
+	// not see existing values shift on upgrade.
+	IndexTypeHnswFlat
 )
 
 // DistanceType represents the distance metric for vector similarity search

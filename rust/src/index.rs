@@ -111,6 +111,20 @@ pub extern "C" fn simple_lancedb_table_create_index(
 
                 index_builder.execute().await
             }),
+            "hnsw_flat" => rt.block_on(async {
+                let mut index_builder = table.create_index(
+                    &columns,
+                    lancedb::index::Index::IvfHnswFlat(
+                        lancedb::index::vector::IvfHnswFlatIndexBuilder::default(),
+                    ),
+                );
+
+                if let Some(name) = index_name_str {
+                    index_builder = index_builder.name(name);
+                }
+
+                index_builder.execute().await
+            }),
             "btree" => rt.block_on(async {
                 let mut index_builder = table.create_index(
                     &columns,
@@ -457,8 +471,8 @@ fn build_index_from_config(cfg: &serde_json::Value) -> Result<lancedb::index::In
         BTreeIndexBuilder, BitmapIndexBuilder, FtsIndexBuilder, LabelListIndexBuilder,
     };
     use lancedb::index::vector::{
-        IvfFlatIndexBuilder, IvfHnswPqIndexBuilder, IvfHnswSqIndexBuilder, IvfPqIndexBuilder,
-        IvfRqIndexBuilder, IvfSqIndexBuilder,
+        IvfFlatIndexBuilder, IvfHnswFlatIndexBuilder, IvfHnswPqIndexBuilder, IvfHnswSqIndexBuilder,
+        IvfPqIndexBuilder, IvfRqIndexBuilder, IvfSqIndexBuilder,
     };
     use lancedb::index::Index;
 
@@ -566,6 +580,22 @@ fn build_index_from_config(cfg: &serde_json::Value) -> Result<lancedb::index::In
                 b = b.ef_construction(ef);
             }
             Ok(Index::IvfHnswSq(b))
+        }
+        "ivf_hnsw_flat" | "hnsw_flat" => {
+            // IvfHnswFlat is the simplest HNSW variant: IVF coarse
+            // partitioning + HNSW per partition, without PQ or SQ
+            // quantization on the residuals. Tuning surface is IVF
+            // common + HNSW (m, ef_construction); there are no PQ
+            // num_sub_vectors / num_bits knobs.
+            let mut b = IvfHnswFlatIndexBuilder::default();
+            apply_ivf_common!(b, true);
+            if let Some(m) = u32_opt("m")? {
+                b = b.num_edges(m);
+            }
+            if let Some(ef) = u32_opt("ef_construction")? {
+                b = b.ef_construction(ef);
+            }
+            Ok(Index::IvfHnswFlat(b))
         }
         "btree" => Ok(Index::BTree(BTreeIndexBuilder {})),
         "bitmap" => Ok(Index::Bitmap(BitmapIndexBuilder {})),

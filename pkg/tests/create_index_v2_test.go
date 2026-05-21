@@ -148,6 +148,57 @@ func TestCreateIndexWithParams_HnswPq_TuningKnobs(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestCreateIndexWithParams_HnswFlat_TuningKnobs — IVF_HNSW_FLAT with m /
+// ef_construction set. HNSW_FLAT differs from HNSW_PQ / HNSW_SQ in that it
+// does not quantize residuals; the tuning surface is IVF common + HNSW
+// (m, ef_construction) and there are no num_sub_vectors / num_bits knobs.
+// This pins the contract that passing PQ-only params is silently ignored
+// rather than rejected.
+func TestCreateIndexWithParams_HnswFlat_TuningKnobs(t *testing.T) {
+	table, cleanup := setupIndexBuilderTable(t)
+	defer cleanup()
+
+	err := table.CreateIndexWithParams(
+		context.Background(),
+		[]string{"embedding"},
+		contracts.IndexTypeHnswFlat,
+		contracts.IndexParams{
+			NumPartitions:  u32Ptr(4),
+			M:              u32Ptr(8),
+			EfConstruction: u32Ptr(64),
+			DistanceType:   contracts.DistanceTypeL2,
+		},
+		&contracts.CreateIndexOptions{Name: "emb_hnsw_flat", WaitTimeout: 30 * time.Second},
+	)
+	require.NoError(t, err)
+
+	indexes, err := table.GetAllIndexes(context.Background())
+	require.NoError(t, err)
+	found := false
+	for _, ix := range indexes {
+		if ix.Name == "emb_hnsw_flat" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected an index named emb_hnsw_flat; got %v", indexes)
+}
+
+// TestCreateIndex_HnswFlat_LegacyDispatch — pins the legacy
+// CreateIndex / CreateIndexWithName path (simple_lancedb_table_create_index)
+// for hnsw_flat, distinct from the v2 builder above.
+func TestCreateIndex_HnswFlat_LegacyDispatch(t *testing.T) {
+	table, cleanup := setupIndexBuilderTable(t)
+	defer cleanup()
+
+	require.NoError(t,
+		table.CreateIndexWithName(context.Background(),
+			[]string{"embedding"}, contracts.IndexTypeHnswFlat, "emb_hnsw_flat_legacy"))
+	require.NoError(t,
+		table.WaitForIndex(context.Background(),
+			[]string{"emb_hnsw_flat_legacy"}, 30*time.Second))
+}
+
 // TestCreateIndexWithParams_FTS_FullTuning — FTS with with_position,
 // language, stem, remove_stop_words tuning. Index build must succeed and
 // the index must be discoverable via GetAllIndexes.
