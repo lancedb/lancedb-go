@@ -487,6 +487,61 @@ func (t *Table) PrewarmIndex(_ context.Context, name string) error {
 	return nil
 }
 
+// PrewarmData streams the named columns' on-disk pages into the data
+// cache. A nil columns slice means "prewarm all columns". Currently
+// only remote tables support data prewarming; local Native tables
+// return the backend's error verbatim ("prewarm_data is currently
+// only supported on remote tables.").
+func (t *Table) PrewarmData(_ context.Context, columns []string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.closed || t.handle == nil {
+		return fmt.Errorf("table is closed")
+	}
+
+	// Build a C array of *C.char from the Go slice. When columns is nil
+	// or empty, pass NULL + 0 so the Rust side maps it to Option::None
+	// (= "prewarm all columns"). Each cstring is freed individually.
+	var cArrPtr **C.char
+	cCount := C.size_t(len(columns))
+	if len(columns) > 0 {
+		// Register the cleanup defer BEFORE the allocation loop so an
+		// early return on a later empty name still frees the cstrings
+		// that were already allocated for earlier indices.
+		// C.free on a nil pointer is a POSIX-guaranteed no-op, so the
+		// pre-allocated nil entries are safe to iterate.
+		cArr := make([]*C.char, len(columns))
+		// #nosec G103 - Required for freeing C allocated cstrings
+		defer func() {
+			for _, p := range cArr {
+				if p != nil {
+					C.free(unsafe.Pointer(p))
+				}
+			}
+		}()
+		for i, name := range columns {
+			if name == "" {
+				return fmt.Errorf("column name at index %d is empty", i)
+			}
+			cArr[i] = C.CString(name)
+		}
+		cArrPtr = (**C.char)(unsafe.Pointer(&cArr[0]))
+	}
+
+	result := C.simple_lancedb_table_prewarm_data(t.handle, cArrPtr, cCount)
+	defer C.simple_lancedb_result_free(result)
+
+	if !result.SUCCESS {
+		if result.ERROR_MESSAGE != nil {
+			errorMsg := C.GoString(result.ERROR_MESSAGE)
+			return fmt.Errorf("failed to prewarm data: %s", errorMsg)
+		}
+		return fmt.Errorf("failed to prewarm data: unknown error")
+	}
+	return nil
+}
+
 // CreateIndex creates an index on the specified columns
 func (t *Table) CreateIndex(ctx context.Context, columns []string, indexType contracts.IndexType) error {
 	return t.CreateIndexWithName(ctx, columns, indexType, "")

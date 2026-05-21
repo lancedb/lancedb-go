@@ -200,6 +200,26 @@ struct SimpleResult *simple_lancedb_table_drop_index(void *table_handle, const c
 struct SimpleResult *simple_lancedb_table_prewarm_index(void *table_handle, const char *index_name);
 
 /**
+ * Prewarm full table data by streaming pages of the named columns into
+ * the data cache. `column_names` is a list of column names to warm;
+ * passing a null pointer (with `column_names_count == 0`) warms all
+ * columns. The call returns once the backend has accepted the request;
+ * pages are loaded up to the available cache capacity.
+ *
+ * Not all backends support prewarming data — at the time of v0.29,
+ * only remote tables do. Local Native tables surface a backend error
+ * ("prewarm_data is currently only supported on remote tables.")
+ * which is forwarded to the caller verbatim.
+ *
+ * Returns SimpleResult::ok() when prewarming was accepted, or
+ * SimpleResult::error() with a backend-supplied message on unsupported
+ * backend / unknown column / I/O failure / cancelled runtime.
+ */
+struct SimpleResult *simple_lancedb_table_prewarm_data(void *table_handle,
+                                                       const char *const *column_names,
+                                                       size_t column_names_count);
+
+/**
  * Wait for the named indices to finish building, with a timeout in
  * milliseconds. An empty `index_names` array defaults to all indices on
  * the table. A `timeout_ms` value of 0 means "wait essentially forever"

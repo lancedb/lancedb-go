@@ -376,6 +376,81 @@ pub extern "C" fn simple_lancedb_table_prewarm_index(
     }
 }
 
+/// Prewarm full table data by streaming pages of the named columns into
+/// the data cache. `column_names` is a list of column names to warm;
+/// passing a null pointer (with `column_names_count == 0`) warms all
+/// columns. The call returns once the backend has accepted the request;
+/// pages are loaded up to the available cache capacity.
+///
+/// Not all backends support prewarming data — at the time of v0.29,
+/// only remote tables do. Local Native tables surface a backend error
+/// ("prewarm_data is currently only supported on remote tables.")
+/// which is forwarded to the caller verbatim.
+///
+/// Returns SimpleResult::ok() when prewarming was accepted, or
+/// SimpleResult::error() with a backend-supplied message on unsupported
+/// backend / unknown column / I/O failure / cancelled runtime.
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn simple_lancedb_table_prewarm_data(
+    table_handle: *mut c_void,
+    column_names: *const *const c_char,
+    column_names_count: usize,
+) -> *mut SimpleResult {
+    let result = std::panic::catch_unwind(|| -> SimpleResult {
+        if table_handle.is_null() {
+            return SimpleResult::error("Invalid null table handle".to_string());
+        }
+        if column_names_count > 0 && column_names.is_null() {
+            return SimpleResult::error(
+                "Non-zero column_names_count requires a non-null array".to_string(),
+            );
+        }
+
+        // A null column_names pointer with zero count means "prewarm all
+        // columns" (Option::None). A non-null pointer with non-zero count
+        // means "prewarm only these columns" (Option::Some).
+        let columns: Option<Vec<String>> = if column_names.is_null() {
+            None
+        } else {
+            let mut names_owned: Vec<String> = Vec::with_capacity(column_names_count);
+            for i in 0..column_names_count {
+                // SAFETY: caller guarantees column_names points to at least
+                // column_names_count valid *const c_char entries.
+                let raw = unsafe { *column_names.add(i) };
+                if raw.is_null() {
+                    return SimpleResult::error(format!("column_names[{}] is a null pointer", i));
+                }
+                match from_c_str(raw) {
+                    Ok(s) => names_owned.push(s),
+                    Err(e) => {
+                        return SimpleResult::error(format!(
+                            "Invalid UTF-8 in column_names[{}]: {}",
+                            i, e
+                        ));
+                    }
+                }
+            }
+            Some(names_owned)
+        };
+
+        let table = unsafe { &*(table_handle as *const lancedb::Table) };
+        let rt = get_simple_runtime();
+
+        match rt.block_on(async { table.prewarm_data(columns).await }) {
+            Ok(()) => SimpleResult::ok(),
+            Err(e) => SimpleResult::error(format!("prewarm_data failed: {}", e)),
+        }
+    });
+
+    match result {
+        Ok(res) => Box::into_raw(Box::new(res)),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_prewarm_data".to_string(),
+        ))),
+    }
+}
+
 /// Wait for the named indices to finish building, with a timeout in
 /// milliseconds. An empty `index_names` array defaults to all indices on
 /// the table. A `timeout_ms` value of 0 means "wait essentially forever"

@@ -323,3 +323,27 @@ type ITablePrewarmIndex interface {
 	// prewarming — unsupported types surface as a backend error.
 	PrewarmIndex(ctx context.Context, name string) error
 }
+
+// ITablePrewarmData is an optional capability extension layered on top
+// of ITable. It warms full table data (not per-index pages) into the
+// data cache. Currently only remote tables implement this — local
+// Native tables surface a backend error verbatim ("prewarm_data is
+// currently only supported on remote tables.").
+//
+// Kept out of ITable for the same source-compat reasons as
+// ITablePrewarmIndex. Callers detect the capability with a type
+// assertion:
+//
+//	if p, ok := table.(contracts.ITablePrewarmData); ok {
+//	    err := p.PrewarmData(ctx, nil) // nil = prewarm all columns
+//	}
+//
+// The shipped *internal.Table implements this interface.
+type ITablePrewarmData interface {
+	// PrewarmData streams the named columns' on-disk pages into the
+	// data cache. A nil `columns` slice means "prewarm all columns".
+	// The call returns once the backend has accepted the request;
+	// pages are loaded up to the available cache. Backends that do not
+	// support data prewarming surface a backend error verbatim.
+	PrewarmData(ctx context.Context, columns []string) error
+}
