@@ -243,17 +243,17 @@ func TestSchemaEvolve(t *testing.T) {
 		}
 	})
 
-	t.Run("AlterColumnsNullableTighteningRejected", func(t *testing.T) {
-		// Tightening nullability (true -> false) on a column that is
-		// already nullable is rejected by lance even when no NULLs
-		// exist — a documented backend policy. The error must surface
-		// as a regular Go error, not a panic or silent success.
+	t.Run("AlterColumnsNullableTightening", func(t *testing.T) {
+		// lancedb v0.24 (lance v1) policy: tightening nullability (true -> false)
+		// was always rejected, even when no NULL values were present.
+		// lancedb v0.29 (lance v6) policy: permitted when the column has no NULL values.
+		// Tightening on empty (or NULL-free) seed data should now succeed.
 		_, se := seed(t, "se_alter_nullable_tighten")
 		nullable := false
 		_, err := se.AlterColumns(context.Background(),
 			[]contracts.ColumnAlteration{{Path: "score", Nullable: &nullable}})
-		if err == nil {
-			t.Error("expected backend to reject nullable=false on already-nullable column")
+		if err != nil {
+			t.Errorf("expected backend to accept nullable=false on column with no NULL values (lance v6), got: %v", err)
 		}
 	})
 

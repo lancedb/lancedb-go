@@ -333,9 +333,13 @@ pub extern "C" fn simple_lancedb_table_add_json(
             Ok(record_batch) => {
                 // Add the record batch to the table
                 match rt.block_on(async {
-                    use arrow_array::RecordBatchIterator;
+                    use arrow_array::{RecordBatchIterator, RecordBatchReader};
                     let batches = vec![Ok(record_batch.clone())];
-                    let batch_iter = RecordBatchIterator::new(batches, record_batch.schema());
+                    // Since v0.27.0, Table::add requires the Scannable trait.
+                    // RecordBatchIterator does not implement Scannable, so we box it
+                    // as a RecordBatchReader trait object which does.
+                    let batch_iter: Box<dyn RecordBatchReader + Send> =
+                        Box::new(RecordBatchIterator::new(batches, record_batch.schema()));
                     table.add(batch_iter).execute().await
                 }) {
                     Ok(_) => {
@@ -402,7 +406,7 @@ pub extern "C" fn simple_lancedb_table_add_ipc(
 
                 // Add the record batches to the table
                 match rt.block_on(async {
-                    use arrow_array::RecordBatchIterator;
+                    use arrow_array::{RecordBatchIterator, RecordBatchReader};
 
                     // Get schema from the first batch
                     let schema = record_batches[0].schema();
@@ -410,7 +414,10 @@ pub extern "C" fn simple_lancedb_table_add_ipc(
                     // Create iterator from record batches
                     let batches: Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>> =
                         record_batches.into_iter().map(Ok).collect();
-                    let batch_iter = RecordBatchIterator::new(batches, schema);
+                    // Since v0.27.0, Table::add requires the Scannable trait. Box the iterator
+                    // as a RecordBatchReader trait object which has a Scannable impl.
+                    let batch_iter: Box<dyn RecordBatchReader + Send> =
+                        Box::new(RecordBatchIterator::new(batches, schema));
 
                     table.add(batch_iter).execute().await
                 }) {

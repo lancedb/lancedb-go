@@ -8,7 +8,7 @@ repository = "https://github.com/lancedb/lancedb-go"
 keywords = ["lancedb", "lance", "database", "vector", "search"]
 categories = ["database-implementations"]
 authors = ["LanceDB Devs <dev@lancedb.com>"]
-rust-version = "1.78.0"
+rust-version = "1.91.0"
 publish = false
 
 [lib]
@@ -17,18 +17,19 @@ crate-type = ["staticlib"]
 path = "src/lib_simple.rs"
 
 [dependencies]
-lancedb = { git = "https://github.com/lancedb/lancedb.git", tag = "v0.24.0", default-features = false }
+lancedb = { git = "https://github.com/lancedb/lancedb.git", tag = "v0.29.0", default-features = false }
 tokio = { version = "1.40", features = ["rt-multi-thread", "macros"] }
 libc = "0.2"
 log = "0.4"
 env_logger = "0.11"
-arrow = { version = "56.2", optional = false }
-arrow-array = "56.2"
-arrow-data = "56.2"
-arrow-schema = "56.2"
-arrow-ord = "56.2"
-arrow-cast = "56.2"
-arrow-ipc = "56.2"
+arrow = { version = "58.0", optional = false }
+arrow-array = "58.0"
+arrow-data = "58.0"
+arrow-schema = "58.0"
+arrow-ord = "58.0"
+arrow-cast = "58.0"
+arrow-ipc = "58.0"
+arrow-select = "58.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio-stream = "0.1"

@@ -42,12 +42,17 @@ pub extern "C" fn simple_lancedb_create_table(
             Ok(schema_json_value) => match create_arrow_schema_from_json(&schema_json_value) {
                 Ok(arrow_schema) => {
                     match rt.block_on(async {
-                        use arrow_array::RecordBatchIterator;
-                        let empty_batches = RecordBatchIterator::new(
-                            vec![]
-                                as Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>>,
-                            Arc::new(arrow_schema),
-                        );
+                        use arrow_array::{RecordBatchIterator, RecordBatchReader};
+                        // Since v0.27.0, Connection::create_table requires the Scannable trait.
+                        // Box the empty iterator as a RecordBatchReader trait object which has a Scannable impl.
+                        let empty_batches: Box<dyn RecordBatchReader + Send> =
+                            Box::new(RecordBatchIterator::new(
+                                vec![]
+                                    as Vec<
+                                        Result<arrow_array::RecordBatch, arrow_schema::ArrowError>,
+                                    >,
+                                Arc::new(arrow_schema),
+                            ));
                         conn.create_table(&name, empty_batches).execute().await
                     }) {
                         Ok(_) => SimpleResult::ok(),
@@ -103,11 +108,14 @@ pub extern "C" fn simple_lancedb_create_table_with_ipc(
         };
 
         match rt.block_on(async {
-            use arrow_array::RecordBatchIterator;
-            let empty_batches = RecordBatchIterator::new(
-                vec![] as Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>>,
-                arrow_schema, // arrow_schema is already Arc<Schema>
-            );
+            use arrow_array::{RecordBatchIterator, RecordBatchReader};
+            // Since v0.27.0, Connection::create_table requires the Scannable trait.
+            // Box the empty iterator as a RecordBatchReader trait object which has a Scannable impl.
+            let empty_batches: Box<dyn RecordBatchReader + Send> =
+                Box::new(RecordBatchIterator::new(
+                    vec![] as Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>>,
+                    arrow_schema, // arrow_schema is already Arc<Schema>
+                ));
             conn.create_table(&name, empty_batches).execute().await
         }) {
             Ok(_) => SimpleResult::ok(),
