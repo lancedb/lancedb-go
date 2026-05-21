@@ -134,17 +134,59 @@ func (t *Table) Schema(_ context.Context) (*arrow.Schema, error) {
 	return schema, nil
 }
 
+// addIPCWithRawOptions is the package-private FFI escape hatch used by
+// internal unit tests to exercise option-validation shapes the typed
+// *contracts.AddDataOptions surface cannot construct (e.g. invalid
+// types like {"write_parallelism": "4"}). Not part of the public API.
+func (t *Table) addIPCWithRawOptions(ipc []byte, optsJSON string) error {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.closed || t.handle == nil {
+		return fmt.Errorf("table is closed")
+	}
+	if len(ipc) == 0 {
+		return fmt.Errorf("ipc buffer must be non-empty")
+	}
+
+	cOpts := C.CString(optsJSON)
+	// #nosec G103 - Required for freeing C allocated string memory
+	defer C.free(unsafe.Pointer(cOpts))
+
+	var added C.int64_t
+	result := C.simple_lancedb_table_add_ipc_with_options(
+		t.handle,
+		// #nosec G103 - Safe conversion of Go slice to C array pointer for FFI
+		(*C.uchar)(unsafe.Pointer(&ipc[0])),
+		C.size_t(uintptr(len(ipc))),
+		&added,
+		cOpts,
+	)
+	defer C.simple_lancedb_result_free(result)
+
+	if !result.SUCCESS {
+		if result.ERROR_MESSAGE != nil {
+			return fmt.Errorf("%s", C.GoString(result.ERROR_MESSAGE))
+		}
+		return fmt.Errorf("unknown FFI error")
+	}
+	return nil
+}
+
 // Add inserts data into the Table
-func (t *Table) Add(ctx context.Context, record arrow.Record, _ *contracts.AddDataOptions) error {
+func (t *Table) Add(ctx context.Context, record arrow.Record, options *contracts.AddDataOptions) error {
 	var r []arrow.Record
 	if record != nil {
 		r = append(r, record)
 	}
-	return t.AddRecords(ctx, r, nil)
+	return t.AddRecords(ctx, r, options)
 }
 
-// AddRecords efficiently adds multiple records using Arrow IPC batch processing
-func (t *Table) AddRecords(_ context.Context, records []arrow.Record, _ *contracts.AddDataOptions) error {
+// AddRecords efficiently adds multiple records using Arrow IPC batch processing.
+// When options carries WriteParallelism, the call routes through the
+// options-aware FFI entry point so the value reaches
+// lancedb::table::add_data::AddDataBuilder::write_parallelism().
+func (t *Table) AddRecords(_ context.Context, records []arrow.Record, options *contracts.AddDataOptions) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -164,15 +206,41 @@ func (t *Table) AddRecords(_ context.Context, records []arrow.Record, _ *contrac
 		return fmt.Errorf("no IPC data generated")
 	}
 
-	// Call the Rust function with IPC binary data
+	// Build the options JSON only when the caller actually set a knob
+	// that needs to cross the FFI. nil / zero options skip the JSON
+	// allocation entirely and use the legacy FFI entry point.
+	var optionsJSON string
+	if options != nil && options.WriteParallelism != nil {
+		if *options.WriteParallelism == 0 {
+			return fmt.Errorf("WriteParallelism must be >= 1 (use nil for the lancedb default)")
+		}
+		optionsJSON = fmt.Sprintf(`{"write_parallelism":%d}`, *options.WriteParallelism)
+	}
+
+	// Call the Rust function with IPC binary data.
 	var addedCount C.int64_t
-	result := C.simple_lancedb_table_add_ipc(
-		t.handle,
-		// #nosec G103 - Safe conversion of Go slice to C array pointer for FFI
-		(*C.uchar)(unsafe.Pointer(&ipcBytes[0])),
-		C.size_t(uintptr(len(ipcBytes))),
-		&addedCount,
-	)
+	var result *C.SimpleResult
+	if optionsJSON != "" {
+		cOpts := C.CString(optionsJSON)
+		// #nosec G103 - Required for freeing C allocated string memory
+		defer C.free(unsafe.Pointer(cOpts))
+		result = C.simple_lancedb_table_add_ipc_with_options(
+			t.handle,
+			// #nosec G103 - Safe conversion of Go slice to C array pointer for FFI
+			(*C.uchar)(unsafe.Pointer(&ipcBytes[0])),
+			C.size_t(uintptr(len(ipcBytes))),
+			&addedCount,
+			cOpts,
+		)
+	} else {
+		result = C.simple_lancedb_table_add_ipc(
+			t.handle,
+			// #nosec G103 - Safe conversion of Go slice to C array pointer for FFI
+			(*C.uchar)(unsafe.Pointer(&ipcBytes[0])),
+			C.size_t(uintptr(len(ipcBytes))),
+			&addedCount,
+		)
+	}
 	defer C.simple_lancedb_result_free(result)
 
 	if !result.SUCCESS {

@@ -41,6 +41,28 @@ func NewConnection(handle unsafe.Pointer, closed bool) *Connection {
 	}
 }
 
+// Connect is the package-private connection helper used by internal
+// unit tests that need an FFI-backed Connection without taking the
+// dependency on pkg/lancedb (which would be a circular import).
+// The public Connect lives in pkg/lancedb.
+func Connect(_ context.Context, uri string) (*Connection, error) {
+	cURI := C.CString(uri)
+	// #nosec G103 - Required for freeing C allocated string memory
+	defer C.free(unsafe.Pointer(cURI))
+
+	var handle unsafe.Pointer
+	result := C.simple_lancedb_connect(cURI, &handle)
+	defer C.simple_lancedb_result_free(result)
+
+	if !result.SUCCESS {
+		if result.ERROR_MESSAGE != nil {
+			return nil, fmt.Errorf("connect failed: %s", C.GoString(result.ERROR_MESSAGE))
+		}
+		return nil, fmt.Errorf("connect failed: unknown error")
+	}
+	return NewConnection(handle, false), nil
+}
+
 var _ contracts.IConnection = (*Connection)(nil)
 
 // Close closes the connection to the database

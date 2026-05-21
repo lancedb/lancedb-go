@@ -159,6 +159,17 @@ type ITableUpdateExpr interface {
 // AddDataOptions configures how data is added to a Table
 type AddDataOptions struct {
 	Mode WriteMode
+
+	// WriteParallelism caps the number of parallel writers used by the
+	// AddDataBuilder. lancedb v0.27+ runs writes in parallel by default
+	// (auto-detected from CPU count), which is usually what you want.
+	// Set this to override:
+	//   - nil  → leave the lancedb default (parallel writers, auto-tuned)
+	//   - *1   → disable parallelism (single writer, useful for
+	//            reproducible / debug runs)
+	//   - *N>1 → use exactly N writers
+	// Maps to lancedb::table::add_data::AddDataBuilder::write_parallelism().
+	WriteParallelism *uint
 }
 
 // WriteMode specifies how data should be written to a Table

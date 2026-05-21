@@ -101,13 +101,30 @@ struct SimpleResult *simple_lancedb_table_add_json(void *table_handle,
                                                    int64_t *added_count);
 
 /**
- * Add data to a table using Arrow IPC format (more efficient than JSON)
- * Accepts batch of records as Arrow IPC binary data
+ * Add data to a table using Arrow IPC format (more efficient than JSON).
+ * Accepts a batch of records as Arrow IPC binary data. Uses lancedb's
+ * default write parallelism (auto-detected). For an explicit
+ * parallelism override see [`simple_lancedb_table_add_ipc_with_options`].
  */
 struct SimpleResult *simple_lancedb_table_add_ipc(void *table_handle,
                                                   const uint8_t *ipc_data,
                                                   size_t ipc_len,
                                                   int64_t *added_count);
+
+/**
+ * Same as `simple_lancedb_table_add_ipc` but accepts an
+ * `options_json` JSON object string carrying optional knobs:
+ *   {"write_parallelism": <usize>}
+ *
+ * `options_json` may be NULL (treated as no options). Unknown keys
+ * are silently ignored so adding future knobs stays additive.
+ * `write_parallelism` of 0 is rejected (matches lance's own guard).
+ */
+struct SimpleResult *simple_lancedb_table_add_ipc_with_options(void *table_handle,
+                                                               const uint8_t *ipc_data,
+                                                               size_t ipc_len,
+                                                               int64_t *added_count,
+                                                               const char *options_json);
 
 /**
  * Upsert data into a table using Arrow IPC format and a merge-insert config JSON.

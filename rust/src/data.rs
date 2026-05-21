@@ -363,8 +363,87 @@ pub extern "C" fn simple_lancedb_table_add_json(
     }
 }
 
-/// Add data to a table using Arrow IPC format (more efficient than JSON)
-/// Accepts batch of records as Arrow IPC binary data
+/// Internal: perform the IPC-backed add, optionally with a
+/// `write_parallelism` override pulled from the AddDataBuilder. Shared
+/// by the legacy `simple_lancedb_table_add_ipc` entry point (which
+/// passes None) and the options-aware
+/// `simple_lancedb_table_add_ipc_with_options` (which forwards the
+/// caller's value).
+fn add_ipc_impl(
+    table_handle: *mut c_void,
+    ipc_data: *const u8,
+    ipc_len: usize,
+    added_count: *mut i64,
+    write_parallelism: Option<usize>,
+) -> SimpleResult {
+    if table_handle.is_null() || ipc_data.is_null() || added_count.is_null() {
+        return SimpleResult::error("Invalid null arguments".to_string());
+    }
+
+    if ipc_len == 0 {
+        unsafe {
+            *added_count = 0;
+        }
+        return SimpleResult::ok();
+    }
+
+    let table = unsafe { &*(table_handle as *const lancedb::Table) };
+    let rt = get_simple_runtime();
+
+    // Convert raw pointer to slice
+    let ipc_bytes = unsafe { std::slice::from_raw_parts(ipc_data, ipc_len) };
+
+    // Deserialize Arrow IPC data to RecordBatch(es)
+    match ipc_to_record_batches(ipc_bytes) {
+        Ok(record_batches) => {
+            if record_batches.is_empty() {
+                unsafe {
+                    *added_count = 0;
+                }
+                return SimpleResult::ok();
+            }
+
+            // Calculate total rows across all batches
+            let total_rows: usize = record_batches.iter().map(|batch| batch.num_rows()).sum();
+
+            // Add the record batches to the table
+            match rt.block_on(async {
+                use arrow_array::{RecordBatchIterator, RecordBatchReader};
+
+                // Get schema from the first batch
+                let schema = record_batches[0].schema();
+
+                // Create iterator from record batches
+                let batches: Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>> =
+                    record_batches.into_iter().map(Ok).collect();
+                // Since v0.27.0, Table::add requires the Scannable trait. Box the iterator
+                // as a RecordBatchReader trait object which has a Scannable impl.
+                let batch_iter: Box<dyn RecordBatchReader + Send> =
+                    Box::new(RecordBatchIterator::new(batches, schema));
+
+                let mut builder = table.add(batch_iter);
+                if let Some(p) = write_parallelism {
+                    builder = builder.write_parallelism(p);
+                }
+                builder.execute().await
+            }) {
+                Ok(_) => {
+                    unsafe {
+                        *added_count = total_rows as i64;
+                    }
+                    SimpleResult::ok()
+                }
+                Err(e) => SimpleResult::error(format!("Failed to add data to table: {}", e)),
+            }
+        }
+        Err(e) => SimpleResult::error(format!("Failed to parse IPC data: {}", e)),
+    }
+}
+
+/// Add data to a table using Arrow IPC format (more efficient than JSON).
+/// Accepts a batch of records as Arrow IPC binary data. Uses lancedb's
+/// default write parallelism (auto-detected). For an explicit
+/// parallelism override see [`simple_lancedb_table_add_ipc_with_options`].
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn simple_lancedb_table_add_ipc(
@@ -374,70 +453,120 @@ pub extern "C" fn simple_lancedb_table_add_ipc(
     added_count: *mut i64,
 ) -> *mut SimpleResult {
     let result = std::panic::catch_unwind(|| -> SimpleResult {
-        if table_handle.is_null() || ipc_data.is_null() || added_count.is_null() {
-            return SimpleResult::error("Invalid null arguments".to_string());
-        }
-
-        if ipc_len == 0 {
-            unsafe {
-                *added_count = 0;
-            }
-            return SimpleResult::ok();
-        }
-
-        let table = unsafe { &*(table_handle as *const lancedb::Table) };
-        let rt = get_simple_runtime();
-
-        // Convert raw pointer to slice
-        let ipc_bytes = unsafe { std::slice::from_raw_parts(ipc_data, ipc_len) };
-
-        // Deserialize Arrow IPC data to RecordBatch(es)
-        match ipc_to_record_batches(ipc_bytes) {
-            Ok(record_batches) => {
-                if record_batches.is_empty() {
-                    unsafe {
-                        *added_count = 0;
-                    }
-                    return SimpleResult::ok();
-                }
-
-                // Calculate total rows across all batches
-                let total_rows: usize = record_batches.iter().map(|batch| batch.num_rows()).sum();
-
-                // Add the record batches to the table
-                match rt.block_on(async {
-                    use arrow_array::{RecordBatchIterator, RecordBatchReader};
-
-                    // Get schema from the first batch
-                    let schema = record_batches[0].schema();
-
-                    // Create iterator from record batches
-                    let batches: Vec<Result<arrow_array::RecordBatch, arrow_schema::ArrowError>> =
-                        record_batches.into_iter().map(Ok).collect();
-                    // Since v0.27.0, Table::add requires the Scannable trait. Box the iterator
-                    // as a RecordBatchReader trait object which has a Scannable impl.
-                    let batch_iter: Box<dyn RecordBatchReader + Send> =
-                        Box::new(RecordBatchIterator::new(batches, schema));
-
-                    table.add(batch_iter).execute().await
-                }) {
-                    Ok(_) => {
-                        unsafe {
-                            *added_count = total_rows as i64;
-                        }
-                        SimpleResult::ok()
-                    }
-                    Err(e) => SimpleResult::error(format!("Failed to add data to table: {}", e)),
-                }
-            }
-            Err(e) => SimpleResult::error(format!("Failed to parse IPC data: {}", e)),
-        }
+        add_ipc_impl(table_handle, ipc_data, ipc_len, added_count, None)
     });
 
     match result {
         Ok(res) => Box::into_raw(Box::new(res)),
         Err(_) => Box::into_raw(Box::new(SimpleResult::error(
             "Panic in simple_lancedb_table_add_ipc".to_string(),
+        ))),
+    }
+}
+
+/// Same as `simple_lancedb_table_add_ipc` but accepts an
+/// `options_json` JSON object string carrying optional knobs:
+///   {"write_parallelism": <usize>}
+///
+/// `options_json` may be NULL (treated as no options). Unknown keys
+/// are silently ignored so adding future knobs stays additive.
+/// `write_parallelism` of 0 is rejected (matches lance's own guard).
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn simple_lancedb_table_add_ipc_with_options(
+    table_handle: *mut c_void,
+    ipc_data: *const u8,
+    ipc_len: usize,
+    added_count: *mut i64,
+    options_json: *const c_char,
+) -> *mut SimpleResult {
+    let result = std::panic::catch_unwind(|| -> SimpleResult {
+        let write_parallelism = if options_json.is_null() {
+            None
+        } else {
+            let json_str = match from_c_str(options_json) {
+                Ok(s) => s,
+                Err(e) => return SimpleResult::error(format!("Invalid options JSON: {}", e)),
+            };
+            // Empty string is treated like a null pointer — no options.
+            if json_str.is_empty() {
+                None
+            } else {
+                let parsed: serde_json::Value = match serde_json::from_str(&json_str) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return SimpleResult::error(format!("Failed to parse options JSON: {}", e));
+                    }
+                };
+                // The documented contract is "options_json is a JSON
+                // object" — anything else (arrays, scalars, strings,
+                // bools) would silently fall through to "no options"
+                // because serde_json::Value::get returns None on
+                // non-objects, hiding caller serialization bugs.
+                if !parsed.is_object() {
+                    return SimpleResult::error(format!(
+                        "options JSON must be an object, got {}",
+                        match &parsed {
+                            serde_json::Value::Null => "null".to_string(),
+                            serde_json::Value::Bool(_) => "boolean".to_string(),
+                            serde_json::Value::Number(_) => "number".to_string(),
+                            serde_json::Value::String(_) => "string".to_string(),
+                            serde_json::Value::Array(_) => "array".to_string(),
+                            serde_json::Value::Object(_) => unreachable!(),
+                        }
+                    ));
+                }
+                // Distinguish "key not present / null" from "key present
+                // but invalid type or value". Silent fallback would hide
+                // caller misconfiguration (e.g. "4", -1, 1.5 → silently
+                // default parallelism) and break the contract that an
+                // explicit override either applies or fails fast.
+                match parsed.get("write_parallelism") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(v) => match v.as_u64() {
+                        Some(0) => {
+                            return SimpleResult::error(
+                                "write_parallelism must be >= 1 (use omit / null for the lancedb default)"
+                                    .to_string(),
+                            );
+                        }
+                        Some(n) => match usize::try_from(n) {
+                            Ok(p) => Some(p),
+                            Err(_) => {
+                                return SimpleResult::error(format!(
+                                    "write_parallelism value {} does not fit in usize",
+                                    n
+                                ));
+                            }
+                        },
+                        None => {
+                            // v.as_u64() returns None for strings ("4"),
+                            // negative numbers (-1), and non-integer
+                            // floats (1.5). Surface the actual JSON
+                            // value so the caller can fix their input.
+                            return SimpleResult::error(format!(
+                                "write_parallelism must be a non-negative integer; got {}",
+                                v
+                            ));
+                        }
+                    },
+                }
+            }
+        };
+
+        add_ipc_impl(
+            table_handle,
+            ipc_data,
+            ipc_len,
+            added_count,
+            write_parallelism,
+        )
+    });
+
+    match result {
+        Ok(res) => Box::into_raw(Box::new(res)),
+        Err(_) => Box::into_raw(Box::new(SimpleResult::error(
+            "Panic in simple_lancedb_table_add_ipc_with_options".to_string(),
         ))),
     }
 }
