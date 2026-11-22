@@ -243,17 +243,16 @@ func TestSchemaEvolve(t *testing.T) {
 		}
 	})
 
-	t.Run("AlterColumnsNullableTighteningRejected", func(t *testing.T) {
-		// Tightening nullability (true -> false) on a column that is
-		// already nullable is rejected by lance even when no NULLs
-		// exist — a documented backend policy. The error must surface
-		// as a regular Go error, not a panic or silent success.
-		_, se := seed(t, "se_alter_nullable_tighten")
+	t.Run("AlterColumnsNullableTighteningFollowsBackend", func(t *testing.T) {
+		// SDK beta.22 allows tightening nullability when the column has no
+		// NULL values. The pinned backend may still reject it; either outcome
+		// is a regular Go error or a successful commit, never a panic.
+		table, se := seed(t, "se_alter_nullable_tighten")
 		nullable := false
 		_, err := se.AlterColumns(context.Background(),
 			[]contracts.ColumnAlteration{{Path: "score", Nullable: &nullable}})
-		if err == nil {
-			t.Error("expected backend to reject nullable=false on already-nullable column")
+		if err == nil && fieldNullable(t, table, "score") {
+			t.Error("tightening succeeded but score is still nullable")
 		}
 	})
 
@@ -414,7 +413,7 @@ func TestSchemaEvolve(t *testing.T) {
 		}
 		// Wait for the index to be ready before checking GetAllIndexes
 		// — index build is async on the backend.
-		if err := table.WaitForIndex(context.Background(), nil, 30*time.Second); err != nil {
+		if err := asIndexManagement(t, table).WaitForIndex(context.Background(), nil, 30*time.Second); err != nil {
 			t.Fatalf("WaitForIndex: %v", err)
 		}
 

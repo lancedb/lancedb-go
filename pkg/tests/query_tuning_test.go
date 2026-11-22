@@ -162,7 +162,7 @@ func TestQuery_WithRowID_Standard(t *testing.T) {
 	table, cleanup := setupQueryTestTable(t)
 	defer cleanup()
 
-	record, err := table.Query().WithRowID().Limit(3).Execute(context.Background())
+	record, err := table.QueryV2().WithRowID().Limit(3).Execute(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, record)
 	defer record.Release()
@@ -187,7 +187,7 @@ func TestQuery_WithRowID_JSONPath_ReturnsNumericRowID(t *testing.T) {
 	table, cleanup := setupQueryTestTable(t)
 	defer cleanup()
 
-	rows, err := table.Select(context.Background(), contracts.QueryConfig{
+	rows, err := table.SelectV2(context.Background(), contracts.QueryConfigV2{
 		WithRowID: true,
 		Limit:     func() *int { n := 3; return &n }(),
 	})
@@ -211,7 +211,7 @@ func TestQuery_FastSearchAndPostfilter_Standard(t *testing.T) {
 	table, cleanup := setupQueryTestTable(t)
 	defer cleanup()
 
-	rec, err := table.Query().
+	rec, err := table.QueryV2().
 		Filter("score > 85").
 		Postfilter().
 		FastSearch().

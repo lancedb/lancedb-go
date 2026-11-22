@@ -1,74 +1,65 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Copyright The LanceDB Authors
+
 package lancedb
-
-//go:generate go run ../../cmd/download-binaries
-
-/*
-#cgo CFLAGS: -I${SRCDIR}/../../include
-#include "lancedb.h"
-*/
-import "C"
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"runtime"
-	"sync"
-	"unsafe"
 
 	"github.com/lancedb/lancedb-go/pkg/contracts"
 	"github.com/lancedb/lancedb-go/pkg/internal"
+	"github.com/lancedb/lancedb-go/pkg/internal/native"
 )
 
-var initOnce sync.Once
+// Connect establishes a connection to a LanceDB database with the published
+// v0.1.2 options. Region and ReadConsistencyInterval remain ignored, as they
+// were in v0.1.2. Structured S3 settings are applied to this connection rather
+// than mutating process environment variables.
+func Connect(ctx context.Context, uri string, options *contracts.ConnectionOptions) (contracts.IConnection, error) {
+	return internal.Connect(ctx, uri, options)
+}
 
-// Connect establishes a connection to a LanceDB database with context
-//
-//nolint:gocritic
-func Connect(_ context.Context, uri string, options *contracts.ConnectionOptions) (contracts.IConnection, error) {
-	// Initialize the library (idempotent, but avoid redundant FFI calls)
-	initOnce.Do(func() { C.simple_lancedb_init() })
+// ConnectWithStorageOptions opens a connection with a flat storage-option map.
+// This is the additive path for options the v0.1.2 structs cannot express. Use
+// contracts.Storage* constants for well-known keys, including aws_profile,
+// aws_region and dynamodb_endpoint.
+func ConnectWithStorageOptions(ctx context.Context, uri string, storageOptions map[string]string) (contracts.IConnection, error) {
+	return internal.ConnectWithStorageOptions(ctx, uri, storageOptions)
+}
 
-	cURI := C.CString(uri)
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cURI))
-
-	// #nosec G103 - FFI handle for C interop with Rust library
-	var handle unsafe.Pointer
-	var result *C.SimpleResult
-
-	// Use storage options if provided
-	if options != nil && len(options.StorageOptions) > 0 {
-		// Serialize storage options to JSON
-		optionsJSON, err := json.Marshal(options.StorageOptions)
-		if err != nil {
-			return nil, fmt.Errorf("failed to serialize storage options: %w", err)
-		}
-
-		cOptions := C.CString(string(optionsJSON))
-		// #nosec G103 - Required for freeing C allocated string memory
-		defer C.free(unsafe.Pointer(cOptions))
-
-		result = C.simple_lancedb_connect_with_options(cURI, cOptions, &handle)
-	} else {
-		// Use basic connection without storage options
-		result = C.simple_lancedb_connect(cURI, &handle)
+// RuntimeVersion reads the version reported by the loaded lancedb-c library.
+// The binding requires this to equal the preview it was built against.
+func RuntimeVersion() (string, error) {
+	api, err := native.Load()
+	if err != nil {
+		return "", err
 	}
+	return api.Version(), nil
+}
 
-	defer C.simple_lancedb_result_free(result)
+// NativeLibrary describes the loaded native library. It is useful for
+// diagnostics and for verifying explicit override or cache discovery.
+type NativeLibrary struct {
+	Path    string
+	Source  string
+	Version string
+}
 
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return nil, fmt.Errorf("failed to connect to LanceDB at %s: %s", uri, errorMsg)
-		}
-		return nil, fmt.Errorf("failed to connect to LanceDB at %s: unknown error", uri)
+// LoadedNativeLibrary returns the current native-library state without loading
+// a new library.
+func LoadedNativeLibrary() NativeLibrary {
+	state := native.Observe()
+	return NativeLibrary{
+		Path:    state.Path,
+		Source:  string(state.Source),
+		Version: state.Version,
 	}
+}
 
-	conn := internal.NewConnection(handle, false)
-
-	// Set finalizer to ensure cleanup
-	runtime.SetFinalizer(conn, contracts.IConnection.Close)
-
-	return conn, nil
+// InstallNativeLibrary downloads, verifies and extracts the pinned lancedb-c
+// artifact for the running target into the private cache. It returns the
+// runtime library path. It is useful for pre-seeding an offline environment or
+// a CI cache; Load performs the same installation lazily.
+func InstallNativeLibrary() (string, error) {
+	return native.Install()
 }

@@ -8,15 +8,6 @@ out/
 *.iws
 
 # -----------------------
-# Rust
-# -----------------------
-/rust/target/
-**/*.rs.bk
-
-# Cargo lock for libraries (optional, keep for apps)
-# Cargo.lock
-
-# -----------------------
 # Go
 # -----------------------
 /bin/
@@ -52,12 +43,5 @@ Thumbs.db
 tmp/
 
 # -----------------------
-# LanceDB Binary Distribution
+# Native artifacts are downloaded into the user cache, not the repository.
 # -----------------------
-# These files are auto-downloaded during build process
-# and should not be committed to Git repository
-/lib/
-/examples/lib
-
-# Release archive (generated during release process)
-lancedb-go-native-binaries.tar.gz

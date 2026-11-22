@@ -31,6 +31,8 @@ const embeddingDim = 64
 func u32(v uint32) *uint32 { return &v }
 func bptr(v bool) *bool    { return &v }
 
+func distanceType(value contracts.DistanceType) *contracts.DistanceType { return &value }
+
 func main() {
 	fmt.Println("🚀 LanceDB Go SDK - Index Builder Example")
 	fmt.Println("==========================================")
@@ -84,7 +86,7 @@ func main() {
 	}
 
 	fmt.Println("\n▶ IVF_PQ with custom tuning and a named index")
-	if err := table.CreateIndexWithParams(
+	if err := table.(contracts.ITableIndexManagement).CreateIndexWithParams(
 		ctx,
 		[]string{"embedding"},
 		contracts.IndexTypeIvfPq,
@@ -92,7 +94,7 @@ func main() {
 			NumPartitions: u32(8),
 			NumSubVectors: u32(4),
 			NumBits:       u32(8),
-			DistanceType:  contracts.DistanceTypeCosine,
+			DistanceType:  distanceType(contracts.DistanceTypeCosine),
 		},
 		&contracts.CreateIndexOptions{Name: "emb_ivfpq", WaitTimeout: 30 * time.Second},
 	); err != nil {
@@ -101,7 +103,7 @@ func main() {
 	fmt.Println("  ✓ created emb_ivfpq")
 
 	fmt.Println("\n▶ IVF_HNSW_PQ with m and ef_construction (separate name)")
-	if err := table.CreateIndexWithParams(
+	if err := table.(contracts.ITableIndexManagement).CreateIndexWithParams(
 		ctx,
 		[]string{"embedding"},
 		contracts.IndexTypeHnswPq,
@@ -110,7 +112,7 @@ func main() {
 			M:              u32(8),
 			EfConstruction: u32(64),
 			NumSubVectors:  u32(4),
-			DistanceType:   contracts.DistanceTypeL2,
+			DistanceType:   distanceType(contracts.DistanceTypeL2),
 		},
 		&contracts.CreateIndexOptions{Name: "emb_hnswpq", WaitTimeout: 30 * time.Second},
 	); err != nil {
@@ -119,7 +121,7 @@ func main() {
 	fmt.Println("  ✓ created emb_hnswpq")
 
 	fmt.Println("\n▶ FTS with tokenizer options")
-	if err := table.CreateIndexWithParams(
+	if err := table.(contracts.ITableIndexManagement).CreateIndexWithParams(
 		ctx,
 		[]string{"body"},
 		contracts.IndexTypeFts,

@@ -102,7 +102,7 @@ func TestCreateIndexWithParams_IvfPq_FullTuning(t *testing.T) {
 			NumPartitions: u32Ptr(8),
 			NumSubVectors: u32Ptr(4),
 			NumBits:       u32Ptr(8),
-			DistanceType:  contracts.DistanceTypeCosine,
+			DistanceType:  distanceTypePtr(contracts.DistanceTypeCosine),
 		},
 		&contracts.CreateIndexOptions{
 			Name:        "emb_ivfpq",
@@ -141,7 +141,7 @@ func TestCreateIndexWithParams_HnswPq_TuningKnobs(t *testing.T) {
 			M:              u32Ptr(8),
 			EfConstruction: u32Ptr(64),
 			NumSubVectors:  u32Ptr(4),
-			DistanceType:   contracts.DistanceTypeL2,
+			DistanceType:   distanceTypePtr(contracts.DistanceTypeL2),
 		},
 		&contracts.CreateIndexOptions{WaitTimeout: 30 * time.Second},
 	)
@@ -253,7 +253,7 @@ func TestCreateIndexWithParams_InvalidDistanceType_ReturnsError(t *testing.T) {
 		contracts.IndexParams{
 			NumPartitions: u32Ptr(4),
 			NumSubVectors: u32Ptr(4),
-			DistanceType:  contracts.DistanceType(99),
+			DistanceType:  distanceTypePtr(contracts.DistanceType(99)),
 		},
 		nil,
 	)

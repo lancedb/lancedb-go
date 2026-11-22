@@ -69,7 +69,7 @@ func TestQuery_Rerank_RRF_Standard(t *testing.T) {
 	table, cleanup := setupQueryTestTable(t)
 	defer cleanup()
 
-	rec, err := table.Query().
+	rec, err := table.QueryV2().
 		Rerank(contracts.RerankerConfig{Kind: contracts.RerankerRRF, RRFK: 60}).
 		Limit(5).
 		Execute(context.Background())
@@ -89,7 +89,7 @@ func TestSelect_RerankerNone_DirectQueryConfig(t *testing.T) {
 	defer cleanup()
 
 	limit := 3
-	rows, err := table.Select(context.Background(), contracts.QueryConfig{
+	rows, err := table.SelectV2(context.Background(), contracts.QueryConfigV2{
 		Limit:    &limit,
 		Reranker: &contracts.RerankerConfig{Kind: contracts.RerankerNone},
 	})

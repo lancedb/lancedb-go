@@ -21,6 +21,7 @@ import (
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/memory"
 
+	"github.com/lancedb/lancedb-go/pkg/contracts"
 	"github.com/lancedb/lancedb-go/pkg/lancedb"
 )
 
@@ -81,7 +82,7 @@ func main() {
 		[]float64{222, 333, 444})
 	defer upsert.Release()
 
-	res, err := table.
+	res, err := table.(contracts.ITableMergeInsert).
 		MergeInsert([]string{"id"}).
 		WhenMatchedUpdateAll(nil).
 		WhenNotMatchedInsertAll().
@@ -104,7 +105,7 @@ func main() {
 	defer candidate.Release()
 
 	cond := "target.score < source.score"
-	res, err = table.
+	res, err = table.(contracts.ITableMergeInsert).
 		MergeInsert([]string{"id"}).
 		WhenMatchedUpdateAll(&cond).
 		Execute(ctx, []arrow.Record{candidate})

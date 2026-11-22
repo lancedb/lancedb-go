@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Copyright The LanceDB Authors
+
 package lancedb
 
 import (
@@ -7,11 +10,12 @@ import (
 	"github.com/lancedb/lancedb-go/pkg/internal"
 )
 
-// NewSchema creates a new schema from Arrow schema
+// NewSchema creates a new schema from an Arrow schema.
 func NewSchema(schema *arrow.Schema) (contracts.ISchema, error) {
 	return internal.NewSchema(schema)
 }
 
+// NewSchemaBuilder returns a new schema builder.
 func NewSchemaBuilder() contracts.ISchemaBuilder {
 	return internal.NewSchemaBuilder()
 }

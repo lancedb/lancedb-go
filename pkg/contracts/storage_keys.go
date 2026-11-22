@@ -150,3 +150,32 @@ const (
 	// StorageProxyURL sets a proxy URL for all requests.
 	StorageProxyURL = "proxy_url"
 )
+
+// --- Native AWS provider keys added with the lancedb-c preview 2 contract ---
+
+const (
+	// StorageAWSProfile selects a named profile for embedded S3 and the
+	// DynamoDB commit handler of s3+ddb://. It does not mutate the process
+	// environment.
+	StorageAWSProfile = "aws_profile"
+
+	// StorageAWSRegion is the canonical signing-region key. The object_store
+	// alias "region" remains accepted.
+	StorageAWSRegion = "aws_region"
+
+	// StorageDynamoDBEndpoint selects the DynamoDB endpoint independently of
+	// the S3 endpoint. DYNAMODB_ENDPOINT is the environment fallback.
+	StorageDynamoDBEndpoint = "dynamodb_endpoint"
+
+	// StorageS3AddressingStyle selects the S3 addressing style; use "path"
+	// for MinIO. The object_store alias
+	// "virtual_hosted_style_request" remains accepted.
+	StorageS3AddressingStyle = "aws_s3_addressing_style"
+)
+
+// Canonical AWS credential keys accepted by the native provider.
+const (
+	StorageAWSAccessKeyID     = "aws_access_key_id"
+	StorageAWSSecretAccessKey = "aws_secret_access_key"
+	StorageAWSSessionToken    = "aws_session_token"
+)

@@ -80,60 +80,50 @@ func demonstrateLocalStorage(ctx context.Context) error {
 func showCloudConfigurations() {
 	// AWS S3
 	fmt.Println("  AWS S3:")
-	s3Opts := &ConnectionOptions{
-		StorageOptions: map[string]string{
-			StorageAccessKeyID:     "AKIA...",
-			StorageSecretAccessKey: "wJalr...",
-			StorageRegion:          "us-east-1",
-		},
+	s3Opts := map[string]string{
+		StorageAccessKeyID:     "AKIA...",
+		StorageSecretAccessKey: "wJalr...",
+		StorageRegion:          "us-east-1",
 	}
-	printConfig("S3", s3Opts.StorageOptions)
+	printConfig("S3", s3Opts)
 
 	// MinIO
 	fmt.Println("\n  MinIO (S3-compatible):")
-	minioOpts := &ConnectionOptions{
-		StorageOptions: map[string]string{
-			StorageAccessKeyID:               "minioadmin",
-			StorageSecretAccessKey:           "minioadmin",
-			StorageEndpoint:                  "http://localhost:9000",
-			StorageRegion:                    "us-east-1",
-			StorageAllowHTTP:                 "true",
-			StorageVirtualHostedStyleRequest: "false",
-		},
+	minioOpts := map[string]string{
+		StorageAccessKeyID:               "minioadmin",
+		StorageSecretAccessKey:           "minioadmin",
+		StorageEndpoint:                  "http://localhost:9000",
+		StorageRegion:                    "us-east-1",
+		StorageAllowHTTP:                 "true",
+		StorageVirtualHostedStyleRequest: "false",
 	}
-	printConfig("MinIO", minioOpts.StorageOptions)
+	printConfig("MinIO", minioOpts)
 
 	// Cloudflare R2
 	fmt.Println("\n  Cloudflare R2:")
-	r2Opts := &ConnectionOptions{
-		StorageOptions: map[string]string{
-			StorageAccessKeyID:     "...",
-			StorageSecretAccessKey: "...",
-			StorageAWSEndpoint:     "https://ACCOUNT_ID.r2.cloudflarestorage.com",
-			StorageRegion:          "auto",
-		},
+	r2Opts := map[string]string{
+		StorageAccessKeyID:     "...",
+		StorageSecretAccessKey: "...",
+		StorageAWSEndpoint:     "https://ACCOUNT_ID.r2.cloudflarestorage.com",
+		StorageRegion:          "auto",
 	}
-	printConfig("R2", r2Opts.StorageOptions)
+	printConfig("R2", r2Opts)
 	fmt.Println("    Note: R2 requires StorageAWSEndpoint (not StorageEndpoint)")
 
 	// Google Cloud Storage
 	fmt.Println("\n  Google Cloud Storage:")
-	gcsOpts := &ConnectionOptions{
-		StorageOptions: map[string]string{
-			StorageGCSServiceAccount: "/path/to/service-account.json",
-		},
+	gcsOpts := map[string]string{
+		StorageGCSServiceAccount: "/path/to/service-account.json",
 	}
-	printConfig("GCS", gcsOpts.StorageOptions)
+	printConfig("GCS", gcsOpts)
 
 	// Azure Blob Storage
 	fmt.Println("\n  Azure Blob Storage:")
-	azureOpts := &ConnectionOptions{
-		StorageOptions: map[string]string{
-			StorageAzureAccountName: "myaccount",
-			StorageAzureAccessKey:   "...",
-		},
+	azureOpts := map[string]string{
+		StorageAzureAccountName: "myaccount",
+		StorageAzureAccessKey:   "...",
 	}
-	printConfig("Azure", azureOpts.StorageOptions)
+	printConfig("Azure", azureOpts)
 }
 
 func printConfig(name string, opts map[string]string) {

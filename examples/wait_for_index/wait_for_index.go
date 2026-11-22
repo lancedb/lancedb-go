@@ -84,12 +84,12 @@ func main() {
 
 	fmt.Println("▶ WaitForIndex timeout=30s")
 	start := time.Now()
-	if err := table.WaitForIndex(ctx, []string{"emb_idx"}, 30*time.Second); err != nil {
+	if err := table.(contracts.ITableIndexManagement).WaitForIndex(ctx, []string{"emb_idx"}, 30*time.Second); err != nil {
 		log.Fatalf("wait: %v", err)
 	}
 	fmt.Printf("  done after %s\n", time.Since(start).Round(time.Millisecond))
 
-	stats, err := table.IndexStats(ctx, "emb_idx")
+	stats, err := table.(contracts.ITableIndexManagement).IndexStats(ctx, "emb_idx")
 	if err != nil {
 		log.Fatalf("stats: %v", err)
 	}

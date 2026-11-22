@@ -79,7 +79,7 @@ func main() {
 	}
 
 	fmt.Println("\n▶ Compact (TargetRowsPerFragment=100)")
-	stats, err := table.OptimizeWithAction(ctx, contracts.OptimizeAction{
+	stats, err := table.(contracts.ITableOptimize).OptimizeWithAction(ctx, contracts.OptimizeAction{
 		Kind: contracts.OptimizeCompact,
 		Compaction: contracts.CompactionParams{
 			TargetRowsPerFragment: u64(100),
@@ -98,7 +98,7 @@ func main() {
 	}
 
 	fmt.Println("\n▶ Prune (OlderThan=1h, DeleteUnverified=true)")
-	if _, err := table.OptimizeWithAction(ctx, contracts.OptimizeAction{
+	if _, err := table.(contracts.ITableOptimize).OptimizeWithAction(ctx, contracts.OptimizeAction{
 		Kind: contracts.OptimizePrune,
 		Prune: contracts.PruneParams{
 			OlderThan:        time.Hour,
@@ -110,7 +110,7 @@ func main() {
 	fmt.Println("  ✓ prune ok")
 
 	fmt.Println("\n▶ Index (no-op when no index exists)")
-	if _, err := table.OptimizeWithAction(ctx, contracts.OptimizeAction{
+	if _, err := table.(contracts.ITableOptimize).OptimizeWithAction(ctx, contracts.OptimizeAction{
 		Kind: contracts.OptimizeIndex,
 	}); err != nil {
 		log.Fatalf("index: %v", err)
@@ -118,7 +118,7 @@ func main() {
 	fmt.Println("  ✓ index ok")
 
 	fmt.Println("\n▶ All (legacy Optimize entry point)")
-	if _, err := table.Optimize(ctx); err != nil {
+	if _, err := table.(contracts.ITableOptimize).Optimize(ctx); err != nil {
 		log.Fatalf("all: %v", err)
 	}
 	fmt.Println("  ✓ all ok")

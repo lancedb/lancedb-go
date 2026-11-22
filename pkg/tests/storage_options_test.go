@@ -41,9 +41,7 @@ func TestStorageOptionsBasic(t *testing.T) {
 	})
 
 	t.Run("Connect with empty map", func(t *testing.T) {
-		conn, err := lancedb.Connect(context.Background(), tempDir, &contracts.ConnectionOptions{
-			StorageOptions: map[string]string{},
-		})
+		conn, err := lancedb.ConnectWithStorageOptions(context.Background(), tempDir, map[string]string{})
 		if err != nil {
 			t.Fatalf("Failed to connect: %v", err)
 		}
@@ -181,12 +179,10 @@ func TestConnectWithStorageOptions(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	t.Run("S3-style options with local path", func(t *testing.T) {
-		conn, err := lancedb.Connect(context.Background(), tempDir, &contracts.ConnectionOptions{
-			StorageOptions: map[string]string{
-				contracts.StorageAccessKeyID:     "test-key",
-				contracts.StorageSecretAccessKey: "test-secret",
-				contracts.StorageRegion:          "us-east-1",
-			},
+		conn, err := lancedb.ConnectWithStorageOptions(context.Background(), tempDir, map[string]string{
+			contracts.StorageAccessKeyID:     "test-key",
+			contracts.StorageSecretAccessKey: "test-secret",
+			contracts.StorageRegion:          "us-east-1",
 		})
 		if err != nil {
 			t.Fatalf("Failed to connect: %v", err)
@@ -195,10 +191,8 @@ func TestConnectWithStorageOptions(t *testing.T) {
 	})
 
 	t.Run("GCS-style options with local path", func(t *testing.T) {
-		conn, err := lancedb.Connect(context.Background(), tempDir, &contracts.ConnectionOptions{
-			StorageOptions: map[string]string{
-				contracts.StorageGCSServiceAccount: "/path/to/sa.json",
-			},
+		conn, err := lancedb.ConnectWithStorageOptions(context.Background(), tempDir, map[string]string{
+			contracts.StorageGCSServiceAccount: "/path/to/sa.json",
 		})
 		if err != nil {
 			t.Fatalf("Failed to connect: %v", err)
@@ -207,11 +201,9 @@ func TestConnectWithStorageOptions(t *testing.T) {
 	})
 
 	t.Run("Azure-style options with local path", func(t *testing.T) {
-		conn, err := lancedb.Connect(context.Background(), tempDir, &contracts.ConnectionOptions{
-			StorageOptions: map[string]string{
-				contracts.StorageAzureAccountName: "testaccount",
-				contracts.StorageAzureAccessKey:   "testkey",
-			},
+		conn, err := lancedb.ConnectWithStorageOptions(context.Background(), tempDir, map[string]string{
+			contracts.StorageAzureAccountName: "testaccount",
+			contracts.StorageAzureAccessKey:   "testkey",
 		})
 		if err != nil {
 			t.Fatalf("Failed to connect: %v", err)
@@ -220,12 +212,10 @@ func TestConnectWithStorageOptions(t *testing.T) {
 	})
 
 	t.Run("mixed backend options with local path", func(t *testing.T) {
-		conn, err := lancedb.Connect(context.Background(), tempDir, &contracts.ConnectionOptions{
-			StorageOptions: map[string]string{
-				contracts.StorageAccessKeyID:      "key",
-				contracts.StorageAzureAccountName: "account",
-				contracts.StorageAllowHTTP:        "true",
-			},
+		conn, err := lancedb.ConnectWithStorageOptions(context.Background(), tempDir, map[string]string{
+			contracts.StorageAccessKeyID:      "key",
+			contracts.StorageAzureAccountName: "account",
+			contracts.StorageAllowHTTP:        "true",
 		})
 		if err != nil {
 			t.Fatalf("Failed to connect: %v", err)
