@@ -59,6 +59,9 @@ implementations of the published interfaces keep compiling.
   the runtime version and keeps a private per-user cache. Explicit override:
   `LANCEDB_C_LIBRARY_PATH`; cache override: `LANCEDB_C_CACHE_DIR`; pre-install:
   `go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@v0.2.0-preview.1`.
+  Concurrent installers serialize cache publication with a per-target OS file
+  lock. Only a digest mismatch replaces an entry; a transient open/read/sharing
+  error is reported, not treated as corruption.
 - **Platforms.** Linux amd64/arm64, Windows amd64/arm64 and macOS Apple Silicon.
   Intel macOS (`darwin/amd64`) is removed; its published release is not
   produced any more.

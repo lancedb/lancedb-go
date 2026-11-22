@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,17 +36,15 @@ func install(target Target) (string, error) {
 	if err := os.Chmod(dir, 0o700); err != nil && !isWindows() {
 		return "", fmt.Errorf("restrict native cache %s: %w", dir, err)
 	}
+	lock, err := openCacheLock(dir)
+	if err != nil {
+		return "", err
+	}
+	defer lock.Close()
 
 	libPath := filepath.Join(dir, target.LibraryName)
-	if info, statErr := os.Stat(libPath); statErr == nil {
-		if info.Mode().IsRegular() && verifyFile(libPath, target.LibrarySHA256) == nil {
-			return libPath, nil
-		}
-		if removeErr := os.Remove(libPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			return "", fmt.Errorf("remove unusable cached library %s: %w", libPath, removeErr)
-		}
-	} else if !os.IsNotExist(statErr) {
-		return "", fmt.Errorf("inspect cached library %s: %w", libPath, statErr)
+	if err := removeUnusableLibrary(libPath, target.LibrarySHA256); err != nil {
+		return "", err
 	}
 
 	archivePath := filepath.Join(dir, target.Archive)
@@ -79,7 +78,8 @@ func install(target Target) (string, error) {
 		return "", fmt.Errorf("protect extracted library: %w", err)
 	}
 	if err := os.Rename(tmp, libPath); err != nil {
-		// A concurrent process may have published the same verified bytes.
+		// Another installer may have published the same verified bytes before
+		// this process acquired the shared cache lock.
 		if verifyFile(libPath, target.LibrarySHA256) == nil {
 			return libPath, nil
 		}
@@ -105,10 +105,15 @@ func verifyFileIfExists(path, want string) error {
 		return fmt.Errorf("inspect %s: %w", path, err)
 	}
 	if err := verifyFile(path, want); err != nil {
+		if !errors.Is(err, errDigestMismatch) {
+			// A transient open/read/sharing error is not a corrupt archive.
+			return fmt.Errorf("verify archive %s: %w", path, err)
+		}
 		// A partial or stale download is not a usable cache entry. Remove it
 		// and let the caller fetch the published archive again.
-		_ = os.Remove(path)
-		return nil
+		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+			return fmt.Errorf("remove unusable archive %s: %w", path, removeErr)
+		}
 	}
 	return nil
 }
@@ -204,6 +209,34 @@ func extractLibrary(archivePath string, target Target, destination string) error
 		return nil
 	}
 	return fmt.Errorf("archive %s does not contain %s or %s.0.1", archivePath, target.LibraryName, target.LibraryName)
+}
+
+// removeUnusableLibrary removes a cached library only when it is not the
+// verified target. The caller holds the target cache lock, so another
+// installer cannot be publishing or reading this entry concurrently.
+func removeUnusableLibrary(path, wantSHA256 string) error {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect cached library %s: %w", path, err)
+	}
+	if info.Mode().IsRegular() {
+		verifyErr := verifyFile(path, wantSHA256)
+		if verifyErr == nil {
+			return nil
+		}
+		if !errors.Is(verifyErr, errDigestMismatch) {
+			// A transient open/read/sharing error is not a corrupt library;
+			// leave the entry in place and report the real failure.
+			return fmt.Errorf("verify cached library %s: %w", path, verifyErr)
+		}
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove unusable cached library %s: %w", path, err)
+	}
+	return nil
 }
 
 func isWindows() bool {

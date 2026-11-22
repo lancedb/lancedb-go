@@ -25,6 +25,7 @@ package native
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -225,13 +226,15 @@ func sha256File(path string) (string, int64, error) {
 	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
+var errDigestMismatch = errors.New("digest mismatch")
+
 func verifyFile(path, want string) error {
 	got, _, err := sha256File(path)
 	if err != nil {
 		return err
 	}
 	if got != want {
-		return fmt.Errorf("%s sha256 is %s, want %s", path, got, want)
+		return fmt.Errorf("%w: %s sha256 is %s, want %s", errDigestMismatch, path, got, want)
 	}
 	return nil
 }
