@@ -66,6 +66,19 @@ func (b *MergeInsertBuilder) Execute(_ context.Context, records []arrow.Record) 
 	if len(b.on) == 0 {
 		return nil, fmt.Errorf("merge_insert: 'on' must contain at least one column")
 	}
+	if err := validateNoNULStrings("merge_insert: on", b.on); err != nil {
+		return nil, err
+	}
+	if b.whenMatchedCondition != nil {
+		if err := validateNoNUL("merge_insert: when matched condition", *b.whenMatchedCondition); err != nil {
+			return nil, err
+		}
+	}
+	if b.whenNotMatchedFilter != nil {
+		if err := validateNoNUL("merge_insert: by-source delete filter", *b.whenNotMatchedFilter); err != nil {
+			return nil, err
+		}
+	}
 	if !b.whenMatchedUpdateAll && !b.whenNotMatchedInsert && !b.whenNotMatchedDelete {
 		return nil, fmt.Errorf("merge_insert: no merge actions configured; call at least one of WhenMatchedUpdateAll, WhenNotMatchedInsertAll, WhenNotMatchedBySourceDelete")
 	}

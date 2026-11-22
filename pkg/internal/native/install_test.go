@@ -379,3 +379,152 @@ func TestOpenExplicitRelativePathResolvesAbsolute(t *testing.T) {
 		t.Fatalf("source = %q, want environment", library.Source)
 	}
 }
+
+func warmTarget(name string, library []byte) Target {
+	return Target{
+		Name:          name,
+		Archive:       "unavailable.tar.gz",
+		ArchiveSHA256: "0000000000000000000000000000000000000000000000000000000000000000",
+		LibraryPath:   "lib/libfake.so",
+		LibraryName:   "libfake.so",
+		LibrarySHA256: sha256Hex(library),
+	}
+}
+
+func writeWarmLibrary(t *testing.T, target Target, library []byte) string {
+	t.Helper()
+	dir, err := cacheDirFor(target)
+	if err != nil {
+		t.Fatalf("cache dir: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create cache dir: %v", err)
+	}
+	path := filepath.Join(dir, target.LibraryName)
+	if err := os.WriteFile(path, library, 0o600); err != nil {
+		t.Fatalf("write warm library: %v", err)
+	}
+	return path
+}
+
+func TestInstallWarmLibraryWorksOffline(t *testing.T) {
+	library := []byte("verified warm runtime bytes")
+	target := warmTarget("test-warm-offline", library)
+	t.Setenv(EnvCacheDir, t.TempDir())
+	t.Setenv(EnvReleaseBaseURL, "http://127.0.0.1:1")
+	path := writeWarmLibrary(t, target, library)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat warm library: %v", err)
+	}
+
+	got, err := install(target)
+	if err != nil {
+		t.Fatalf("warm install without archive/network: %v", err)
+	}
+	if got != path {
+		t.Fatalf("warm install path = %q, want %q", got, path)
+	}
+	after, err := os.Stat(got)
+	if err != nil {
+		t.Fatalf("stat after install: %v", err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("warm install replaced the verified library")
+	}
+	bytesAfter, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatalf("read after install: %v", err)
+	}
+	if !bytes.Equal(bytesAfter, library) {
+		t.Fatalf("warm library bytes changed: %q", bytesAfter)
+	}
+}
+
+func TestInstallWarmConcurrentDoesNotReplace(t *testing.T) {
+	library := []byte("concurrent warm runtime bytes")
+	target := warmTarget("test-warm-concurrent", library)
+	t.Setenv(EnvCacheDir, t.TempDir())
+	t.Setenv(EnvReleaseBaseURL, "http://127.0.0.1:1")
+	path := writeWarmLibrary(t, target, library)
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat warm library: %v", err)
+	}
+
+	const workers = 8
+	var wait sync.WaitGroup
+	errs := make(chan error, workers)
+	paths := make(chan string, workers)
+	for i := 0; i < workers; i++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			got, err := install(target)
+			if err != nil {
+				errs <- err
+				return
+			}
+			paths <- got
+		}()
+	}
+	wait.Wait()
+	close(errs)
+	close(paths)
+	for err := range errs {
+		t.Errorf("warm concurrent install: %v", err)
+	}
+	for got := range paths {
+		if got != path {
+			t.Errorf("warm concurrent path = %q, want %q", got, path)
+		}
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after concurrent install: %v", err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("concurrent warm install replaced the verified library")
+	}
+}
+
+func TestDiscoverPreservesVerifiedUnloadableCache(t *testing.T) {
+	resetForTest()
+	t.Cleanup(resetForTest)
+	library := []byte("verified bytes that are not a shared library")
+	target := warmTarget("test-unloadable-cache", library)
+	t.Setenv(EnvCacheDir, t.TempDir())
+	t.Setenv(EnvReleaseBaseURL, "http://127.0.0.1:1")
+	t.Setenv(EnvLibraryPath, "")
+	path := writeWarmLibrary(t, target, library)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read before discover: %v", err)
+	}
+
+	key := runtime.GOOS + "/" + runtime.GOARCH
+	previous, hadPrevious := Targets[key]
+	Targets[key] = target
+	t.Cleanup(func() {
+		if hadPrevious {
+			Targets[key] = previous
+		} else {
+			delete(Targets, key)
+		}
+	})
+
+	_, err = discover()
+	if err == nil {
+		t.Fatal("discover loaded a non-library file")
+	}
+	if !contains(err.Error(), "verified but could not be loaded") {
+		t.Fatalf("discover did not report the cache load failure: %v", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("verified cache file was removed: %v", readErr)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("verified cache file changed: %q", after)
+	}
+}

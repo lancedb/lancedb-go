@@ -81,6 +81,9 @@ func (c *Connection) TableNames(_ context.Context) ([]string, error) {
 }
 
 func (c *Connection) OpenTable(_ context.Context, name string) (contracts.ITable, error) {
+	if err := validateNoNUL("table name", name); err != nil {
+		return nil, err
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closed || c.handle == 0 {
@@ -102,6 +105,9 @@ func (c *Connection) OpenTable(_ context.Context, name string) (contracts.ITable
 }
 
 func (c *Connection) CreateTable(_ context.Context, name string, schema contracts.ISchema) (contracts.ITable, error) {
+	if err := validateNoNUL("table name", name); err != nil {
+		return nil, err
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closed || c.handle == 0 {
@@ -137,6 +143,9 @@ func (c *Connection) CreateTable(_ context.Context, name string, schema contract
 }
 
 func (c *Connection) DropTable(_ context.Context, name string) error {
+	if err := validateNoNUL("table name", name); err != nil {
+		return err
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.closed || c.handle == 0 {

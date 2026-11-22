@@ -103,6 +103,21 @@ func TestLegacySelectScopeAndErrors(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 5, "negative legacy limit/offset were ignored")
 
+	negativeK := -1
+	rows, err = table.Select(ctx, contracts.QueryConfig{
+		Columns:      []string{"id"},
+		VectorSearch: &contracts.VectorSearch{Column: "embedding", Vector: queryVector, K: negativeK},
+	})
+	require.NoError(t, err)
+	require.Len(t, rows, 5, "negative legacy K fell through to the ordinary query path")
+
+	zeroK := 0
+	_, err = table.Select(ctx, contracts.QueryConfig{
+		Columns:      []string{"id"},
+		VectorSearch: &contracts.VectorSearch{Column: "embedding", Vector: queryVector, K: zeroK},
+	})
+	require.Error(t, err, "legacy zero K remains an SDK error")
+
 	baseRows, err := table.Select(ctx, contracts.QueryConfig{
 		Columns:      []string{"id"},
 		VectorSearch: &contracts.VectorSearch{Column: "embedding", Vector: queryVector, K: 2},
@@ -161,6 +176,7 @@ func TestLegacyRowValueAndIndexContracts(t *testing.T) {
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int64},
 		{Name: "i8", Type: arrow.PrimitiveTypes.Int8},
+		{Name: "u8", Type: arrow.PrimitiveTypes.Uint8},
 		{Name: "f64", Type: arrow.PrimitiveTypes.Float64},
 		{Name: "bin", Type: arrow.BinaryTypes.Binary},
 		{Name: "ts", Type: &arrow.TimestampType{Unit: arrow.Microsecond}},
@@ -176,13 +192,14 @@ func TestLegacyRowValueAndIndexContracts(t *testing.T) {
 	builder := array.NewRecordBuilder(memory.DefaultAllocator, schema)
 	builder.Field(0).(*array.Int64Builder).Append(1)
 	builder.Field(1).(*array.Int8Builder).Append(7)
-	builder.Field(2).(*array.Float64Builder).Append(math.NaN())
-	builder.Field(3).(*array.BinaryBuilder).Append([]byte("bytes"))
-	builder.Field(4).(*array.TimestampBuilder).AppendTime(time.Unix(0, 0).UTC())
-	list := builder.Field(5).(*array.ListBuilder)
+	builder.Field(2).(*array.Uint8Builder).Append(8)
+	builder.Field(3).(*array.Float64Builder).Append(math.NaN())
+	builder.Field(4).(*array.BinaryBuilder).Append([]byte("bytes"))
+	builder.Field(5).(*array.TimestampBuilder).AppendTime(time.Unix(0, 0).UTC())
+	list := builder.Field(6).(*array.ListBuilder)
 	list.Append(true)
 	list.ValueBuilder().(*array.StringBuilder).AppendValues([]string{"a", "b"}, nil)
-	builder.Field(6).(*array.StringBuilder).Append("fts text")
+	builder.Field(7).(*array.StringBuilder).Append("fts text")
 	record := builder.NewRecord()
 	builder.Release()
 	require.NoError(t, table.Add(ctx, record, nil))
@@ -194,10 +211,11 @@ func TestLegacyRowValueAndIndexContracts(t *testing.T) {
 	row := rows[0]
 	require.Equal(t, float64(1), row["id"])
 	require.Equal(t, "Unsupported type: Int8", row["i8"])
+	require.Equal(t, "Unsupported type: UInt8", row["u8"])
 	require.Nil(t, row["f64"], "non-finite float must remain nil after the legacy JSON conversion")
 	require.Equal(t, "Unsupported type: Binary", row["bin"])
 	require.Equal(t, "Unsupported type: Timestamp(Microsecond, None)", row["ts"])
-	require.Equal(t, []interface{}{"a", "b"}, row["labels"])
+	require.Equal(t, `Unsupported type: List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })`, row["labels"])
 
 	require.NoError(t, table.CreateIndex(ctx, []string{"text"}, contracts.IndexTypeFts))
 	indexes, err := table.GetAllIndexes(ctx)

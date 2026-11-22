@@ -43,8 +43,14 @@ func install(target Target) (string, error) {
 	defer lock.Close()
 
 	libPath := filepath.Join(dir, target.LibraryName)
-	if err := removeUnusableLibrary(libPath, target.LibrarySHA256); err != nil {
+	usable, err := prepareCachedLibrary(libPath, target.LibrarySHA256)
+	if err != nil {
 		return "", err
+	}
+	if usable {
+		// A verified library is a complete cache entry. Do not require the
+		// archive or the network to reuse it, and do not replace its inode.
+		return libPath, nil
 	}
 
 	archivePath := filepath.Join(dir, target.Archive)
@@ -211,32 +217,33 @@ func extractLibrary(archivePath string, target Target, destination string) error
 	return fmt.Errorf("archive %s does not contain %s or %s.0.1", archivePath, target.LibraryName, target.LibraryName)
 }
 
-// removeUnusableLibrary removes a cached library only when it is not the
-// verified target. The caller holds the target cache lock, so another
-// installer cannot be publishing or reading this entry concurrently.
-func removeUnusableLibrary(path, wantSHA256 string) error {
+// prepareCachedLibrary verifies an existing library and returns true when it
+// is already the exact target. It removes an entry only after a confirmed
+// digest mismatch or non-regular file; transient stat/open/read errors are
+// returned without modifying the cache.
+func prepareCachedLibrary(path, wantSHA256 string) (bool, error) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect cached library %s: %w", path, err)
+		return false, fmt.Errorf("inspect cached library %s: %w", path, err)
 	}
 	if info.Mode().IsRegular() {
 		verifyErr := verifyFile(path, wantSHA256)
 		if verifyErr == nil {
-			return nil
+			return true, nil
 		}
 		if !errors.Is(verifyErr, errDigestMismatch) {
 			// A transient open/read/sharing error is not a corrupt library;
 			// leave the entry in place and report the real failure.
-			return fmt.Errorf("verify cached library %s: %w", path, verifyErr)
+			return false, fmt.Errorf("verify cached library %s: %w", path, verifyErr)
 		}
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove unusable cached library %s: %w", path, err)
+		return false, fmt.Errorf("remove unusable cached library %s: %w", path, err)
 	}
-	return nil
+	return false, nil
 }
 
 func isWindows() bool {

@@ -185,11 +185,17 @@ func (t *Table) Update(_ context.Context, filter string, updates map[string]inte
 	if strings.TrimSpace(filter) == "" {
 		return fmt.Errorf("failed to update rows: predicate must not be empty")
 	}
+	if err := validateNoNUL("predicate", filter); err != nil {
+		return err
+	}
 	if len(updates) == 0 {
 		return fmt.Errorf("updates map cannot be empty")
 	}
 	columns := make([]string, 0, len(updates))
 	for column := range updates {
+		if err := validateNoNUL("update column", column); err != nil {
+			return err
+		}
 		columns = append(columns, column)
 	}
 	sort.Strings(columns)
@@ -209,6 +215,9 @@ func (t *Table) UpdateExpr(_ context.Context, filter string, assignments []contr
 	if len(assignments) == 0 {
 		return nil, fmt.Errorf("update_expr: assignments must be non-empty")
 	}
+	if err := validateNoNUL("predicate", filter); err != nil {
+		return nil, err
+	}
 	columns := make([]string, len(assignments))
 	expressions := make([]string, len(assignments))
 	for i, assignment := range assignments {
@@ -217,6 +226,12 @@ func (t *Table) UpdateExpr(_ context.Context, filter string, assignments []contr
 		}
 		if strings.TrimSpace(assignment.Expr) == "" {
 			return nil, fmt.Errorf("update_expr: assignments[%d].Expr is empty", i)
+		}
+		if err := validateNoNUL(fmt.Sprintf("update_expr: assignments[%d].Column", i), assignment.Column); err != nil {
+			return nil, err
+		}
+		if err := validateNoNUL(fmt.Sprintf("update_expr: assignments[%d].Expr", i), assignment.Expr); err != nil {
+			return nil, err
 		}
 		columns[i] = assignment.Column
 		expressions[i] = assignment.Expr
@@ -255,6 +270,9 @@ func (t *Table) updateExpressions(filter string, columns, expressions []string) 
 }
 
 func (t *Table) Delete(_ context.Context, filter string) error {
+	if err := validateNoNUL("predicate", filter); err != nil {
+		return err
+	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	if t.closed || t.handle == 0 {
@@ -293,6 +311,22 @@ func (t *Table) VectorQuery(column string, vector []float32) contracts.IVectorQu
 	return &VectorQueryBuilderV2{state: state, vector: vectorCopy, column: column}
 }
 
+func validateNoNUL(field, value string) error {
+	if strings.IndexByte(value, 0) >= 0 {
+		return fmt.Errorf("%s contains an embedded NUL byte", field)
+	}
+	return nil
+}
+
+func validateNoNULStrings(field string, values []string) error {
+	for i, value := range values {
+		if err := validateNoNUL(fmt.Sprintf("%s[%d]", field, i), value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func legacyJSONScalar(value interface{}) (string, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -307,6 +341,9 @@ func legacyJSONScalar(value interface{}) (string, error) {
 		var text string
 		if err := json.Unmarshal(encoded, &text); err != nil {
 			return "", fmt.Errorf("decode JSON string: %w", err)
+		}
+		if err := validateNoNUL("update value", text); err != nil {
+			return "", err
 		}
 		return "'" + strings.ReplaceAll(text, "'", "''") + "'", nil
 	case 'n':
@@ -349,7 +386,7 @@ func (t *Table) SelectIPC(ctx context.Context, config contracts.QueryConfig) ([]
 	if config.Where != "" {
 		state.filters = []string{config.Where}
 	}
-	if config.VectorSearch != nil {
+	if config.VectorSearch != nil && config.VectorSearch.K >= 0 {
 		state.vectorRequested = true
 		state.vector = append([]float32(nil), config.VectorSearch.Vector...)
 		state.vectorColumn = config.VectorSearch.Column
@@ -366,6 +403,8 @@ func (t *Table) SelectIPC(ctx context.Context, config contracts.QueryConfig) ([]
 	} else if config.FTSSearch != nil {
 		return nil, fmt.Errorf("failed to execute select query: Invalid input, Full-text search is not currently supported")
 	} else {
+		// A negative K fails the old vector branch's as_u64 check, so v0.1.2
+		// fell through to the ordinary query path.
 		if config.Limit != nil && *config.Limit >= 0 {
 			state.limit = *config.Limit
 			state.limitSet = true
@@ -384,7 +423,7 @@ func (t *Table) SelectV2(ctx context.Context, config contracts.QueryConfigV2) ([
 	if err != nil {
 		return nil, err
 	}
-	return ipcBytesToMaps(ipcBytes)
+	return ipcBytesToMapsV2(ipcBytes)
 }
 
 // SelectIPCV2 executes an additive query configuration and returns Arrow IPC

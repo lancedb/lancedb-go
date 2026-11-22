@@ -155,7 +155,7 @@ func TestSelectQueries(t *testing.T) {
 		t.Logf("Retrieved %d records", len(results))
 		for i, row := range results {
 			t.Logf("  Record %d: id=%v, name=%v, score=%v", i+1, row["id"], row["name"], row["score"])
-			assert.ElementsMatch(t, labelsData[i], row["labels"])
+			assert.Equal(t, `Unsupported type: List(Field { name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })`, row["labels"], "v0.1.2 Select used a placeholder for variable-length lists")
 		}
 	})
 

@@ -115,15 +115,20 @@ placeholder, but it keeps the old call contracts where behavior was observable:
   scalars first, so named strings, `time.Time`, typed nil pointers and custom
   `json.Marshaler` results keep their old meaning; strings become SQL
   single-quoted literals. Invalid `json.Number`, non-finite floats and composite
-  values fail before any write. `UpdateExpr` remains the raw-SQL path and
-  allows an empty filter for a whole-table update.
+  values fail before any write. Predicates, column names, update values,
+  `UpdateExpr` expressions and merge-insert keys/conditions reject embedded NUL
+  bytes before native execution, because a C string would otherwise truncate
+  them. `UpdateExpr` remains the raw-SQL path and allows an empty filter for a
+  whole-table update.
 - `Select` keeps an explicit zero limit as zero rows. Negative limits and
-  offsets are ignored, a vector query ignores `Offset`, and a query with both
-  `VectorSearch` and `FTSSearch` remains a vector query. Legacy FTS still
+  offsets are ignored, a negative vector `K` falls back to the ordinary query
+  path, a vector query ignores `Offset`, and a query with both `VectorSearch`
+  and `FTSSearch` remains a vector query. Legacy FTS still
   returns the v0.1.2 `Full-text search is not currently supported` error; use
   `SelectV2` or the additive query interfaces for FTS.
-- Legacy map rows keep the old JSON conversion: `Int8`/`Int16`, `Binary` and
-  timestamp values use the old `Unsupported type: ...` placeholders, and
+- Legacy map rows keep the old JSON conversion: `Int8`/`Int16`, `UInt8`,
+  `Binary`, timestamp and variable-length `List` values use the old
+  `Unsupported type: ...` placeholders, fixed-size lists are decoded, and
   non-finite floats become nil. `GetAllIndexes` keeps the `FTS` spelling.
 - `Add(ctx, nil, nil)` on a closed table returns an error. Closing the
   connection makes the legacy async query put an error on its error channel.

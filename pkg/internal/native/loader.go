@@ -127,30 +127,17 @@ func discover() (*Library, error) {
 		return nil, err
 	}
 
-	cacheErr := error(nil)
 	path, err := install(target)
 	if err == nil {
 		lib, openErr := openLibraryPath(path, SourceCache)
 		if openErr == nil {
 			return lib, nil
 		}
-		// A cached file can become unusable after a partial OS update. Remove
-		// our copy and retry the verified extraction once.
-		if removeErr := os.Remove(path); removeErr == nil || os.IsNotExist(removeErr) {
-			path, err = install(target)
-			if err == nil {
-				lib, openErr = openLibraryPath(path, SourceCache)
-				if openErr == nil {
-					return lib, nil
-				}
-			}
-		} else {
-			cacheErr = fmt.Errorf("cached library %s is unusable: %w", path, openErr)
-		}
+		// The bytes are the verified target, so cache repair cannot improve
+		// this load failure. Preserve the file and report the root cause.
+		return nil, fmt.Errorf("cached lancedb-c library %s was verified but could not be loaded: %w; remove the cache entry or set %s to a compatible library", path, openErr, EnvLibraryPath)
 	}
-	if err != nil && cacheErr == nil {
-		cacheErr = err
-	}
+	cacheErr := err
 
 	lib, systemErr := openSystem(target)
 	if systemErr == nil {

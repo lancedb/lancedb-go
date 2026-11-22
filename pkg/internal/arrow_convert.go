@@ -151,6 +151,14 @@ func ipcBytesToRecord(ipcBytes []byte) (arrow.Record, error) {
 // a silent type change for existing callers. The context/single-record API
 // returns typed Arrow records for callers that need exact widths.
 func ipcBytesToMaps(ipcBytes []byte) ([]map[string]interface{}, error) {
+	return ipcBytesToMapsWith(ipcBytes, arrowValueToJSONLegacy)
+}
+
+func ipcBytesToMapsV2(ipcBytes []byte) ([]map[string]interface{}, error) {
+	return ipcBytesToMapsWith(ipcBytes, arrowValueToJSON)
+}
+
+func ipcBytesToMapsWith(ipcBytes []byte, convert func(arrow.Array, int) (interface{}, error)) ([]map[string]interface{}, error) {
 	records, _, err := ipcBytesToRecords(ipcBytes)
 	if err != nil {
 		return nil, err
@@ -170,7 +178,7 @@ func ipcBytesToMaps(ipcBytes []byte) ([]map[string]interface{}, error) {
 		for row := 0; row < int(rec.NumRows()); row++ {
 			values := make(map[string]interface{}, schema.NumFields())
 			for col := 0; col < schema.NumFields(); col++ {
-				value, err := arrowValueToJSON(rec.Column(col), row)
+				value, err := convert(rec.Column(col), row)
 				if err != nil {
 					return nil, fmt.Errorf("convert column %s: %w", schema.Field(col).Name, err)
 				}
@@ -180,6 +188,51 @@ func ipcBytesToMaps(ipcBytes []byte) ([]map[string]interface{}, error) {
 		}
 	}
 	return rows, nil
+}
+
+// arrowValueToJSONLegacy reproduces the v0.1.2 conversion switch. In
+// particular, UInt8 and variable-length List are unsupported placeholders, and
+// only FixedSizeList is recursively decoded.
+func arrowValueToJSONLegacy(column arrow.Array, index int) (interface{}, error) {
+	if column.IsNull(index) {
+		return nil, nil
+	}
+	switch values := column.(type) {
+	case *array.Int32:
+		return float64(values.Value(index)), nil
+	case *array.Int64:
+		return float64(values.Value(index)), nil
+	case *array.Float32:
+		value := float64(values.Value(index))
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return nil, nil
+		}
+		return value, nil
+	case *array.Float64:
+		value := values.Value(index)
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return nil, nil
+		}
+		return value, nil
+	case *array.Boolean:
+		return values.Value(index), nil
+	case *array.String:
+		return values.Value(index), nil
+	case *array.FixedSizeList:
+		start, end := values.ValueOffsets(index)
+		child := values.ListValues()
+		out := make([]interface{}, 0, end-start)
+		for i := start; i < end; i++ {
+			value, err := arrowValueToJSONLegacy(child, int(i))
+			if err != nil {
+				value = nil
+			}
+			out = append(out, value)
+		}
+		return out, nil
+	default:
+		return "Unsupported type: " + rustDebugType(column.DataType()), nil
+	}
 }
 
 func arrowValueToJSON(column arrow.Array, index int) (interface{}, error) {
@@ -235,8 +288,28 @@ func rustDebugType(dataType arrow.DataType) string {
 		return "Int8"
 	case *arrow.Int16Type:
 		return "Int16"
+	case *arrow.Int32Type:
+		return "Int32"
+	case *arrow.Int64Type:
+		return "Int64"
+	case *arrow.Uint8Type:
+		return "UInt8"
+	case *arrow.Uint16Type:
+		return "UInt16"
+	case *arrow.Uint32Type:
+		return "UInt32"
+	case *arrow.Uint64Type:
+		return "UInt64"
 	case *arrow.Float16Type:
 		return "Float16"
+	case *arrow.Float32Type:
+		return "Float32"
+	case *arrow.Float64Type:
+		return "Float64"
+	case *arrow.BooleanType:
+		return "Boolean"
+	case *arrow.StringType:
+		return "Utf8"
 	case *arrow.BinaryType:
 		return "Binary"
 	case *arrow.LargeBinaryType:
@@ -269,8 +342,10 @@ func rustDebugType(dataType arrow.DataType) string {
 		return fmt.Sprintf("Decimal128(%d, %d)", value.Precision, value.Scale)
 	case *arrow.Decimal256Type:
 		return fmt.Sprintf("Decimal256(%d, %d)", value.Precision, value.Scale)
+	case *arrow.ListType:
+		return "List(" + rustFieldDebug(value.ElemField()) + ")"
 	case *arrow.LargeListType:
-		return "LargeList"
+		return "LargeList(" + rustFieldDebug(value.ElemField()) + ")"
 	case *arrow.MapType:
 		return "Map"
 	case *arrow.StructType:
@@ -278,6 +353,10 @@ func rustDebugType(dataType arrow.DataType) string {
 	default:
 		return dataType.String()
 	}
+}
+
+func rustFieldDebug(field arrow.Field) string {
+	return fmt.Sprintf("Field { name: %q, data_type: %s, nullable: %t, dict_id: 0, dict_is_ordered: false, metadata: {} }", field.Name, rustDebugType(field.Type), field.Nullable)
 }
 
 func rustTimeUnit(unit arrow.TimeUnit) string {
