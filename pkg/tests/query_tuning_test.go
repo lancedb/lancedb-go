@@ -162,7 +162,7 @@ func TestQuery_WithRowID_Standard(t *testing.T) {
 	table, cleanup := setupQueryTestTable(t)
 	defer cleanup()
 
-	record, err := table.Query().WithRowID().Limit(3).Execute(context.Background())
+	record, err := table.QueryV2().WithRowID().Limit(3).Execute(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, record)
 	defer record.Release()
@@ -187,7 +187,7 @@ func TestQuery_WithRowID_JSONPath_ReturnsNumericRowID(t *testing.T) {
 	table, cleanup := setupQueryTestTable(t)
 	defer cleanup()
 
-	rows, err := table.Select(context.Background(), contracts.QueryConfig{
+	rows, err := table.SelectV2(context.Background(), contracts.QueryConfigV2{
 		WithRowID: true,
 		Limit:     func() *int { n := 3; return &n }(),
 	})
@@ -205,21 +205,34 @@ func TestQuery_WithRowID_JSONPath_ReturnsNumericRowID(t *testing.T) {
 	}
 }
 
-// TestQuery_FastSearchAndPostfilter_Standard — smoke test the shared
-// QueryBase flags on the standard query path.
-func TestQuery_FastSearchAndPostfilter_Standard(t *testing.T) {
+// TestQuery_FastSearch_Standard — the shared QueryBase fast-search flag is
+// supported on the standard query path.
+func TestQuery_FastSearch_Standard(t *testing.T) {
 	table, cleanup := setupQueryTestTable(t)
 	defer cleanup()
 
-	rec, err := table.Query().
+	rec, err := table.QueryV2().
 		Filter("score > 85").
-		Postfilter().
 		FastSearch().
 		Limit(5).
 		Execute(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, rec)
 	rec.Release()
+}
+
+// TestSelectV2_PostfilterRequiresVector — Postfilter is a vector-query promise;
+// a direct QueryConfigV2 with Postfilter but no vector query is rejected.
+func TestSelectV2_PostfilterRequiresVector(t *testing.T) {
+	table, cleanup := setupQueryTestTable(t)
+	defer cleanup()
+
+	limit := 3
+	_, err := table.SelectV2(context.Background(), contracts.QueryConfigV2{
+		Limit:      &limit,
+		Postfilter: true,
+	})
+	require.Error(t, err)
 }
 
 // TestVectorQuery_ApplyOptions_BypassVectorIndex — ApplyOptions must forward

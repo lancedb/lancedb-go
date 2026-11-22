@@ -3,365 +3,239 @@
 
 package internal
 
-/*
-#cgo CFLAGS: -I${SRCDIR}/../../include
-#include "lancedb.h"
-*/
-import "C"
-
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 	"runtime"
+	"sort"
 	"sync"
-	"unsafe"
-
-	"github.com/apache/arrow/go/v17/arrow"
-	"github.com/apache/arrow/go/v17/arrow/ipc"
 
 	"github.com/lancedb/lancedb-go/pkg/contracts"
 )
 
-// Connection represents a connection to a LanceDB database
+// Connection is a live lancedb-c connection.
 type Connection struct {
-	// #nosec G103 - FFI handle for C interop with Rust library
-	handle unsafe.Pointer
+	handle uintptr
 	mu     sync.RWMutex
 	closed bool
 }
 
-// #nosec G103 - Function parameter for FFI handle from C interop
-func NewConnection(handle unsafe.Pointer, closed bool) *Connection {
-	return &Connection{
-		handle: handle,
-		closed: closed,
-	}
+// NewConnection wraps an already-created native connection.
+func NewConnection(handle uintptr, closed bool) *Connection {
+	return &Connection{handle: handle, closed: closed}
 }
 
 var _ contracts.IConnection = (*Connection)(nil)
 
-// Close closes the connection to the database
-//
-//nolint:gocritic
 func (c *Connection) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if c.closed || c.handle == nil {
+	if c.closed || c.handle == 0 {
 		return nil
 	}
-
-	result := C.simple_lancedb_close(c.handle)
-	defer C.simple_lancedb_result_free(result)
-
-	c.handle = nil
+	api, err := loadAPI()
+	if err != nil {
+		return err
+	}
+	api.ConnectionFree(c.handle)
+	c.handle = 0
 	c.closed = true
 	runtime.SetFinalizer(c, nil)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("failed to close connection: %s", errorMsg)
-		}
-		return fmt.Errorf("failed to close connection: unknown error")
-	}
-
 	return nil
 }
 
 func (c *Connection) IsClosed() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.closed
 }
 
-// TableNames returns a list of table names in the database with context
-//
-//nolint:gocritic
 func (c *Connection) TableNames(_ context.Context) ([]string, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	if c.closed || c.handle == nil {
+	if c.closed || c.handle == 0 {
 		return nil, fmt.Errorf("connection is closed")
 	}
-
-	var cNames **C.char
-	var count C.int
-
-	result := C.simple_lancedb_table_names(c.handle, &cNames, &count)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return nil, fmt.Errorf("failed to get table names: %s", errorMsg)
-		}
-		return nil, fmt.Errorf("failed to get table names: unknown error")
+	api, err := loadAPI()
+	if err != nil {
+		return nil, err
 	}
-
-	if count == 0 {
+	var names **byte
+	var count uintptr
+	var errorMessage *byte
+	code := api.ConnectionTableNames(c.handle, &names, &count, &errorMessage)
+	if err := check(api, code, errorMessage, "failed to get table names"); err != nil {
+		if names != nil {
+			api.FreeTableNames(names, count)
+		}
+		return nil, err
+	}
+	tableNames := goStringArray(names, count)
+	if names != nil {
+		api.FreeTableNames(names, count)
+	}
+	if tableNames == nil {
 		return []string{}, nil
 	}
-
-	// Convert C string array to Go string slice
-	tableNames := make([]string, int(count))
-	// #nosec G103 - Safe conversion of C array pointer to Go slice with known bounds
-	cNamesSlice := (*[1 << 20]*C.char)(unsafe.Pointer(cNames))[:count:count]
-	for i, cName := range cNamesSlice {
-		tableNames[i] = C.GoString(cName)
-	}
-
-	// Free the C memory
-	C.simple_lancedb_free_table_names(cNames, count)
-
 	return tableNames, nil
 }
 
-// OpenTable opens an existing table in the database with context
-//
-//nolint:gocritic
 func (c *Connection) OpenTable(_ context.Context, name string) (contracts.ITable, error) {
+	if err := validateNoNUL("table name", name); err != nil {
+		return nil, err
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	if c.closed || c.handle == nil {
+	if c.closed || c.handle == 0 {
 		return nil, fmt.Errorf("connection is closed")
 	}
-
-	cName := C.CString(name)
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cName))
-
-	// #nosec G103 - FFI handle for table from C interop
-	var tableHandle unsafe.Pointer
-	result := C.simple_lancedb_open_table(c.handle, cName, &tableHandle)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return nil, fmt.Errorf("failed to open table %s: %s", name, errorMsg)
-		}
-		return nil, fmt.Errorf("failed to open table %s: unknown error", name)
+	api, err := loadAPI()
+	if err != nil {
+		return nil, err
 	}
-
-	table := &Table{
-		name:       name,
-		connection: c,
-		handle:     tableHandle,
-		closed:     false,
+	var tableHandle uintptr
+	var errorMessage *byte
+	code := api.ConnectionOpenTable(c.handle, name, &tableHandle, &errorMessage)
+	if err := check(api, code, errorMessage, fmt.Sprintf("failed to open table %s", name)); err != nil {
+		return nil, err
 	}
-
-	// Set finalizer to ensure cleanup
-	runtime.SetFinalizer(table, (*Table).Close)
-
+	table := &Table{name: name, connection: c, handle: tableHandle}
+	runtime.SetFinalizer(table, (*Table).finalize)
 	return table, nil
 }
 
-// CreateTable creates a new table in the database with context
-func (c *Connection) CreateTable(ctx context.Context, name string, schema contracts.ISchema) (contracts.ITable, error) {
+func (c *Connection) CreateTable(_ context.Context, name string, schema contracts.ISchema) (contracts.ITable, error) {
+	if err := validateNoNUL("table name", name); err != nil {
+		return nil, err
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	if c.closed || c.handle == nil {
+	if c.closed || c.handle == 0 {
 		return nil, fmt.Errorf("connection is closed")
 	}
-
-	// Convert schema to Arrow IPC bytes (more efficient than JSON)
-	schemaIPC, err := c.schemaToIPC(schema)
+	if schema == nil {
+		return nil, fmt.Errorf("schema is nil")
+	}
+	arrowSchema := schema.ToArrowSchema()
+	ipcBytes, err := schemaToIPCBytes(arrowSchema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert schema to IPC: %w", err)
 	}
-
-	cName := C.CString(name)
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cName))
-
-	// Convert Go bytes to C pointers
-	var cSchemaPtr *C.uchar
-	if len(schemaIPC) > 0 {
-		// #nosec G103 - Safe conversion of Go slice to C pointer for FFI
-		cSchemaPtr = (*C.uchar)(unsafe.Pointer(&schemaIPC[0]))
+	api, err := loadAPI()
+	if err != nil {
+		return nil, err
 	}
-
-	result := C.simple_lancedb_create_table_with_ipc(
-		c.handle,
-		cName,
-		cSchemaPtr,
-		C.size_t(uintptr(len(schemaIPC))),
-	)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return nil, fmt.Errorf("failed to create table %s: %s", name, errorMsg)
-		}
-		return nil, fmt.Errorf("failed to create table %s: unknown error", name)
+	arrowSchemaHandle, err := newIPCSchema(api, ipcBytes)
+	if err != nil {
+		return nil, err
 	}
-
-	// After successful creation, open the table to get a handle
-	return c.OpenTable(ctx, name)
+	var tableHandle uintptr
+	var errorMessage *byte
+	code := api.TableCreate(c.handle, name, arrowSchemaHandle, 0, &tableHandle, &errorMessage)
+	// Empty table creation needs only the schema; the C API borrows it.
+	api.FreeArrowSchema(arrowSchemaHandle)
+	if err := check(api, code, errorMessage, fmt.Sprintf("failed to create table %s", name)); err != nil {
+		return nil, err
+	}
+	table := &Table{name: name, connection: c, handle: tableHandle}
+	runtime.SetFinalizer(table, (*Table).finalize)
+	return table, nil
 }
 
-// DropTable drops a table from the database with context
 func (c *Connection) DropTable(_ context.Context, name string) error {
+	if err := validateNoNUL("table name", name); err != nil {
+		return err
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	if c.closed || c.handle == nil {
+	if c.closed || c.handle == 0 {
 		return fmt.Errorf("connection is closed")
 	}
-
-	cName := C.CString(name)
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cName))
-
-	result := C.simple_lancedb_drop_table(c.handle, cName)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("failed to drop table %s: %s", name, errorMsg)
-		}
-		return fmt.Errorf("failed to drop table %s: unknown error", name)
+	api, err := loadAPI()
+	if err != nil {
+		return err
 	}
-
-	return nil
+	var errorMessage *byte
+	code := api.ConnectionDropTable(c.handle, name, nil, &errorMessage)
+	return check(api, code, errorMessage, fmt.Sprintf("failed to drop table %s", name))
 }
 
-// schemaToIPC converts a Schema to Arrow IPC bytes for efficient transfer
-//
-//nolint:wrapcheck
-func (c *Connection) schemaToIPC(schema contracts.ISchema) ([]byte, error) {
-	if schema.ToArrowSchema() == nil {
-		return nil, fmt.Errorf("schema is nil")
+// Connect opens a connection using the published v0.1.2 options. Region and
+// ReadConsistencyInterval are preserved fields but remain ignored, as they were
+// in v0.1.2. Structured S3 credentials are passed through the per-connection
+// storage setter instead of mutating process environment variables.
+func Connect(ctx context.Context, uri string, options *contracts.ConnectionOptions) (contracts.IConnection, error) {
+	var storageOptions map[string]string
+	if options != nil && options.StorageOptions != nil {
+		storageOptions = legacyStorageOptions(options.StorageOptions)
 	}
-
-	// Create a temporary in-memory file using os.CreateTemp with os.DevNull pattern
-	// This will work with the FileWriter which requires WriteSeeker interface
-	tmpFile, err := os.CreateTemp("", "schema_*.arrow")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer func() {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
-	}()
-
-	// Use FileWriter to create a file format that can be read by FileReader in Rust
-	writer, err := ipc.NewFileWriter(tmpFile, ipc.WithSchema(schema.ToArrowSchema()))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create IPC file writer: %w", err)
-	}
-
-	// Close the writer to finalize the file format (no data, just schema)
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close IPC writer: %w", err)
-	}
-
-	// Seek back to beginning and read the file contents
-	if _, err := tmpFile.Seek(0, 0); err != nil {
-		return nil, fmt.Errorf("failed to seek to beginning: %w", err)
-	}
-
-	return io.ReadAll(tmpFile)
+	return connect(ctx, uri, storageOptions)
 }
 
-// schemaToJSON converts a Schema to JSON string for Rust bindings (deprecated in favor of schemaToIPC)
-func (c *Connection) schemaToJSON(schema Schema) (string, error) {
-	if schema.schema == nil {
-		return "", fmt.Errorf("schema is nil")
-	}
-
-	fields := make([]map[string]interface{}, 0, schema.NumFields())
-
-	for i := 0; i < schema.NumFields(); i++ {
-		field, err := schema.Field(i)
-		if err != nil {
-			return "", fmt.Errorf("failed to get field %d: %w", i, err)
-		}
-
-		fieldMap := map[string]interface{}{
-			"name":     field.Name,
-			"nullable": field.Nullable,
-		}
-
-		// Convert Arrow DataType to string representation
-		typeStr, err := c.arrowTypeToString(field.Type)
-		if err != nil {
-			return "", fmt.Errorf("failed to convert type for field %s: %w", field.Name, err)
-		}
-		fieldMap["type"] = typeStr
-
-		fields = append(fields, fieldMap)
-	}
-
-	schemaMap := map[string]interface{}{
-		"fields": fields,
-	}
-
-	jsonBytes, err := json.Marshal(schemaMap)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal schema to JSON: %w", err)
-	}
-
-	return string(jsonBytes), nil
+// ConnectWithStorageOptions opens a connection with a flat storage-option map.
+// This is the additive path for options the published v0.1.2 structs cannot
+// express.
+func ConnectWithStorageOptions(ctx context.Context, uri string, storageOptions map[string]string) (contracts.IConnection, error) {
+	return connect(ctx, uri, storageOptions)
 }
 
-// //nolint:gocyclo
-// arrowTypeToString converts an Arrow DataType to string representation
-func (c *Connection) arrowTypeToString(dataType arrow.DataType) (string, error) {
-	switch dt := dataType.(type) {
-	case *arrow.Int8Type:
-		return "int8", nil
-	case *arrow.Int16Type:
-		return "int16", nil
-	case *arrow.Int32Type:
-		return "int32", nil
-	case *arrow.Int64Type:
-		return "int64", nil
-	case *arrow.Float16Type:
-		return "float16", nil
-	case *arrow.Float32Type:
-		return "float32", nil
-	case *arrow.Float64Type:
-		return "float64", nil
-	case *arrow.StringType:
-		return "string", nil
-	case *arrow.BinaryType:
-		return "binary", nil
-	case *arrow.BooleanType:
-		return "boolean", nil
-	case *arrow.FixedSizeListType:
-		// Handle vector types (fixed size list of floats)
-		if dt.Elem().ID() == arrow.FLOAT16 {
-			return fmt.Sprintf("fixed_size_list[float16;%d]", dt.Len()), nil
-		}
-		if dt.Elem().ID() == arrow.FLOAT32 {
-			return fmt.Sprintf("fixed_size_list[float32;%d]", dt.Len()), nil
-		}
-		if dt.Elem().ID() == arrow.FLOAT64 {
-			return fmt.Sprintf("fixed_size_list[float64;%d]", dt.Len()), nil
-		}
-		if dt.Elem().ID() == arrow.INT8 {
-			return fmt.Sprintf("fixed_size_list[int8;%d]", dt.Len()), nil
-		}
-		if dt.Elem().ID() == arrow.INT16 {
-			return fmt.Sprintf("fixed_size_list[int16;%d]", dt.Len()), nil
-		}
-		if dt.Elem().ID() == arrow.INT32 {
-			return fmt.Sprintf("fixed_size_list[int32;%d]", dt.Len()), nil
-		}
-		if dt.Elem().ID() == arrow.INT64 {
-			return fmt.Sprintf("fixed_size_list[int64;%d]", dt.Len()), nil
-		}
-
-		return "", fmt.Errorf("unsupported fixed size list element type: %v", dt.Elem())
-	default:
-		return "", fmt.Errorf("unsupported Arrow type: %v", dataType)
+func connect(_ context.Context, uri string, storageOptions map[string]string) (contracts.IConnection, error) {
+	api, err := loadAPI()
+	if err != nil {
+		return nil, err
 	}
+	builder := api.Connect(uri)
+	if builder == 0 {
+		return nil, fmt.Errorf("failed to connect to LanceDB at %s: invalid URI", uri)
+	}
+
+	keys := make([]string, 0, len(storageOptions))
+	for key := range storageOptions {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value := storageOptions[key]
+		next := api.ConnectBuilderStorageOption(builder, key, value)
+		if next == 0 {
+			return nil, fmt.Errorf("failed to connect to LanceDB at %s: invalid storage option %q", uri, key)
+		}
+		builder = next
+	}
+
+	var connectionHandle uintptr
+	var errorMessage *byte
+	code := api.ConnectBuilderExecute(builder, &connectionHandle, &errorMessage)
+	if err := check(api, code, errorMessage, fmt.Sprintf("failed to connect to LanceDB at %s", uri)); err != nil {
+		return nil, err
+	}
+	connection := NewConnection(connectionHandle, false)
+	runtime.SetFinalizer(connection, (*Connection).finalize)
+	return connection, nil
+}
+
+func (c *Connection) finalize() {
+	_ = c.Close()
+}
+
+func legacyStorageOptions(options *contracts.StorageOptions) map[string]string {
+	if options == nil || options.S3Config == nil {
+		return nil
+	}
+	s3 := options.S3Config
+	out := make(map[string]string)
+	put := func(key string, value *string) {
+		if value != nil {
+			out[key] = *value
+		}
+	}
+	put(contracts.StorageAWSAccessKeyID, s3.AccessKeyID)
+	put(contracts.StorageAWSSecretAccessKey, s3.SecretAccessKey)
+	put(contracts.StorageAWSSessionToken, s3.SessionToken)
+	put(contracts.StorageAWSRegion, s3.Region)
+	put(contracts.StorageAWSProfile, s3.Profile)
+	// v0.1.2 only read credentials, session token, region and profile from
+	// the structured S3 config. Endpoint, addressing style, anonymous access
+	// and TLS switches stay explicit through ConnectWithStorageOptions.
+	return out
 }

@@ -1,0 +1,11 @@
+# Keep Go, C header, workflow and example text LF on every checkout so gofmt
+# and shell checks are stable on Windows runners.
+* text=auto
+*.go text eol=lf
+*.h text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf

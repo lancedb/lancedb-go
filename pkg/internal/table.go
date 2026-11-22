@@ -3,12 +3,6 @@
 
 package internal
 
-/*
-#cgo CFLAGS: -I${SRCDIR}/../../include
-#include "lancedb.h"
-*/
-import "C"
-
 import (
 	"bytes"
 	"context"
@@ -16,1242 +10,512 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
-	"time"
-	"unsafe"
 
 	"github.com/apache/arrow/go/v17/arrow"
-	"github.com/apache/arrow/go/v17/arrow/array"
-	"github.com/apache/arrow/go/v17/arrow/ipc"
 
 	"github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/internal/native"
 )
 
-// Table represents a table in the LanceDB database
+// Table is a live lancedb-c table handle.
 type Table struct {
 	name       string
 	connection *Connection
-	// #nosec G103 - FFI handle for C interop with Rust library
-	handle unsafe.Pointer
-	mu     sync.RWMutex
-	closed bool
+	handle     uintptr
+	mu         sync.RWMutex
+	closed     bool
 }
 
-// Compile-time check to ensure Table implements ITable interface
-var _ contracts.ITable = (*Table)(nil)
+var (
+	_ contracts.ITable                = (*Table)(nil)
+	_ contracts.ITableQueryV2         = (*Table)(nil)
+	_ contracts.ITableVectorQuery     = (*Table)(nil)
+	_ contracts.ITableMergeInsert     = (*Table)(nil)
+	_ contracts.ITableIndexManagement = (*Table)(nil)
+	_ contracts.ITableOptimize        = (*Table)(nil)
+	_ contracts.ITableUpdateExpr      = (*Table)(nil)
+	_ contracts.ITableTimeTravel      = (*Table)(nil)
+	_ contracts.ITableSchemaEvolve    = (*Table)(nil)
+	_ contracts.ITablePrewarmIndex    = (*Table)(nil)
+)
 
-// Compile-time check that Table also implements the optional
-// raw-SQL-expression update capability extension.
-var _ contracts.ITableUpdateExpr = (*Table)(nil)
+func (t *Table) Name() string { return t.name }
 
-// Name returns the name of the Table
-func (t *Table) Name() string {
-	return t.name
-}
-
-// IsOpen returns true if the Table is still open
 func (t *Table) IsOpen() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return !t.closed && !t.connection.closed
+	return !t.closed && t.handle != 0 && t.connection != nil && !t.connection.IsClosed()
 }
 
-// Close closes the Table and releases resources
 func (t *Table) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-
-	if t.closed || t.handle == nil {
+	if t.closed || t.handle == 0 {
 		return nil
 	}
-
-	result := C.simple_lancedb_table_close(t.handle)
-	defer C.simple_lancedb_result_free(result)
-
-	t.handle = nil
+	api, err := loadAPI()
+	if err != nil {
+		return err
+	}
+	api.TableFree(t.handle)
+	t.handle = 0
 	t.closed = true
 	runtime.SetFinalizer(t, nil)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("failed to close table: %s", errorMsg)
-		}
-		return fmt.Errorf("failed to close table: unknown error")
-	}
-
 	return nil
 }
 
-// Schema returns the schema of the Table using efficient Arrow IPC format
-//
-//nolint:gocritic
+func (t *Table) finalize() {
+	_ = t.Close()
+}
+
 func (t *Table) Schema(_ context.Context) (*arrow.Schema, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
+	if t.closed || t.handle == 0 {
 		return nil, fmt.Errorf("table is closed")
 	}
-
-	var schemaIPCData *C.uchar
-	var schemaIPCLen C.size_t
-	result := C.simple_lancedb_table_schema_ipc(t.handle, &schemaIPCData, &schemaIPCLen)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return nil, fmt.Errorf("failed to get table schema: %s", errorMsg)
-		}
-		return nil, fmt.Errorf("failed to get table schema: unknown error")
-	}
-
-	if schemaIPCData == nil {
-		return nil, fmt.Errorf("received null schema IPC data")
-	}
-
-	// Free the IPC data when we're done
-	defer C.simple_lancedb_free_ipc_data(schemaIPCData)
-
-	// Convert C data to Go slice
-	// #nosec G103 - Safe conversion of C memory to Go bytes for Arrow IPC data
-	ipcBytes := C.GoBytes(unsafe.Pointer(schemaIPCData), C.int(schemaIPCLen))
-
-	// Create a reader from the IPC bytes
-	reader, err := ipc.NewFileReader(bytes.NewReader(ipcBytes))
+	api, err := loadAPI()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create IPC reader: %w", err)
+		return nil, err
 	}
-	defer reader.Close()
-
-	// Get the schema from the IPC reader
-	schema := reader.Schema()
+	ipcBytes, err := tableSchemaIPC(api, t.handle)
+	if err != nil {
+		return nil, err
+	}
+	records, schema, err := ipcBytesToRecords(ipcBytes)
+	if err != nil {
+		return nil, err
+	}
+	for _, record := range records {
+		record.Release()
+	}
 	if schema == nil {
-		return nil, fmt.Errorf("failed to read schema from IPC data")
+		return nil, fmt.Errorf("lancedb-c returned an empty table schema")
 	}
-
 	return schema, nil
 }
 
-// Add inserts data into the Table
-func (t *Table) Add(ctx context.Context, record arrow.Record, _ *contracts.AddDataOptions) error {
-	var r []arrow.Record
-	if record != nil {
-		r = append(r, record)
+func (t *Table) Add(ctx context.Context, record arrow.Record, options *contracts.AddDataOptions) error {
+	if record == nil {
+		t.mu.RLock()
+		closed := t.closed || t.handle == 0
+		t.mu.RUnlock()
+		if closed {
+			return fmt.Errorf("table is closed")
+		}
+		return nil
 	}
-	return t.AddRecords(ctx, r, nil)
+	return t.AddRecords(ctx, []arrow.Record{record}, options)
 }
 
-// AddRecords efficiently adds multiple records using Arrow IPC batch processing
 func (t *Table) AddRecords(_ context.Context, records []arrow.Record, _ *contracts.AddDataOptions) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
+	if t.closed || t.handle == 0 {
 		return fmt.Errorf("table is closed")
 	}
-
 	if len(records) == 0 {
 		return nil
 	}
-
 	ipcBytes, err := recordsToIPCBytes(records)
 	if err != nil {
 		return err
 	}
-	if len(ipcBytes) == 0 {
-		return fmt.Errorf("no IPC data generated")
+	api, err := loadAPI()
+	if err != nil {
+		return err
 	}
-
-	// Call the Rust function with IPC binary data
-	var addedCount C.int64_t
-	result := C.simple_lancedb_table_add_ipc(
-		t.handle,
-		// #nosec G103 - Safe conversion of Go slice to C array pointer for FFI
-		(*C.uchar)(unsafe.Pointer(&ipcBytes[0])),
-		C.size_t(uintptr(len(ipcBytes))),
-		&addedCount,
-	)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("failed to add records: %s", errorMsg)
-		}
-		return fmt.Errorf("failed to add records: unknown error")
+	reader, _, err := newIPCReader(api, ipcBytes, false)
+	if err != nil {
+		return err
 	}
-
-	return nil
+	var errorMessage *byte
+	code := api.TableAdd(t.handle, reader, &errorMessage)
+	return check(api, code, errorMessage, "failed to add records")
 }
 
-// seekBuffer wraps a bytes.Buffer to implement io.WriteSeeker
-type seekBuffer struct {
-	*bytes.Buffer
-}
-
-func (sb *seekBuffer) Seek(offset int64, whence int) (int64, error) {
-	// For simplicity, we only support seeking to the end for append operations
-	switch whence {
-	case 2: // io.SeekEnd
-		return int64(sb.Len()), nil
-	case 0: // io.SeekStart
-		if offset == 0 {
-			sb.Reset()
-			return 0, nil
-		}
-		return 0, fmt.Errorf("seeking to non-zero position not supported")
-	case 1: // io.SeekCurrent
-		return int64(sb.Len()), nil
-	default:
-		return 0, fmt.Errorf("unsupported whence value")
-	}
-}
-
-func (t *Table) MergeInsert(on []string) contracts.IMergeInsertBuilder {
-	onCopy := append([]string(nil), on...)
-	return &MergeInsertBuilder{table: t, on: onCopy}
-}
-
-// Query creates a new query builder for this Table
-func (t *Table) Query() contracts.IQueryBuilder {
-	return &QueryBuilder{
-		table:   t,
-		filters: make([]string, 0),
-	}
-}
-
-// VectorQuery creates a new vector query builder for this Table
-func (t *Table) VectorQuery(column string, vector []float32) contracts.IVectorQueryBuilder {
-	var vectorCopy []float32
-	if vector != nil {
-		vectorCopy = make([]float32, len(vector))
-		copy(vectorCopy, vector)
-	}
-	return &VectorQueryBuilder{
-		QueryBuilder: QueryBuilder{
-			table:   t,
-			filters: make([]string, 0),
-			columns: nil,
-		},
-		vector: vectorCopy,
-		column: column,
-	}
-}
-
-// Count returns the number of rows in the Table
 func (t *Table) Count(_ context.Context) (int64, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
+	if t.closed || t.handle == 0 {
 		return 0, fmt.Errorf("table is closed")
 	}
-
-	var count C.int64_t
-	result := C.simple_lancedb_table_count_rows(t.handle, &count)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return 0, fmt.Errorf("failed to count rows: %s", errorMsg)
-		}
-		return 0, fmt.Errorf("failed to count rows: unknown error")
+	api, err := loadAPI()
+	if err != nil {
+		return 0, err
 	}
-
+	var count uintptr
+	var errorMessage *byte
+	code := api.TableCountRowsWithStatus(t.handle, &count, &errorMessage)
+	if err := check(api, code, errorMessage, "failed to count rows"); err != nil {
+		return 0, err
+	}
+	if uint64(count) > math.MaxInt64 {
+		return 0, fmt.Errorf("row count %d overflows int64", count)
+	}
 	return int64(count), nil
 }
 
-// Version returns the current version of the Table
 func (t *Table) Version(_ context.Context) (int, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
+	if t.closed || t.handle == 0 {
 		return 0, fmt.Errorf("table is closed")
 	}
-
-	var version C.int64_t
-	result := C.simple_lancedb_table_version(t.handle, &version)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return 0, fmt.Errorf("failed to get table version: %s", errorMsg)
-		}
-		return 0, fmt.Errorf("failed to get table version: unknown error")
+	api, err := loadAPI()
+	if err != nil {
+		return 0, err
 	}
-
+	var version uint64
+	var errorMessage *byte
+	code := api.TableVersionWithStatus(t.handle, &version, &errorMessage)
+	if err := check(api, code, errorMessage, "failed to get table version"); err != nil {
+		return 0, err
+	}
+	if version > math.MaxInt {
+		return 0, fmt.Errorf("table version %d overflows int", version)
+	}
 	return int(version), nil
 }
 
-// Update updates records in the Table based on a filter
 func (t *Table) Update(_ context.Context, filter string, updates map[string]interface{}) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
-		return fmt.Errorf("table is closed")
+	if strings.TrimSpace(filter) == "" {
+		return fmt.Errorf("failed to update rows: predicate must not be empty")
 	}
-
-	// Convert updates map to JSON
-	updatesJSON, err := json.Marshal(updates)
-	if err != nil {
-		return fmt.Errorf("failed to marshal updates to JSON: %w", err)
-	}
-
-	cFilter := C.CString(filter)
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cFilter))
-
-	cUpdatesJSON := C.CString(string(updatesJSON))
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cUpdatesJSON))
-
-	result := C.simple_lancedb_table_update(t.handle, cFilter, cUpdatesJSON)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("failed to update rows: %s", errorMsg)
-		}
-		return fmt.Errorf("failed to update rows: unknown error")
-	}
-
-	return nil
-}
-
-// UpdateExpr forwards each assignment.Expr to lancedb's UpdateBuilder
-// verbatim and returns the resulting rows_updated / version pair.
-//
-// Empty filter == "" updates every row (no WHERE).
-//
-// Empty assignments is rejected — a SET-less UPDATE is almost always a
-// caller bug, and lancedb's own UpdateBuilder.execute() already enforces
-// the same precondition.
-func (t *Table) UpdateExpr(_ context.Context, filter string, assignments []contracts.UpdateAssignment) (*contracts.UpdateResult, error) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
-		return nil, fmt.Errorf("table is closed")
-	}
-
-	if len(assignments) == 0 {
-		return nil, fmt.Errorf("at least one assignment must be specified")
-	}
-	for i, a := range assignments {
-		if a.Column == "" {
-			return nil, fmt.Errorf("assignment #%d: column name cannot be empty", i)
-		}
-	}
-
-	assignmentsJSON, err := json.Marshal(assignments)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal assignments to JSON: %w", err)
-	}
-
-	// A null predicate ptr signals "update all rows" on the Rust side.
-	// CString("") would also work but allocates a 1-byte block for nothing.
-	var cFilter *C.char
-	if filter != "" {
-		cFilter = C.CString(filter)
-		// #nosec G103 - Required for freeing C allocated string memory
-		defer C.free(unsafe.Pointer(cFilter))
-	}
-
-	cAssignments := C.CString(string(assignmentsJSON))
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cAssignments))
-
-	var resultJSON *C.char
-	result := C.simple_lancedb_table_update_expr(t.handle, cFilter, cAssignments, &resultJSON)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			return nil, fmt.Errorf("failed to update rows: %s", C.GoString(result.ERROR_MESSAGE))
-		}
-		return nil, fmt.Errorf("failed to update rows: unknown error")
-	}
-
-	if resultJSON == nil {
-		return &contracts.UpdateResult{}, nil
-	}
-	jsonStr := C.GoString(resultJSON)
-	C.simple_lancedb_free_string(resultJSON)
-
-	var ur contracts.UpdateResult
-	if err := json.Unmarshal([]byte(jsonStr), &ur); err != nil {
-		return nil, fmt.Errorf("update_expr: failed to parse result JSON: %w", err)
-	}
-	return &ur, nil
-}
-
-// Delete deletes records from the Table based on a filter
-func (t *Table) Delete(_ context.Context, filter string) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
-		return fmt.Errorf("table is closed")
-	}
-
-	cFilter := C.CString(filter)
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cFilter))
-
-	var deletedCount C.int64_t
-	result := C.simple_lancedb_table_delete(t.handle, cFilter, &deletedCount)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("failed to delete rows: %s", errorMsg)
-		}
-		return fmt.Errorf("failed to delete rows: unknown error")
-	}
-
-	// Note: deletedCount is set to -1 in the Rust implementation since LanceDB doesn't expose the count
-	// We could return the count if needed, but for now we just ensure the operation succeeded
-	return nil
-}
-
-// DropIndex removes the named index from the table. Caller-side IF EXISTS
-// semantics are not implemented here — propagate the not-found error and
-// let the caller decide whether to swallow it.
-func (t *Table) DropIndex(_ context.Context, name string) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
-		return fmt.Errorf("table is closed")
-	}
-
-	if name == "" {
-		return fmt.Errorf("index name cannot be empty")
-	}
-
-	cName := C.CString(name)
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cName))
-
-	result := C.simple_lancedb_table_drop_index(t.handle, cName)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("failed to drop index: %s", errorMsg)
-		}
-		return fmt.Errorf("failed to drop index: unknown error")
-	}
-	return nil
-}
-
-// PrewarmIndex loads pages of the named index into the index cache. The
-// backend reports success once the request is accepted; pages are loaded
-// up to the available cache. Not all index types support prewarming —
-// unsupported types are propagated as a backend error.
-func (t *Table) PrewarmIndex(_ context.Context, name string) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
-		return fmt.Errorf("table is closed")
-	}
-
-	if name == "" {
-		return fmt.Errorf("index name cannot be empty")
-	}
-
-	cName := C.CString(name)
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cName))
-
-	result := C.simple_lancedb_table_prewarm_index(t.handle, cName)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("failed to prewarm index: %s", errorMsg)
-		}
-		return fmt.Errorf("failed to prewarm index: unknown error")
-	}
-	return nil
-}
-
-// CreateIndex creates an index on the specified columns
-func (t *Table) CreateIndex(ctx context.Context, columns []string, indexType contracts.IndexType) error {
-	return t.CreateIndexWithName(ctx, columns, indexType, "")
-}
-
-// CreateIndexWithName creates an index on the specified columns with an optional name
-func (t *Table) CreateIndexWithName(_ context.Context, columns []string, indexType contracts.IndexType, name string) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
-		return fmt.Errorf("table is closed")
-	}
-
-	if len(columns) == 0 {
-		return fmt.Errorf("columns list cannot be empty")
-	}
-
-	// Convert columns to JSON
-	columnsJSON, err := json.Marshal(columns)
-	if err != nil {
-		return fmt.Errorf("failed to marshal columns to JSON: %w", err)
-	}
-
-	// Convert index type to string
-	indexTypeStr := t.indexTypeToString(indexType)
-
-	cColumnsJSON := C.CString(string(columnsJSON))
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cColumnsJSON))
-
-	cIndexType := C.CString(indexTypeStr)
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cIndexType))
-
-	var cIndexName *C.char
-	if name != "" {
-		cIndexName = C.CString(name)
-		// #nosec G103 - Required for freeing C allocated string memory
-		defer C.free(unsafe.Pointer(cIndexName))
-	}
-
-	result := C.simple_lancedb_table_create_index(t.handle, cColumnsJSON, cIndexType, cIndexName)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("failed to create index: %s", errorMsg)
-		}
-		return fmt.Errorf("failed to create index: unknown error")
-	}
-
-	return nil
-}
-
-// GetAllIndexes returns information about all indexes created on this table
-//
-//nolint:gocritic
-func (t *Table) GetAllIndexes(_ context.Context) ([]contracts.IndexInfo, error) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
-		return nil, fmt.Errorf("table is closed")
-	}
-
-	var indexesJSON *C.char
-	result := C.simple_lancedb_table_get_indexes(t.handle, &indexesJSON)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return nil, fmt.Errorf("failed to get indexes: %s", errorMsg)
-		}
-		return nil, fmt.Errorf("failed to get indexes: unknown error")
-	}
-
-	if indexesJSON == nil {
-		return []contracts.IndexInfo{}, nil // Return empty slice if no indexes
-	}
-
-	jsonStr := C.GoString(indexesJSON)
-	C.simple_lancedb_free_string(indexesJSON)
-
-	// Parse JSON response
-	var indexes []contracts.IndexInfo
-	if err := json.Unmarshal([]byte(jsonStr), &indexes); err != nil {
-		return nil, fmt.Errorf("failed to parse indexes JSON: %w", err)
-	}
-
-	return indexes, nil
-}
-
-// Retrieve statistics about an index
-func (t *Table) IndexStats(_ context.Context, indexName string) (*contracts.IndexStatistics, error) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
-		return nil, fmt.Errorf("table is closed")
-	}
-
-	cIndexName := C.CString(indexName)
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cIndexName))
-
-	var indexStatsJSON *C.char
-	result := C.simple_lancedb_table_index_stats(t.handle, cIndexName, &indexStatsJSON)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return nil, fmt.Errorf("failed to get indexes: %s", errorMsg)
-		}
-		return nil, fmt.Errorf("failed to get indexes: unknown error")
-	}
-
-	if indexStatsJSON == nil {
-		return nil, nil
-	}
-
-	jsonStr := C.GoString(indexStatsJSON)
-	C.simple_lancedb_free_string(indexStatsJSON)
-
-	// Parse JSON response
-	var indexStats contracts.IndexStatistics
-	if err := json.Unmarshal([]byte(jsonStr), &indexStats); err != nil {
-		return nil, fmt.Errorf("failed to parse index stats JSON: %w", err)
-	}
-
-	return &indexStats, nil
-}
-
-// WaitForIndex blocks until every index in `names` reports zero unindexed
-// rows or the deadline elapses. An empty `names` slice defers to the
-// backend's "all indices on this table" behaviour.
-//
-// Deadline composition (most-restrictive wins, then forwarded to the
-// Rust side as a single millisecond budget):
-//   - `timeout > 0`           — explicit upper bound from the caller.
-//   - `ctx` carries a deadline — narrows the budget to whichever expires
-//     first. This makes `context.WithTimeout` actually bound the FFI call,
-//     which it didn't in the prior revision.
-//   - `timeout < 0`           — treated as "no wait" (1ms floor).
-//   - `timeout == 0` and ctx has no deadline — wait forever (Rust's
-//     `Duration::MAX`); abort only via process exit.
-//
-// Sub-millisecond positive durations are rounded up to 1ms instead of
-// truncating to 0, which the Rust side would otherwise interpret as
-// "wait forever".
-//
-// Implementation note: lancedb-rust's wait_for_index isn't cancellation
-// aware once it starts, so a bare `ctx.Cancel()` (no deadline) will not
-// interrupt an in-flight call. Callers needing tight cancellation should
-// pass a deadline-bearing ctx or a positive `timeout`.
-//
-//nolint:gocritic
-func (t *Table) WaitForIndex(ctx context.Context, names []string, timeout time.Duration) error {
-	if err := ctx.Err(); err != nil {
+	if err := validateNoNUL("predicate", filter); err != nil {
 		return err
 	}
-
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
-		return fmt.Errorf("table is closed")
+	if len(updates) == 0 {
+		return fmt.Errorf("updates map cannot be empty")
 	}
-
-	// Allocate C strings for each name; keep them alive until after the
-	// FFI call returns so the pointers we hand in stay valid.
-	cNames := make([]*C.char, len(names))
-	for i, n := range names {
-		cNames[i] = C.CString(n)
-	}
-	defer func() {
-		for _, p := range cNames {
-			// #nosec G103 - Required for freeing C allocated string memory
-			C.free(unsafe.Pointer(p))
+	columns := make([]string, 0, len(updates))
+	for column := range updates {
+		if err := validateNoNUL("update column", column); err != nil {
+			return err
 		}
-	}()
-
-	var namesPtr **C.char
-	if len(cNames) > 0 {
-		namesPtr = (**C.char)(unsafe.Pointer(&cNames[0]))
+		columns = append(columns, column)
 	}
-
-	timeoutMs := ComputeWaitTimeoutMs(ctx, timeout)
-
-	result := C.simple_lancedb_table_wait_for_index(
-		t.handle,
-		namesPtr,
-		C.size_t(len(cNames)),
-		C.uint64_t(timeoutMs),
-	)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("wait_for_index failed: %s", errorMsg)
+	sort.Strings(columns)
+	expressions := make([]string, len(columns))
+	for i, column := range columns {
+		expression, err := legacyJSONScalar(updates[column])
+		if err != nil {
+			return fmt.Errorf("update column %s: %w", column, err)
 		}
-		return fmt.Errorf("wait_for_index failed: unknown error")
+		expressions[i] = expression
 	}
-	return nil
+	_, err := t.updateExpressions(filter, columns, expressions)
+	return err
 }
 
-// ComputeWaitTimeoutMs folds the caller's `timeout` and any deadline
-// carried by ctx into a single millisecond budget for the Rust side.
-// Returns 0 only when both the caller asks for no upper bound and ctx
-// carries no deadline — that's the only path the Rust side maps to
-// Duration::MAX. Sub-millisecond positive budgets are rounded up to 1
-// to avoid the truncation bug that would otherwise surface them as 0.
-//
-// Exported only so the table-tests package can pin these invariants
-// without spinning up a LanceDB connection per case; not part of the
-// public surface (the contracts package does not re-export it).
-func ComputeWaitTimeoutMs(ctx context.Context, timeout time.Duration) uint64 {
-	// Negative caller timeout: emulate "no wait" with a 1ms floor so the
-	// FFI call returns promptly instead of hanging on Duration::MAX.
-	if timeout < 0 {
-		return 1
+func (t *Table) UpdateExpr(_ context.Context, filter string, assignments []contracts.UpdateAssignment) (*contracts.UpdateResult, error) {
+	if len(assignments) == 0 {
+		return nil, fmt.Errorf("update_expr: assignments must be non-empty")
 	}
-
-	effective := timeout
-	if dl, ok := ctx.Deadline(); ok {
-		remaining := time.Until(dl)
-		if remaining <= 0 {
-			return 1 // deadline already passed; let the FFI return ASAP
+	if err := validateNoNUL("predicate", filter); err != nil {
+		return nil, err
+	}
+	columns := make([]string, len(assignments))
+	expressions := make([]string, len(assignments))
+	for i, assignment := range assignments {
+		if strings.TrimSpace(assignment.Column) == "" {
+			return nil, fmt.Errorf("update_expr: assignments[%d].Column is empty", i)
 		}
-		if effective == 0 || remaining < effective {
-			effective = remaining
+		if strings.TrimSpace(assignment.Expr) == "" {
+			return nil, fmt.Errorf("update_expr: assignments[%d].Expr is empty", i)
 		}
+		if err := validateNoNUL(fmt.Sprintf("update_expr: assignments[%d].Column", i), assignment.Column); err != nil {
+			return nil, err
+		}
+		if err := validateNoNUL(fmt.Sprintf("update_expr: assignments[%d].Expr", i), assignment.Expr); err != nil {
+			return nil, err
+		}
+		columns[i] = assignment.Column
+		expressions[i] = assignment.Expr
 	}
-
-	if effective == 0 {
-		return 0 // caller wants unbounded and ctx has no deadline
-	}
-
-	ms := effective.Milliseconds()
-	if ms < 1 {
-		ms = 1 // floor sub-ms positive durations so they aren't truncated to 0
-	}
-	return uint64(ms)
+	return t.updateExpressions(filter, columns, expressions)
 }
 
-// Select executes a select query with various predicates (vector search, filters, etc.)
-//
-//nolint:gocritic
-func (t *Table) Select(_ context.Context, config contracts.QueryConfig) ([]map[string]interface{}, error) {
+func (t *Table) updateExpressions(filter string, columns, expressions []string) (*contracts.UpdateResult, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
+	if t.closed || t.handle == 0 {
 		return nil, fmt.Errorf("table is closed")
 	}
-
-	// Convert lancedb.QueryConfig to JSON
-	configJSON, err := json.Marshal(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal query config to JSON: %w", err)
-	}
-
-	cConfigJSON := C.CString(string(configJSON))
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cConfigJSON))
-
-	var resultJSON *C.char
-	result := C.simple_lancedb_table_select_query(t.handle, cConfigJSON, &resultJSON)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return nil, fmt.Errorf("failed to execute select query: %s", errorMsg)
-		}
-		return nil, fmt.Errorf("failed to execute select query: unknown error")
-	}
-
-	if resultJSON == nil {
-		return []map[string]interface{}{}, nil // Return empty slice if no results
-	}
-
-	jsonStr := C.GoString(resultJSON)
-	C.simple_lancedb_free_string(resultJSON)
-
-	// Parse JSON response
-	var rows []map[string]interface{}
-	if err := json.Unmarshal([]byte(jsonStr), &rows); err != nil {
-		return nil, fmt.Errorf("failed to parse query results JSON: %w", err)
-	}
-
-	return rows, nil
-}
-
-// SelectIPC executes a query and returns raw Arrow IPC bytes.
-// The caller must deserialize the IPC data into Arrow Records.
-//
-//nolint:gocritic
-func (t *Table) SelectIPC(_ context.Context, config contracts.QueryConfig) ([]byte, error) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
-		return nil, fmt.Errorf("table is closed")
-	}
-
-	configJSON, err := json.Marshal(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal query config to JSON: %w", err)
-	}
-
-	cConfigJSON := C.CString(string(configJSON))
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cConfigJSON))
-
-	var resultIPCData *C.uchar
-	var resultIPCLen C.size_t
-	result := C.simple_lancedb_table_select_query_ipc(t.handle, cConfigJSON, &resultIPCData, &resultIPCLen)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return nil, fmt.Errorf("failed to execute IPC query: %s", errorMsg)
-		}
-		return nil, fmt.Errorf("failed to execute IPC query: unknown error")
-	}
-
-	if resultIPCData == nil || resultIPCLen == 0 {
-		return nil, nil // Empty result set
-	}
-
-	// Guard against integer truncation for payloads > 2GB
-	if resultIPCLen > C.size_t(math.MaxInt32) {
-		C.simple_lancedb_free_ipc_data(resultIPCData)
-		return nil, fmt.Errorf("IPC result too large (%d bytes) to copy", resultIPCLen)
-	}
-
-	// Copy IPC data to Go-owned memory and free C allocation
-	// #nosec G103 - Safe conversion of C memory to Go bytes for Arrow IPC data
-	ipcBytes := C.GoBytes(unsafe.Pointer(resultIPCData), C.int(resultIPCLen))
-	C.simple_lancedb_free_ipc_data(resultIPCData)
-
-	return ipcBytes, nil
-}
-
-// SelectWithColumns is a convenience method for selecting specific columns
-func (t *Table) SelectWithColumns(ctx context.Context, columns []string) ([]map[string]interface{}, error) {
-	return t.Select(ctx, contracts.QueryConfig{
-		Columns: columns,
-	})
-}
-
-// SelectWithFilter is a convenience method for selecting with a WHERE filter
-func (t *Table) SelectWithFilter(ctx context.Context, filter string) ([]map[string]interface{}, error) {
-	return t.Select(ctx, contracts.QueryConfig{
-		Where: filter,
-	})
-}
-
-// VectorSearch is a convenience method for vector similarity search
-func (t *Table) VectorSearch(ctx context.Context, column string, vector []float32, k int) ([]map[string]interface{}, error) {
-	return t.Select(ctx, contracts.QueryConfig{
-		VectorSearch: &contracts.VectorSearch{
-			Column: column,
-			Vector: vector,
-			K:      k,
-		},
-	})
-}
-
-// VectorSearchWithFilter combines vector search with additional filtering
-func (t *Table) VectorSearchWithFilter(ctx context.Context, column string, vector []float32, k int, filter string) ([]map[string]interface{}, error) {
-	return t.Select(ctx, contracts.QueryConfig{
-		VectorSearch: &contracts.VectorSearch{
-			Column: column,
-			Vector: vector,
-			K:      k,
-		},
-		Where: filter,
-	})
-}
-
-// FullTextSearch is a convenience method for full-text search
-func (t *Table) FullTextSearch(ctx context.Context, column string, query string) ([]map[string]interface{}, error) {
-	return t.Select(ctx, contracts.QueryConfig{
-		FTSSearch: &contracts.FTSSearch{
-			Column: column,
-			Query:  query,
-		},
-	})
-}
-
-// FullTextSearchWithFilter combines full-text search with additional filtering
-func (t *Table) FullTextSearchWithFilter(ctx context.Context, column string, query string, filter string) ([]map[string]interface{}, error) {
-	return t.Select(ctx, contracts.QueryConfig{
-		FTSSearch: &contracts.FTSSearch{
-			Column: column,
-			Query:  query,
-		},
-		Where: filter,
-	})
-}
-
-// SelectWithLimit is a convenience method for selecting with limit and offset
-func (t *Table) SelectWithLimit(ctx context.Context, limit int, offset int) ([]map[string]interface{}, error) {
-	return t.Select(ctx, contracts.QueryConfig{
-		Limit:  &limit,
-		Offset: &offset,
-	})
-}
-
-// Optimize the on-disk data and indices for better performance.
-// Equivalent to OptimizeWithAction(ctx, OptimizeAction{Kind: OptimizeAll}).
-func (t *Table) Optimize(ctx context.Context) (*contracts.OptimizeStats, error) {
-	return t.OptimizeWithAction(ctx, contracts.OptimizeAction{Kind: contracts.OptimizeAll})
-}
-
-// OptimizeWithAction runs the configured OptimizeAction (All / Compact /
-// Prune / Index) and returns the resulting stats.
-//
-//nolint:gocritic
-func (t *Table) OptimizeWithAction(_ context.Context, action contracts.OptimizeAction) (*contracts.OptimizeStats, error) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
-		return nil, fmt.Errorf("table is closed")
-	}
-
-	actionJSON, err := optimizeActionToJSON(action)
+	api, err := loadAPI()
 	if err != nil {
 		return nil, err
 	}
-	cActionJSON := C.CString(string(actionJSON))
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cActionJSON))
+	columnPtrs, keepColumns := cStringArray(columns)
+	defer keepColumns()
+	expressionPtrs, keepExpressions := cStringArray(expressions)
+	defer keepExpressions()
 
-	var optimizeStatsJSON *C.char
-	result := C.simple_lancedb_table_optimize_v2(t.handle, cActionJSON, &optimizeStatsJSON)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return nil, fmt.Errorf("failed to optimize table: %s", errorMsg)
-		}
-		return nil, fmt.Errorf("failed to optimize table: unknown error")
+	var predicate *byte
+	var predicateData []byte
+	if filter != "" {
+		predicate, predicateData = cStringPtr(filter)
+		defer runtime.KeepAlive(predicateData)
 	}
-
-	if optimizeStatsJSON == nil {
-		return nil, fmt.Errorf("optimize stats is nil")
+	var result native.UpdateResult
+	var errorMessage *byte
+	code := api.TableUpdate(t.handle, columnPtrs, expressionPtrs, uintptr(len(columns)), predicate, &result, &errorMessage)
+	if err := check(api, code, errorMessage, "failed to update rows"); err != nil {
+		return nil, err
 	}
-
-	jsonStr := C.GoString(optimizeStatsJSON)
-	C.simple_lancedb_free_string(optimizeStatsJSON)
-
-	var optimizeStats contracts.OptimizeStats
-	if err := json.Unmarshal([]byte(jsonStr), &optimizeStats); err != nil {
-		return nil, fmt.Errorf("failed to parse optimize stats JSON: %w", err)
-	}
-	return &optimizeStats, nil
+	return &contracts.UpdateResult{RowsUpdated: result.RowsUpdated, Version: result.Version}, nil
 }
 
-// optimizeActionToJSON converts the public OptimizeAction into the wire
-// shape consumed by simple_lancedb_table_optimize_v2. Per-kind fields
-// from CompactionParams / PruneParams that are nil are omitted so the
-// Rust side falls back to its defaults.
-//
-// Exported only as a private helper; callers should use
-// OptimizeWithAction (or Optimize for the All shortcut).
-func optimizeActionToJSON(action contracts.OptimizeAction) ([]byte, error) {
-	switch action.Kind {
-	case contracts.OptimizeAll:
-		return json.Marshal(struct {
-			Type string `json:"type"`
-		}{Type: "all"})
-
-	case contracts.OptimizeCompact:
-		envelope := struct {
-			Type string `json:"type"`
-			contracts.CompactionParams
-		}{
-			Type:             "compact",
-			CompactionParams: action.Compaction,
-		}
-		return json.Marshal(envelope)
-
-	case contracts.OptimizePrune:
-		envelope := struct {
-			Type                     string  `json:"type"`
-			OlderThanSeconds         *uint64 `json:"older_than_seconds,omitempty"`
-			DeleteUnverified         *bool   `json:"delete_unverified,omitempty"`
-			ErrorIfTaggedOldVersions *bool   `json:"error_if_tagged_old_versions,omitempty"`
-		}{Type: "prune"}
-		if action.Prune.OlderThan > 0 {
-			// Floor sub-second positive durations to 1s instead of
-			// truncating to 0 — the Rust side maps 0 to
-			// TimeDelta::seconds(0) (immediate cutoff), which would
-			// silently prune very recent versions when callers pass a
-			// small duration like 500*time.Millisecond.
-			secs := uint64(action.Prune.OlderThan / time.Second)
-			if secs == 0 {
-				secs = 1
-			}
-			envelope.OlderThanSeconds = &secs
-		}
-		envelope.DeleteUnverified = action.Prune.DeleteUnverified
-		envelope.ErrorIfTaggedOldVersions = action.Prune.ErrorIfTaggedOldVersions
-		return json.Marshal(envelope)
-
-	case contracts.OptimizeIndex:
-		return json.Marshal(struct {
-			Type string `json:"type"`
-		}{Type: "index"})
-
-	default:
-		return nil, fmt.Errorf("unknown OptimizeActionKind: %d", action.Kind)
+func (t *Table) Delete(_ context.Context, filter string) error {
+	if err := validateNoNUL("predicate", filter); err != nil {
+		return err
 	}
-}
-
-// indexTypeToString converts IndexType enum to string representation
-func (t *Table) indexTypeToString(indexType contracts.IndexType) string {
-	switch indexType {
-	case contracts.IndexTypeAuto:
-		return "vector" // Default to vector index for auto
-	case contracts.IndexTypeIvfPq:
-		return "ivf_pq"
-	case contracts.IndexTypeIvfFlat:
-		return "ivf_flat"
-	case contracts.IndexTypeHnswPq:
-		return "hnsw_pq"
-	case contracts.IndexTypeHnswSq:
-		return "hnsw_sq"
-	case contracts.IndexTypeBTree:
-		return "btree"
-	case contracts.IndexTypeBitmap:
-		return "bitmap"
-	case contracts.IndexTypeLabelList:
-		return "label_list"
-	case contracts.IndexTypeFts:
-		return "fts"
-	default:
-		return "vector" // Default fallback
-	}
-}
-
-// CreateIndexWithParams creates an index using the v2 FFI entry point,
-// which accepts a JSON config carrying per-type tuning parameters plus
-// name/replace/wait_timeout. `opts` may be nil for defaults.
-//
-//nolint:gocritic
-func (t *Table) CreateIndexWithParams(
-	_ context.Context,
-	columns []string,
-	indexType contracts.IndexType,
-	params contracts.IndexParams,
-	opts *contracts.CreateIndexOptions,
-) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-
-	if t.closed || t.handle == nil {
+	if t.closed || t.handle == 0 {
 		return fmt.Errorf("table is closed")
 	}
-
-	columnsJSON, err := json.Marshal(columns)
+	api, err := loadAPI()
 	if err != nil {
-		return fmt.Errorf("failed to marshal columns: %w", err)
+		return err
 	}
+	var errorMessage *byte
+	code := api.TableDelete(t.handle, filter, &errorMessage)
+	return check(api, code, errorMessage, "failed to delete rows")
+}
 
-	// Embed IndexParams' fields into an envelope carrying type +
-	// distance_type, which aren't part of the params struct's JSON
-	// surface. Single Marshal; no intermediate map.
-	envelope := struct {
-		Type         string `json:"type"`
-		DistanceType string `json:"distance_type,omitempty"`
-		contracts.IndexParams
-	}{
-		Type:        t.indexTypeToString(indexType),
-		IndexParams: params,
-	}
-	if params.DistanceType != contracts.DistanceTypeUnspecified {
-		dt, err := distanceTypeToString(params.DistanceType)
-		if err != nil {
-			return fmt.Errorf("invalid IndexParams.DistanceType: %w", err)
-		}
-		envelope.DistanceType = dt
-	}
-	cfgJSON, err := json.Marshal(envelope)
-	if err != nil {
-		return fmt.Errorf("failed to marshal index config: %w", err)
-	}
+func (t *Table) MergeInsert(on []string) contracts.IMergeInsertBuilder {
+	return &MergeInsertBuilder{table: t, on: append([]string(nil), on...)}
+}
 
-	var (
-		name          string
-		replace       bool
-		waitTimeoutMs uint64
-	)
-	if opts != nil {
-		name = opts.Name
-		replace = opts.Replace
-		if opts.WaitTimeout > 0 {
-			ms := opts.WaitTimeout.Milliseconds()
-			if ms > 0 {
-				waitTimeoutMs = uint64(ms)
-			}
-		}
-	}
+// Query returns the published v0.1.2 query builder.
+func (t *Table) Query() contracts.IQueryBuilder {
+	state := newQueryState(t)
+	state.legacy = true
+	return &QueryBuilder{state: state}
+}
 
-	cColumnsJSON := C.CString(string(columnsJSON))
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cColumnsJSON))
+// QueryV2 returns the additive context/single-record query builder.
+func (t *Table) QueryV2() contracts.IQueryBuilderV2 {
+	return &QueryBuilderV2{state: newQueryState(t)}
+}
 
-	cConfigJSON := C.CString(string(cfgJSON))
-	// #nosec G103 - Required for freeing C allocated string memory
-	defer C.free(unsafe.Pointer(cConfigJSON))
+// VectorQuery returns the additive vector query builder.
+func (t *Table) VectorQuery(column string, vector []float32) contracts.IVectorQueryBuilderV2 {
+	vectorCopy := append([]float32(nil), vector...)
+	state := newQueryState(t)
+	state.vectorRequested = true
+	return &VectorQueryBuilderV2{state: state, vector: vectorCopy, column: column}
+}
 
-	var cName *C.char
-	if name != "" {
-		cName = C.CString(name)
-		// #nosec G103 - Required for freeing C allocated string memory
-		defer C.free(unsafe.Pointer(cName))
-	}
-
-	result := C.simple_lancedb_table_create_index_v2(
-		t.handle,
-		cColumnsJSON,
-		cConfigJSON,
-		cName,
-		C.bool(replace),
-		C.uint64_t(waitTimeoutMs),
-	)
-	defer C.simple_lancedb_result_free(result)
-
-	if !result.SUCCESS {
-		if result.ERROR_MESSAGE != nil {
-			errorMsg := C.GoString(result.ERROR_MESSAGE)
-			return fmt.Errorf("create_index_v2 failed: %s", errorMsg)
-		}
-		return fmt.Errorf("create_index_v2 failed: unknown error")
+func validateNoNUL(field, value string) error {
+	if strings.IndexByte(value, 0) >= 0 {
+		return fmt.Errorf("%s contains an embedded NUL byte", field)
 	}
 	return nil
 }
 
-// recordToJSON converts an Arrow Record to JSON format
-func (t *Table) recordToJSON(record arrow.Record) (string, error) {
-	schema := record.Schema()
-	rows := make([]map[string]interface{}, record.NumRows())
-
-	// Initialize rows
-	for i := range rows {
-		rows[i] = make(map[string]interface{})
-	}
-
-	// Process each column
-	for colIdx, field := range schema.Fields() {
-		column := record.Column(colIdx)
-		fieldName := field.Name
-
-		if err := t.convertColumnToJSON(column, fieldName, field.Type, rows); err != nil {
-			return "", fmt.Errorf("failed to convert column %s: %w", fieldName, err)
+func validateNoNULStrings(field string, values []string) error {
+	for i, value := range values {
+		if err := validateNoNUL(fmt.Sprintf("%s[%d]", field, i), value); err != nil {
+			return err
 		}
 	}
-
-	// Convert to JSON
-	jsonBytes, err := json.Marshal(rows)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal JSON: %w", err)
-	}
-
-	return string(jsonBytes), nil
+	return nil
 }
 
-// convertColumnToJSON converts an Arrow column to JSON values in the rows
-//
-//nolint:gocyclo,nestif, gocognit
-func (t *Table) convertColumnToJSON(column arrow.Array, fieldName string, dataType arrow.DataType, rows []map[string]interface{}) error {
-	switch dataType.ID() {
-	case arrow.INT32:
-		arr := column.(*array.Int32)
-		for i := 0; i < arr.Len(); i++ {
-			if arr.IsNull(i) {
-				rows[i][fieldName] = nil
-			} else {
-				rows[i][fieldName] = arr.Value(i)
-			}
+func legacyJSONScalar(value interface{}) (string, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("value is not JSON-serializable: %w", err)
+	}
+	encoded = bytes.TrimSpace(encoded)
+	if len(encoded) == 0 {
+		return "", fmt.Errorf("value encoded to an empty JSON scalar")
+	}
+	switch encoded[0] {
+	case '"':
+		var text string
+		if err := json.Unmarshal(encoded, &text); err != nil {
+			return "", fmt.Errorf("decode JSON string: %w", err)
 		}
-	case arrow.INT64:
-		arr := column.(*array.Int64)
-		for i := 0; i < arr.Len(); i++ {
-			if arr.IsNull(i) {
-				rows[i][fieldName] = nil
-			} else {
-				rows[i][fieldName] = arr.Value(i)
-			}
+		if err := validateNoNUL("update value", text); err != nil {
+			return "", err
 		}
-	case arrow.FLOAT32:
-		arr := column.(*array.Float32)
-		for i := 0; i < arr.Len(); i++ {
-			if arr.IsNull(i) {
-				rows[i][fieldName] = nil
-			} else {
-				rows[i][fieldName] = arr.Value(i)
-			}
+		return "'" + strings.ReplaceAll(text, "'", "''") + "'", nil
+	case 'n':
+		if string(encoded) == "null" {
+			return "NULL", nil
 		}
-	case arrow.FLOAT64:
-		arr := column.(*array.Float64)
-		for i := 0; i < arr.Len(); i++ {
-			if arr.IsNull(i) {
-				rows[i][fieldName] = nil
-			} else {
-				rows[i][fieldName] = arr.Value(i)
-			}
-		}
-	case arrow.BOOL:
-		arr := column.(*array.Boolean)
-		for i := 0; i < arr.Len(); i++ {
-			if arr.IsNull(i) {
-				rows[i][fieldName] = nil
-			} else {
-				rows[i][fieldName] = arr.Value(i)
-			}
-		}
-	case arrow.STRING:
-		arr := column.(*array.String)
-		for i := 0; i < arr.Len(); i++ {
-			if arr.IsNull(i) {
-				rows[i][fieldName] = nil
-			} else {
-				rows[i][fieldName] = arr.Value(i)
-			}
-		}
-	case arrow.FIXED_SIZE_LIST:
-		arr := column.(*array.FixedSizeList)
-		listType := dataType.(*arrow.FixedSizeListType)
-
-		// Handle vector fields (FixedSizeList of Float32)
-		if listType.Elem().ID() == arrow.FLOAT32 {
-			for i := 0; i < arr.Len(); i++ {
-				if arr.IsNull(i) {
-					rows[i][fieldName] = nil
-				} else {
-					listStart := i * int(listType.Len())
-					values := make([]float32, listType.Len())
-
-					valueArray := arr.ListValues().(*array.Float32)
-					for j := 0; j < int(listType.Len()); j++ {
-						if listStart+j < valueArray.Len() {
-							values[j] = valueArray.Value(listStart + j)
-						}
-					}
-					rows[i][fieldName] = values
-				}
-			}
-		} else {
-			return fmt.Errorf("unsupported FixedSizeList element type: %s", listType.Elem())
+	case 't', 'f':
+		if string(encoded) == "true" || string(encoded) == "false" {
+			return string(encoded), nil
 		}
 	default:
-		return fmt.Errorf("unsupported Arrow type: %s", dataType)
+		if encoded[0] == '-' || (encoded[0] >= '0' && encoded[0] <= '9') {
+			// json.Marshal only produces valid JSON numbers.
+			return string(encoded), nil
+		}
+	}
+	return "", fmt.Errorf("unsupported composite JSON value %s", string(encoded))
+}
+
+// Select executes a published v0.1.2 query configuration and returns map rows.
+func (t *Table) Select(ctx context.Context, config contracts.QueryConfig) ([]map[string]interface{}, error) {
+	ipcBytes, err := t.SelectIPC(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := ipcBytesToMaps(ipcBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse query results: %w", err)
+	}
+	return rows, nil
+}
+
+// SelectIPC executes a published v0.1.2 query configuration and returns Arrow
+// IPC file bytes. A schema-only result is returned as a valid IPC file; an
+// entirely empty response is returned as nil.
+func (t *Table) SelectIPC(ctx context.Context, config contracts.QueryConfig) ([]byte, error) {
+	t.mu.RLock()
+	closed := t.closed || t.handle == 0
+	t.mu.RUnlock()
+	if closed {
+		return nil, fmt.Errorf("table is closed")
+	}
+	// v0.1.2 marshaled the whole config before looking at the query branch.
+	// Besides being the source of the nil-versus-empty vector distinction,
+	// this rejects NaN and infinities even when K would make the vector branch
+	// fall through to a plain scan.
+	if _, err := json.Marshal(config); err != nil {
+		return nil, fmt.Errorf("failed to marshal query config to JSON: %w", err)
 	}
 
-	return nil
+	state := newQueryState(t)
+	state.legacy = true
+	state.columns = append([]string(nil), config.Columns...)
+	if config.Where != "" {
+		state.filters = []string{config.Where}
+	}
+	vectorPresent := config.VectorSearch != nil && config.VectorSearch.Vector != nil
+	if vectorPresent && config.VectorSearch.K >= 0 {
+		state.vectorRequested = true
+		state.vector = append([]float32(nil), config.VectorSearch.Vector...)
+		state.vectorColumn = config.VectorSearch.Column
+		if config.Limit != nil && *config.Limit >= 0 {
+			state.limit = *config.Limit
+			state.limitSet = true
+			state.zeroLimit = state.limit == 0
+		} else {
+			state.limit = config.VectorSearch.K
+			state.limitSet = true
+			state.zeroLimit = state.limit == 0
+		}
+		// v0.1.2 ignores Offset for vector queries.
+	} else if config.FTSSearch != nil {
+		return nil, fmt.Errorf("failed to execute select query: Invalid input, Full-text search is not currently supported")
+	} else {
+		// A nil vector is omitted from JSON as null, and a negative K fails the
+		// old vector branch's as_u64 check. Both fall through to the ordinary
+		// query path with its projection, filter, limit and offset.
+		if config.Limit != nil && *config.Limit >= 0 {
+			state.limit = *config.Limit
+			state.limitSet = true
+			state.zeroLimit = state.limit == 0
+		}
+		if config.Offset != nil && *config.Offset >= 0 {
+			state.offset = *config.Offset
+		}
+	}
+	return t.executeQueryIPC(ctx, state)
+}
+
+// SelectV2 executes an additive query configuration and returns map rows.
+func (t *Table) SelectV2(ctx context.Context, config contracts.QueryConfigV2) ([]map[string]interface{}, error) {
+	ipcBytes, err := t.SelectIPCV2(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	return ipcBytesToMapsV2(ipcBytes)
+}
+
+// SelectIPCV2 executes an additive query configuration and returns Arrow IPC
+// file bytes.
+func (t *Table) SelectIPCV2(ctx context.Context, config contracts.QueryConfigV2) ([]byte, error) {
+	state := newQueryState(t)
+	state.columns = append([]string(nil), config.Columns...)
+	if config.Where != "" {
+		state.filters = []string{config.Where}
+	}
+	if config.Limit != nil {
+		state.limit = *config.Limit
+		state.limitSet = true
+	}
+	if config.Offset != nil {
+		state.offset = *config.Offset
+	}
+	if config.VectorSearch != nil {
+		state.vectorRequested = true
+		state.vector = append([]float32(nil), config.VectorSearch.Vector...)
+		state.vectorColumn = config.VectorSearch.Column
+		if !state.limitSet {
+			state.limit = config.VectorSearch.K
+			state.limitSet = true
+		}
+		state.distanceType = config.VectorSearch.DistanceType
+		state.nprobes = config.VectorSearch.Nprobes
+		state.refineFactor = config.VectorSearch.RefineFactor
+		state.ef = config.VectorSearch.Ef
+		state.bypassVectorIndex = config.VectorSearch.BypassVectorIndex
+		state.fullTextQuery = config.VectorSearch.FullTextQuery
+		state.fullTextColumn = config.VectorSearch.FullTextColumn
+	} else if config.FTSSearch != nil {
+		if strings.TrimSpace(config.FTSSearch.Query) == "" {
+			return nil, fmt.Errorf("full-text search query must not be empty")
+		}
+		state.fullTextQuery = config.FTSSearch.Query
+		state.fullTextColumn = config.FTSSearch.Column
+	}
+	if config.Postfilter && config.VectorSearch == nil {
+		return nil, fmt.Errorf("postfilter requires a vector query")
+	}
+	if config.Reranker != nil && config.Reranker.Kind != contracts.RerankerNone && config.VectorSearch == nil {
+		return nil, fmt.Errorf("reranker requires a vector query")
+	}
+	state.withRowID = config.WithRowID
+	state.fastSearch = config.FastSearch
+	state.postfilter = config.Postfilter
+	state.reranker = config.Reranker
+	return t.executeQueryIPC(ctx, state)
+}
+
+func (t *Table) SelectWithColumns(ctx context.Context, columns []string) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{Columns: columns})
+}
+
+func (t *Table) SelectWithFilter(ctx context.Context, filter string) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{Where: filter})
+}
+
+func (t *Table) VectorSearch(ctx context.Context, column string, vector []float32, k int) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{VectorSearch: &contracts.VectorSearch{Column: column, Vector: vector, K: k}})
+}
+
+func (t *Table) VectorSearchWithFilter(ctx context.Context, column string, vector []float32, k int, filter string) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{VectorSearch: &contracts.VectorSearch{Column: column, Vector: vector, K: k}, Where: filter})
+}
+
+func (t *Table) FullTextSearch(ctx context.Context, column string, query string) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{FTSSearch: &contracts.FTSSearch{Column: column, Query: query}})
+}
+
+func (t *Table) FullTextSearchWithFilter(ctx context.Context, column string, query string, filter string) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{FTSSearch: &contracts.FTSSearch{Column: column, Query: query}, Where: filter})
+}
+
+func (t *Table) SelectWithLimit(ctx context.Context, limit int, offset int) ([]map[string]interface{}, error) {
+	return t.Select(ctx, contracts.QueryConfig{Limit: &limit, Offset: &offset})
 }

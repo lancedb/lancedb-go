@@ -24,6 +24,7 @@ import (
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/memory"
 
+	"github.com/lancedb/lancedb-go/pkg/contracts"
 	"github.com/lancedb/lancedb-go/pkg/lancedb"
 )
 
@@ -94,7 +95,7 @@ func main() {
 	}
 
 	fmt.Println("\n▶ Baseline: Limit(5)")
-	out, err := table.VectorQuery("embedding", query).Limit(5).Execute(ctx)
+	out, err := table.(contracts.ITableVectorQuery).VectorQuery("embedding", query).Limit(5).Execute(ctx)
 	if err != nil {
 		log.Fatalf("baseline: %v", err)
 	}
@@ -102,7 +103,7 @@ func main() {
 	out.Release()
 
 	fmt.Println("\n▶ WithRowID() — result schema includes _rowid")
-	out, err = table.VectorQuery("embedding", query).WithRowID().Limit(5).Execute(ctx)
+	out, err = table.(contracts.ITableVectorQuery).VectorQuery("embedding", query).WithRowID().Limit(5).Execute(ctx)
 	if err != nil {
 		log.Fatalf("with_row_id: %v", err)
 	}
@@ -112,7 +113,7 @@ func main() {
 	out.Release()
 
 	fmt.Println("\n▶ Postfilter() — WHERE after vector candidate set")
-	out, err = table.VectorQuery("embedding", query).
+	out, err = table.(contracts.ITableVectorQuery).VectorQuery("embedding", query).
 		Filter("score > 50").
 		Postfilter().
 		Limit(5).
@@ -124,7 +125,7 @@ func main() {
 	out.Release()
 
 	fmt.Println("\n▶ Tuning combo: Nprobes(10).RefineFactor(2).Ef(64)")
-	out, err = table.VectorQuery("embedding", query).
+	out, err = table.(contracts.ITableVectorQuery).VectorQuery("embedding", query).
 		Nprobes(10).
 		RefineFactor(2).
 		Ef(64).
@@ -137,7 +138,7 @@ func main() {
 	out.Release()
 
 	fmt.Println("\n▶ BypassVectorIndex() — flat scan")
-	out, err = table.VectorQuery("embedding", query).BypassVectorIndex().Limit(5).Execute(ctx)
+	out, err = table.(contracts.ITableVectorQuery).VectorQuery("embedding", query).BypassVectorIndex().Limit(5).Execute(ctx)
 	if err != nil {
 		log.Fatalf("bypass: %v", err)
 	}

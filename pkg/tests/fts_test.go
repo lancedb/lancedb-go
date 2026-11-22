@@ -89,15 +89,22 @@ func setupFTSTestTable(t *testing.T) contracts.ITable {
 
 func TestFullTextSearch(t *testing.T) {
 	table := setupFTSTestTable(t)
+	qv2, ok := table.(contracts.ITableQueryV2)
+	require.True(t, ok, "table must implement ITableQueryV2")
 
 	t.Run("FTS returns matching rows", func(t *testing.T) {
-		results, err := table.FullTextSearch(context.Background(), "title", "Go")
+		results, err := qv2.SelectV2(context.Background(), contracts.QueryConfigV2{
+			FTSSearch: &contracts.FTSSearch{Column: "title", Query: "Go"},
+		})
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(results), 2, "Should find at least 2 Go-related titles")
 	})
 
 	t.Run("FTS with filter", func(t *testing.T) {
-		results, err := table.FullTextSearchWithFilter(context.Background(), "title", "Go", "id < 3")
+		results, err := qv2.SelectV2(context.Background(), contracts.QueryConfigV2{
+			Where:     "id < 3",
+			FTSSearch: &contracts.FTSSearch{Column: "title", Query: "Go"},
+		})
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, len(results), 1)
 		for _, row := range results {
@@ -108,8 +115,15 @@ func TestFullTextSearch(t *testing.T) {
 	})
 
 	t.Run("FTS with no matches returns empty", func(t *testing.T) {
-		results, err := table.FullTextSearch(context.Background(), "title", "JavaScript")
+		results, err := qv2.SelectV2(context.Background(), contracts.QueryConfigV2{
+			FTSSearch: &contracts.FTSSearch{Column: "title", Query: "JavaScript"},
+		})
 		require.NoError(t, err)
 		assert.Empty(t, results)
+	})
+
+	t.Run("legacy Select keeps the v0.1.2 unsupported error", func(t *testing.T) {
+		_, err := table.FullTextSearch(context.Background(), "title", "Go")
+		require.Error(t, err)
 	})
 }

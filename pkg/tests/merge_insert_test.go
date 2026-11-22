@@ -64,7 +64,7 @@ func TestMergeInsert(t *testing.T) {
 			[]float64{40, 50, 60})
 		defer fresh.Release()
 
-		res, err := table.MergeInsert([]string{"id"}).
+		res, err := asMergeInsertTable(t, table).MergeInsert([]string{"id"}).
 			WhenNotMatchedInsertAll().
 			Execute(context.Background(), []arrow.Record{fresh})
 		if err != nil {
@@ -104,7 +104,7 @@ func TestMergeInsert(t *testing.T) {
 			[]float64{222, 333, 444})
 		defer upsert.Release()
 
-		res, err := table.MergeInsert([]string{"id"}).
+		res, err := asMergeInsertTable(t, table).MergeInsert([]string{"id"}).
 			WhenMatchedUpdateAll(nil).
 			WhenNotMatchedInsertAll().
 			Execute(context.Background(), []arrow.Record{upsert})
@@ -159,7 +159,7 @@ func TestMergeInsert(t *testing.T) {
 		defer src.Release()
 
 		cond := "target.score < source.score"
-		res, err := table.MergeInsert([]string{"id"}).
+		res, err := asMergeInsertTable(t, table).MergeInsert([]string{"id"}).
 			WhenMatchedUpdateAll(&cond).
 			Execute(context.Background(), []arrow.Record{src})
 		if err != nil {
@@ -204,21 +204,21 @@ func TestMergeInsert(t *testing.T) {
 		defer rec.Release()
 
 		// Empty `on` must fail before the FFI call.
-		if _, err := table.MergeInsert(nil).
+		if _, err := asMergeInsertTable(t, table).MergeInsert(nil).
 			WhenNotMatchedInsertAll().
 			Execute(context.Background(), []arrow.Record{rec}); err == nil {
 			t.Error("expected error for empty on")
 		}
 
 		// No actions configured is an error.
-		if _, err := table.MergeInsert([]string{"id"}).
+		if _, err := asMergeInsertTable(t, table).MergeInsert([]string{"id"}).
 			Execute(context.Background(), []arrow.Record{rec}); err == nil {
 			t.Error("expected error when no actions configured")
 		}
 
 		// Closed table.
 		table.Close()
-		if _, err := table.MergeInsert([]string{"id"}).
+		if _, err := asMergeInsertTable(t, table).MergeInsert([]string{"id"}).
 			WhenNotMatchedInsertAll().
 			Execute(context.Background(), []arrow.Record{rec}); err == nil {
 			t.Error("expected error on closed table")
@@ -240,7 +240,7 @@ func TestMergeInsert(t *testing.T) {
 		// known-bad filter-by-source on an empty source to confirm the
 		// Rust-side null-pointer guard engages cleanly (bad-SQL → clean err).
 		badFilter := "this is not valid SQL )))"
-		if _, err := table.MergeInsert([]string{"id"}).
+		if _, err := asMergeInsertTable(t, table).MergeInsert([]string{"id"}).
 			WhenNotMatchedBySourceDelete(&badFilter).
 			Execute(context.Background(), nil); err == nil {
 			t.Error("expected error for invalid SQL in by-source filter")

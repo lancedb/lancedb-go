@@ -93,7 +93,7 @@ func main() {
 
 	// Hybrid search needs an FTS index on the text column.
 	fmt.Println("\n▶ Creating FTS index on body column")
-	if err := table.CreateIndexWithParams(
+	if err := table.(contracts.ITableIndexManagement).CreateIndexWithParams(
 		ctx,
 		[]string{"body"},
 		contracts.IndexTypeFts,
@@ -110,7 +110,7 @@ func main() {
 	}
 
 	fmt.Println("\n▶ Hybrid search (vector + FTS, default RRF reranker)")
-	out, err := table.VectorQuery("embedding", query).
+	out, err := table.(contracts.ITableVectorQuery).VectorQuery("embedding", query).
 		WithFullText("brown fox", "body").
 		Limit(5).
 		Execute(ctx)
@@ -125,7 +125,7 @@ func main() {
 	out.Release()
 
 	fmt.Println("\n▶ Hybrid search with explicit RRF (k=30, norm=Rank)")
-	out, err = table.VectorQuery("embedding", query).
+	out, err = table.(contracts.ITableVectorQuery).VectorQuery("embedding", query).
 		WithFullText("green turtle", "body").
 		Rerank(contracts.RerankerConfig{
 			Kind: contracts.RerankerRRF,

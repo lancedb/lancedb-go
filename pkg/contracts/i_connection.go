@@ -13,15 +13,10 @@ type IConnection interface {
 	IsClosed() bool
 }
 
-// ConnectionOptions holds options for establishing a database connection.
+// ConnectionOptions holds options for establishing a database connection
 type ConnectionOptions struct {
+	// Simple implementation - these fields will be added as needed
+	Region                  *string
 	ReadConsistencyInterval *int
-
-	// StorageOptions contains key-value pairs passed directly to the
-	// object_store backend. Keys match the object_store crate's config
-	// enums (AmazonS3ConfigKey, GoogleConfigKey, AzureConfigKey,
-	// ClientConfigKey). All values are strings.
-	//
-	// See the Storage* constants for well-known keys.
-	StorageOptions map[string]string
+	StorageOptions          *StorageOptions
 }

@@ -82,7 +82,7 @@ func main() {
 	}
 
 	fmt.Println("\n▶ Vector query + RRF reranker (k=60, norm=Rank)")
-	out, err := table.VectorQuery("embedding", queryVec).
+	out, err := table.(contracts.ITableVectorQuery).VectorQuery("embedding", queryVec).
 		Rerank(contracts.RerankerConfig{
 			Kind: contracts.RerankerRRF,
 			RRFK: 60,
@@ -97,7 +97,7 @@ func main() {
 	out.Release()
 
 	fmt.Println("\n▶ Default K (backend default = 60.0)")
-	out, err = table.VectorQuery("embedding", queryVec).
+	out, err = table.(contracts.ITableVectorQuery).VectorQuery("embedding", queryVec).
 		Rerank(contracts.RerankerConfig{Kind: contracts.RerankerRRF}).
 		Limit(5).
 		Execute(ctx)

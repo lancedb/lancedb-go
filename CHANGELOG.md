@@ -1,15 +1,26 @@
 # Changelog
 
-## [Unreleased]
+## Unreleased
 
-### Added
-- `ITable.VectorQuery(column string, vector []float32) IVectorQueryBuilder` — fluent builder for vector similarity searches, complementing the lower-level `VectorSearch` method.
-- Input validation in `VectorQueryBuilder.Execute()`: returns clear errors for nil/empty vector, empty column name, and missing `Limit`.
+### Changed
+
+- Migrate the SDK to pure Go over the published `lancedb-c` shared library
+  (`CGO_ENABLED=0`, no Rust or C toolchain), with verified native-artifact
+  discovery, an explicit override and a version check.
+- Preserve the published v0.1.2 API, Arrow Go v17 type identity, struct layouts
+  and distance values. Additive capabilities use companion interfaces rather
+  than expanding the published interfaces.
+- Add Arrow IPC schema/record/result transport, multi-batch writes, merge
+  insert, FTS/hybrid queries, rerankers, optimize, time travel, schema
+  evolution, rich index management and raw-expression updates.
+- Apply storage options per connection, including `aws_profile`, `aws_region`
+  and an independent `dynamodb_endpoint`, instead of mutating process
+  environment variables.
+- Adopt the current SDK SQL dialect. Read [MIGRATION.md](MIGRATION.md): update
+  and delete predicates can succeed while affecting different rows.
 
 ### Removed
-- **BREAKING**: `IVectorQueryBuilder.DistanceType(_ DistanceType) IVectorQueryBuilder` removed from the interface. The method was previously exported but documented as a no-op pending Rust FFI support.
-- **BREAKING**: `DistanceType` type and constants (`DistanceTypeL2`, `DistanceTypeCosine`, `DistanceTypeDot`, `DistanceTypeHamming`) removed from `pkg/contracts`. Implementors of `IVectorQueryBuilder` and callers of `.DistanceType(...)` must remove those call sites.
-- **BREAKING**: `IVectorQueryBuilder.Offset(offset int) IVectorQueryBuilder` removed from the interface. ANN vector search returns the K nearest neighbours and cannot be paginated with a row offset; exposing the method while always rejecting it at runtime was a public API lie. The underlying `VectorQueryBuilder` struct still validates and rejects non-zero offsets with a clear error.
 
-### Fixed
-- `ExecuteAsync` on both `QueryBuilder` and `VectorQueryBuilder` now always closes both returned channels after exactly one receives a value, satisfying Go's channel-close convention. Callers using `select` should use the two-value receive form (`value, ok := <-ch`) to distinguish a real value (`ok=true`) from a closed-empty channel (`ok=false`); on the closed-empty branch the other channel holds the actual result or error.
+- Remove `rust/`, cgo, the static-library build and the native release workflow.
+- Remove Intel macOS (`darwin/amd64`) support.
+- Remove the unpublished `IndexStatistics.Loss` field.

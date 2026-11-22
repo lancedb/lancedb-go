@@ -6,36 +6,35 @@ package internal
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/apache/arrow/go/v17/arrow"
 
-	lancedb "github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/contracts"
+	"github.com/lancedb/lancedb-go/pkg/internal/native"
 )
 
-// QueryBuilder provides a fluent interface for building queries
-type QueryBuilder struct {
-	table      *Table
-	filters    []string
-	limit      int
-	offset     int
-	columns    []string
+type queryState struct {
+	table *Table
+
+	legacy          bool
+	filters         []string
+	limit           int
+	limitSet        bool
+	zeroLimit       bool
+	offset          int
+	columns         []string
+	vectorRequested bool
+
 	withRowID  bool
 	fastSearch bool
 	postfilter bool
-	reranker   *lancedb.RerankerConfig
-}
+	reranker   *contracts.RerankerConfig
 
-var _ lancedb.IQueryBuilder = (*QueryBuilder)(nil)
-var _ lancedb.IVectorQueryBuilder = (*VectorQueryBuilder)(nil)
-
-// VectorQueryBuilder extends QueryBuilder for vector similarity searches
-type VectorQueryBuilder struct {
-	QueryBuilder
 	vector            []float32
-	column            string
-	limitSet          bool // tracks whether Limit() was explicitly called
-	distanceType      *lancedb.DistanceType
+	vectorColumn      string
+	distanceType      *contracts.DistanceType
 	nprobes           *int
 	refineFactor      *uint32
 	ef                *int
@@ -44,327 +43,515 @@ type VectorQueryBuilder struct {
 	fullTextColumn    string
 }
 
-// Filter adds a filter condition to the query
-func (q *QueryBuilder) Filter(condition string) lancedb.IQueryBuilder {
-	q.filters = append(q.filters, condition)
+func newQueryState(table *Table) *queryState {
+	return &queryState{table: table}
+}
+
+// QueryBuilder implements the published v0.1.2 IQueryBuilder. Execute keeps
+// the slice-of-records shape and all-batches behavior of v0.1.2.
+type QueryBuilder struct {
+	state *queryState
+}
+
+var _ contracts.IQueryBuilder = (*QueryBuilder)(nil)
+
+func (q *QueryBuilder) Filter(condition string) contracts.IQueryBuilder {
+	q.state.filters = append(q.state.filters, condition)
 	return q
 }
 
-// Limit sets the maximum number of results to return
-func (q *QueryBuilder) Limit(limit int) lancedb.IQueryBuilder {
-	q.limit = limit
+func (q *QueryBuilder) Limit(limit int) contracts.IQueryBuilder {
+	q.state.limit = limit
+	q.state.limitSet = true
 	return q
 }
 
-// Columns sets the columns to return
-func (q *QueryBuilder) Columns(columns []string) lancedb.IQueryBuilder {
-	q.columns = columns
+func (q *QueryBuilder) Columns(columns []string) contracts.IQueryBuilder {
+	q.state.columns = append([]string(nil), columns...)
 	return q
 }
 
-// Offset sets the number of rows to skip
-func (q *QueryBuilder) Offset(offset int) lancedb.IQueryBuilder {
-	q.offset = offset
+func (q *QueryBuilder) Offset(offset int) contracts.IQueryBuilder {
+	q.state.offset = offset
 	return q
 }
 
-// WithRowID adds the _rowid column to the result.
-func (q *QueryBuilder) WithRowID() lancedb.IQueryBuilder {
-	q.withRowID = true
-	return q
-}
-
-// FastSearch skips rows not yet covered by an index.
-func (q *QueryBuilder) FastSearch() lancedb.IQueryBuilder {
-	q.fastSearch = true
-	return q
-}
-
-// Postfilter evaluates WHERE after the candidate set is built.
-func (q *QueryBuilder) Postfilter() lancedb.IQueryBuilder {
-	q.postfilter = true
-	return q
-}
-
-// Rerank installs a reranker on the query.
-func (q *QueryBuilder) Rerank(cfg lancedb.RerankerConfig) lancedb.IQueryBuilder {
-	c := cfg
-	q.reranker = &c
-	return q
-}
-
-// Execute executes the query and returns results.
-// Delegates to Table.SelectIPC() which holds the mutex and checks closed state.
-func (q *QueryBuilder) Execute(ctx context.Context) (arrow.Record, error) {
-	config := q.buildConfig()
-	ipcBytes, err := q.table.SelectIPC(ctx, config)
-	if err != nil {
-		return nil, err
+func (q *QueryBuilder) ApplyOptions(options *contracts.QueryOptions) contracts.IQueryBuilder {
+	if options != nil && options.MaxResults > 0 {
+		q.Limit(options.MaxResults)
 	}
-	return ipcBytesToRecord(ipcBytes)
+	return q
 }
 
-// executeAsync runs fn in a goroutine and routes its result or error to
-// the returned buffered channels. Exactly one channel receives a value;
-// both are always closed (via defer) so callers can safely use the
-// two-value receive form. Callers should check the ok flag to
-// distinguish a real value (ok=true) from a closed-empty channel (ok=false)
-// that may appear when the scheduler picks the other channel first.
-func executeAsync(ctx context.Context, fn func(context.Context) (arrow.Record, error)) (<-chan arrow.Record, <-chan error) {
-	resultChan := make(chan arrow.Record, 1)
-	errorChan := make(chan error, 1)
-
-	// Short-circuit if context is already cancelled
-	if err := ctx.Err(); err != nil {
-		errorChan <- err
-		close(resultChan)
-		close(errorChan)
-		return resultChan, errorChan
+func (q *QueryBuilder) Execute() ([]arrow.Record, error) {
+	if q.state.table.connection != nil && q.state.table.connection.IsClosed() {
+		return nil, fmt.Errorf("table is closed")
 	}
+	return q.state.table.executeQueryRecords(context.Background(), q.state)
+}
 
+func (q *QueryBuilder) ExecuteAsync() (<-chan []arrow.Record, <-chan error) {
+	results := make(chan []arrow.Record, 1)
+	errs := make(chan error, 1)
 	go func() {
-		defer close(resultChan)
-		defer close(errorChan)
-
-		result, err := fn(ctx)
+		records, err := q.Execute()
 		if err != nil {
-			errorChan <- err
+			errs <- err
 		} else {
-			resultChan <- result
+			results <- records
 		}
+		close(results)
+		close(errs)
 	}()
-
-	return resultChan, errorChan
+	return results, errs
 }
 
-// ExecuteAsync executes the query asynchronously
-func (q *QueryBuilder) ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error) {
-	return executeAsync(ctx, q.Execute)
+// QueryBuilderV2 implements the additive context/single-record builder.
+type QueryBuilderV2 struct {
+	state *queryState
 }
 
-// ApplyOptions applies query options to the builder
-func (q *QueryBuilder) ApplyOptions(options *lancedb.QueryOptions) lancedb.IQueryBuilder {
+var _ contracts.IQueryBuilderV2 = (*QueryBuilderV2)(nil)
+
+func (q *QueryBuilderV2) Filter(condition string) contracts.IQueryBuilderV2 {
+	q.state.filters = append(q.state.filters, condition)
+	return q
+}
+
+func (q *QueryBuilderV2) Limit(limit int) contracts.IQueryBuilderV2 {
+	q.state.limit = limit
+	q.state.limitSet = true
+	return q
+}
+
+func (q *QueryBuilderV2) Columns(columns []string) contracts.IQueryBuilderV2 {
+	q.state.columns = append([]string(nil), columns...)
+	return q
+}
+
+func (q *QueryBuilderV2) Offset(offset int) contracts.IQueryBuilderV2 {
+	q.state.offset = offset
+	return q
+}
+
+func (q *QueryBuilderV2) WithRowID() contracts.IQueryBuilderV2 {
+	q.state.withRowID = true
+	return q
+}
+
+func (q *QueryBuilderV2) FastSearch() contracts.IQueryBuilderV2 {
+	q.state.fastSearch = true
+	return q
+}
+
+func (q *QueryBuilderV2) ApplyOptions(options *contracts.QueryOptions) contracts.IQueryBuilderV2 {
+	if options != nil && options.MaxResults > 0 {
+		q.Limit(options.MaxResults)
+	}
+	return q
+}
+
+func (q *QueryBuilderV2) Execute(ctx context.Context) (arrow.Record, error) {
+	return q.state.table.executeQueryRecord(ctx, q.state)
+}
+
+func (q *QueryBuilderV2) ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error) {
+	results := make(chan arrow.Record, 1)
+	errs := make(chan error, 1)
+	go func() {
+		record, err := q.Execute(ctx)
+		if err != nil {
+			errs <- err
+		} else {
+			results <- record
+		}
+		close(results)
+		close(errs)
+	}()
+	return results, errs
+}
+
+// VectorQueryBuilderV2 implements the additive vector query builder.
+type VectorQueryBuilderV2 struct {
+	state  *queryState
+	vector []float32
+	column string
+}
+
+var _ contracts.IVectorQueryBuilderV2 = (*VectorQueryBuilderV2)(nil)
+
+func (q *VectorQueryBuilderV2) Filter(condition string) contracts.IVectorQueryBuilderV2 {
+	q.state.filters = append(q.state.filters, condition)
+	return q
+}
+
+func (q *VectorQueryBuilderV2) Limit(limit int) contracts.IVectorQueryBuilderV2 {
+	q.state.limit = limit
+	q.state.limitSet = true
+	return q
+}
+
+func (q *VectorQueryBuilderV2) Columns(columns []string) contracts.IVectorQueryBuilderV2 {
+	q.state.columns = append([]string(nil), columns...)
+	return q
+}
+
+func (q *VectorQueryBuilderV2) DistanceType(dt contracts.DistanceType) contracts.IVectorQueryBuilderV2 {
+	copy := dt
+	q.state.distanceType = &copy
+	return q
+}
+
+func (q *VectorQueryBuilderV2) Nprobes(n int) contracts.IVectorQueryBuilderV2 {
+	copy := n
+	q.state.nprobes = &copy
+	return q
+}
+
+func (q *VectorQueryBuilderV2) RefineFactor(n uint32) contracts.IVectorQueryBuilderV2 {
+	copy := n
+	q.state.refineFactor = &copy
+	return q
+}
+
+func (q *VectorQueryBuilderV2) Ef(n int) contracts.IVectorQueryBuilderV2 {
+	copy := n
+	q.state.ef = &copy
+	return q
+}
+
+func (q *VectorQueryBuilderV2) BypassVectorIndex() contracts.IVectorQueryBuilderV2 {
+	q.state.bypassVectorIndex = true
+	return q
+}
+
+func (q *VectorQueryBuilderV2) WithRowID() contracts.IVectorQueryBuilderV2 {
+	q.state.withRowID = true
+	return q
+}
+
+func (q *VectorQueryBuilderV2) FastSearch() contracts.IVectorQueryBuilderV2 {
+	q.state.fastSearch = true
+	return q
+}
+
+func (q *VectorQueryBuilderV2) Postfilter() contracts.IVectorQueryBuilderV2 {
+	q.state.postfilter = true
+	return q
+}
+
+func (q *VectorQueryBuilderV2) Rerank(config contracts.RerankerConfig) contracts.IVectorQueryBuilderV2 {
+	copy := config
+	q.state.reranker = &copy
+	return q
+}
+
+func (q *VectorQueryBuilderV2) WithFullText(query, column string) contracts.IVectorQueryBuilderV2 {
+	q.state.fullTextQuery = query
+	q.state.fullTextColumn = column
+	return q
+}
+
+func (q *VectorQueryBuilderV2) ApplyOptions(options *contracts.QueryOptions) contracts.IVectorQueryBuilderV2 {
 	if options != nil {
 		if options.MaxResults > 0 {
 			q.Limit(options.MaxResults)
 		}
+		if options.BypassVectorIndex {
+			q.BypassVectorIndex()
+		}
 	}
 	return q
 }
 
-// buildConfig converts the builder's accumulated state into a QueryConfig
-func (q *QueryBuilder) buildConfig() lancedb.QueryConfig {
-	config := lancedb.QueryConfig{}
-
-	if len(q.filters) > 0 {
-		config.Where = strings.Join(q.filters, " AND ")
-	}
-	if q.limit > 0 {
-		limit := q.limit
-		config.Limit = &limit
-	}
-	if q.offset > 0 {
-		offset := q.offset
-		config.Offset = &offset
-	}
-	if len(q.columns) > 0 {
-		config.Columns = q.columns
-	}
-	config.WithRowID = q.withRowID
-	config.FastSearch = q.fastSearch
-	config.Postfilter = q.postfilter
-	if q.reranker != nil && q.reranker.Kind != lancedb.RerankerNone {
-		rc := *q.reranker
-		config.Reranker = &rc
-	}
-
-	return config
+func (q *VectorQueryBuilderV2) Execute(ctx context.Context) (arrow.Record, error) {
+	q.state.vector = append([]float32(nil), q.vector...)
+	q.state.vectorColumn = q.column
+	q.state.vectorRequested = true
+	return q.state.table.executeQueryRecord(ctx, q.state)
 }
 
-// Filter adds a filter condition to the vector query
-func (vq *VectorQueryBuilder) Filter(condition string) lancedb.IVectorQueryBuilder {
-	vq.QueryBuilder.Filter(condition)
-	return vq
-}
-
-// Limit sets the maximum number of results to return
-func (vq *VectorQueryBuilder) Limit(limit int) lancedb.IVectorQueryBuilder {
-	vq.QueryBuilder.Limit(limit)
-	vq.limitSet = true
-	return vq
-}
-
-// Columns sets the columns to return
-func (vq *VectorQueryBuilder) Columns(columns []string) lancedb.IVectorQueryBuilder {
-	vq.QueryBuilder.Columns(columns)
-	return vq
-}
-
-// distanceTypeToString converts a DistanceType enum to the JSON string
-// expected by the Rust FFI. Returns an error for unknown values so an
-// out-of-range cast (e.g. lancedb.DistanceType(99)) surfaces as a normal
-// error to the caller instead of crashing the process.
-// DistanceTypeUnspecified is the caller's responsibility to filter out.
-func distanceTypeToString(dt lancedb.DistanceType) (string, error) {
-	switch dt {
-	case lancedb.DistanceTypeL2:
-		return "l2", nil
-	case lancedb.DistanceTypeCosine:
-		return "cosine", nil
-	case lancedb.DistanceTypeDot:
-		return "dot", nil
-	default:
-		return "", fmt.Errorf("unknown DistanceType: %d", dt)
-	}
-}
-
-// DistanceType sets the distance metric for vector similarity search
-func (vq *VectorQueryBuilder) DistanceType(dt lancedb.DistanceType) lancedb.IVectorQueryBuilder {
-	vq.distanceType = &dt
-	return vq
-}
-
-// Nprobes sets the IVF partition scan count. n<=0 leaves the backend default.
-func (vq *VectorQueryBuilder) Nprobes(n int) lancedb.IVectorQueryBuilder {
-	if n > 0 {
-		vq.nprobes = &n
-	}
-	return vq
-}
-
-// RefineFactor sets the refine multiplier for the IVF first stage. 0 disables.
-func (vq *VectorQueryBuilder) RefineFactor(n uint32) lancedb.IVectorQueryBuilder {
-	if n > 0 {
-		vq.refineFactor = &n
-	}
-	return vq
-}
-
-// Ef sets the HNSW candidate list size. n<=0 leaves the backend default.
-func (vq *VectorQueryBuilder) Ef(n int) lancedb.IVectorQueryBuilder {
-	if n > 0 {
-		vq.ef = &n
-	}
-	return vq
-}
-
-// BypassVectorIndex forces a flat (exhaustive) scan.
-func (vq *VectorQueryBuilder) BypassVectorIndex() lancedb.IVectorQueryBuilder {
-	vq.bypassVectorIndex = true
-	return vq
-}
-
-// WithRowID adds the _rowid column to the result.
-func (vq *VectorQueryBuilder) WithRowID() lancedb.IVectorQueryBuilder {
-	vq.QueryBuilder.withRowID = true
-	return vq
-}
-
-// FastSearch skips rows not yet covered by the index.
-func (vq *VectorQueryBuilder) FastSearch() lancedb.IVectorQueryBuilder {
-	vq.QueryBuilder.fastSearch = true
-	return vq
-}
-
-// Postfilter evaluates WHERE after the vector candidate set is built.
-func (vq *VectorQueryBuilder) Postfilter() lancedb.IVectorQueryBuilder {
-	vq.QueryBuilder.postfilter = true
-	return vq
-}
-
-// Rerank installs a reranker on the vector query.
-func (vq *VectorQueryBuilder) Rerank(cfg lancedb.RerankerConfig) lancedb.IVectorQueryBuilder {
-	c := cfg
-	vq.QueryBuilder.reranker = &c
-	return vq
-}
-
-// WithFullText turns the vector query into a hybrid vector+FTS query.
-// `column` may be empty to let lancedb pick the FTS-indexed column.
-//
-// `query` is trimmed; whitespace-only input is treated the same as the
-// empty string and falls back to a pure vector search (matches the
-// Rust-side guard that protects FullTextSearchQuery::new from an empty
-// tokenizer result).
-//
-// VectorQueryBuilder is single-use: calling Execute consumes the
-// configured state. Reusing a builder after Execute keeps any prior
-// WithFullText / Nprobes / etc. intact, which is rarely the intent;
-// build a fresh VectorQuery for each call site.
-func (vq *VectorQueryBuilder) WithFullText(query, column string) lancedb.IVectorQueryBuilder {
-	vq.fullTextQuery = strings.TrimSpace(query)
-	vq.fullTextColumn = column
-	return vq
-}
-
-// Execute executes the vector search query and returns results.
-// Delegates to Table.SelectIPC() which holds the mutex and checks closed state.
-func (vq *VectorQueryBuilder) Execute(ctx context.Context) (arrow.Record, error) {
-	if len(vq.vector) == 0 {
-		return nil, fmt.Errorf("vector search requires a non-empty query vector")
-	}
-	if vq.column == "" {
-		return nil, fmt.Errorf("vector search requires a non-empty column name")
-	}
-
-	k := vq.limit
-	if !vq.limitSet {
-		return nil, fmt.Errorf("vector search requires a positive K value: call .Limit(k) before .Execute()")
-	}
-	if k <= 0 {
-		return nil, fmt.Errorf("K must be a positive integer, got %d", k)
-	}
-
-	if vq.offset != 0 {
-		return nil, fmt.Errorf("VectorQueryBuilder does not support Offset(); use QueryBuilder for offset-based pagination")
-	}
-
-	config := vq.buildConfig()
-	config.Limit = nil // K controls result count for vector search, not Limit
-	config.VectorSearch = &lancedb.VectorSearch{
-		Column: vq.column,
-		Vector: vq.vector,
-		K:      k,
-	}
-	if vq.distanceType != nil && *vq.distanceType != lancedb.DistanceTypeUnspecified {
-		dt, err := distanceTypeToString(*vq.distanceType)
+func (q *VectorQueryBuilderV2) ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error) {
+	results := make(chan arrow.Record, 1)
+	errs := make(chan error, 1)
+	go func() {
+		record, err := q.Execute(ctx)
 		if err != nil {
-			return nil, err
+			errs <- err
+		} else {
+			results <- record
 		}
-		config.VectorSearch.DistanceType = &dt
-	}
-	config.VectorSearch.Nprobes = vq.nprobes
-	config.VectorSearch.RefineFactor = vq.refineFactor
-	config.VectorSearch.Ef = vq.ef
-	config.VectorSearch.BypassVectorIndex = vq.bypassVectorIndex
-	config.VectorSearch.FullTextQuery = vq.fullTextQuery
-	config.VectorSearch.FullTextColumn = vq.fullTextColumn
+		close(results)
+		close(errs)
+	}()
+	return results, errs
+}
 
-	ipcBytes, err := vq.table.SelectIPC(ctx, config)
+func (t *Table) executeQueryRecords(ctx context.Context, state *queryState) ([]arrow.Record, error) {
+	ipcBytes, err := t.executeQueryIPC(ctx, state)
+	if err != nil {
+		return nil, err
+	}
+	records, _, err := ipcBytesToRecords(ipcBytes)
+	if err != nil {
+		return nil, err
+	}
+	if records == nil {
+		return []arrow.Record{}, nil
+	}
+	return records, nil
+}
+
+func (t *Table) executeQueryRecord(ctx context.Context, state *queryState) (arrow.Record, error) {
+	ipcBytes, err := t.executeQueryIPC(ctx, state)
 	if err != nil {
 		return nil, err
 	}
 	return ipcBytesToRecord(ipcBytes)
 }
 
-// ExecuteAsync executes the vector query asynchronously
-func (vq *VectorQueryBuilder) ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error) {
-	return executeAsync(ctx, vq.Execute)
+func (t *Table) executeQueryIPC(ctx context.Context, state *queryState) ([]byte, error) {
+	if !state.legacy {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.closed || t.handle == 0 {
+		return nil, fmt.Errorf("table is closed")
+	}
+	api, err := loadAPI()
+	if err != nil {
+		return nil, err
+	}
+	vectorQuery := state.vectorRequested
+	if !vectorQuery && state.limitSet && state.limit < 0 {
+		return nil, fmt.Errorf("query limit must not be negative")
+	}
+	var query uintptr
+	if vectorQuery {
+		if len(state.vector) == 0 {
+			if state.legacy {
+				return nil, fmt.Errorf("failed to execute select query: Query vector must have non-zero length")
+			}
+			return nil, fmt.Errorf("vector search requires a non-empty query vector")
+		}
+		if state.vectorColumn == "" {
+			return nil, fmt.Errorf("vector search requires a non-empty column name")
+		}
+		if !state.limitSet {
+			return nil, fmt.Errorf("vector search requires a positive K value; call Limit or set QueryOptions.MaxResults")
+		}
+		if state.limit < 0 || (!state.legacy && state.limit == 0) {
+			return nil, fmt.Errorf("K must be a positive integer")
+		}
+		query = api.VectorQueryNew(t.handle, &state.vector[0], uintptr(len(state.vector)))
+		runtime.KeepAlive(state.vector)
+	} else {
+		query = api.QueryNew(t.handle)
+	}
+	if query == 0 {
+		return nil, fmt.Errorf("failed to create native query")
+	}
+	if vectorQuery {
+		var columnError *byte
+		if err := check(api, api.VectorQueryColumn(query, state.vectorColumn, &columnError), columnError, "set vector column"); err != nil {
+			api.VectorQueryFree(query)
+			return nil, err
+		}
+	}
+	executed := false
+	defer func() {
+		if !executed {
+			if vectorQuery {
+				api.VectorQueryFree(query)
+			} else {
+				api.QueryFree(query)
+			}
+		}
+	}()
+
+	apply := func(code int32, errorMessage *byte, operation string) error {
+		return check(api, code, errorMessage, operation)
+	}
+	var errorMessage *byte
+
+	if state.offset < 0 {
+		if !state.legacy {
+			return nil, fmt.Errorf("query offset must not be negative")
+		}
+	} else if state.offset > 0 && !(state.legacy && vectorQuery) {
+		if vectorQuery {
+			if err := apply(api.VectorQueryOffset(query, uintptr(state.offset), &errorMessage), errorMessage, "set query offset"); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := apply(api.QueryOffset(query, uintptr(state.offset), &errorMessage), errorMessage, "set query offset"); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if state.limitSet && (state.limit > 0 || state.zeroLimit) {
+		if vectorQuery {
+			if err := apply(api.VectorQueryLimit(query, uintptr(state.limit), &errorMessage), errorMessage, "set query limit"); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := apply(api.QueryLimit(query, uintptr(state.limit), &errorMessage), errorMessage, "set query limit"); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(state.columns) > 0 {
+		columnPtrs, keep := cStringArray(state.columns)
+		if vectorQuery {
+			err = apply(api.VectorQuerySelect(query, columnPtrs, uintptr(len(state.columns)), &errorMessage), errorMessage, "set query columns")
+		} else {
+			err = apply(api.QuerySelect(query, columnPtrs, uintptr(len(state.columns)), &errorMessage), errorMessage, "set query columns")
+		}
+		keep()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if state.withRowID {
+		if vectorQuery {
+			if err := apply(api.VectorQueryWithRowID(query, &errorMessage), errorMessage, "add row id"); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := apply(api.QueryWithRowID(query, &errorMessage), errorMessage, "add row id"); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if state.fastSearch {
+		if vectorQuery {
+			if err := apply(api.VectorQueryFastSearch(query, &errorMessage), errorMessage, "enable fast search"); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := apply(api.QueryFastSearch(query, &errorMessage), errorMessage, "enable fast search"); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if state.postfilter && vectorQuery {
+		if err := apply(api.VectorQueryPostfilter(query, &errorMessage), errorMessage, "enable postfilter"); err != nil {
+			return nil, err
+		}
+	}
+	if len(state.filters) > 0 {
+		filter := strings.Join(state.filters, " AND ")
+		if filter != "" {
+			if vectorQuery {
+				if err := apply(api.VectorQueryWhereFilter(query, filter, &errorMessage), errorMessage, "set query filter"); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := apply(api.QueryWhereFilter(query, filter, &errorMessage), errorMessage, "set query filter"); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	if state.fullTextQuery != "" {
+		var columnPtr *byte
+		var columnData []byte
+		if state.fullTextColumn != "" {
+			columnPtr, columnData = cStringPtr(state.fullTextColumn)
+		}
+		if vectorQuery {
+			err = apply(api.VectorQueryFullTextSearch(query, state.fullTextQuery, columnPtr, &errorMessage), errorMessage, "set full-text search")
+		} else {
+			err = apply(api.QueryFullTextSearch(query, state.fullTextQuery, columnPtr, &errorMessage), errorMessage, "set full-text search")
+		}
+		if columnData != nil {
+			runtime.KeepAlive(columnData)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if vectorQuery {
+		if state.distanceType != nil {
+			distance, err := distanceTypeToNative(*state.distanceType)
+			if err != nil {
+				return nil, err
+			}
+			if err := apply(api.VectorQueryDistanceType(query, distance, &errorMessage), errorMessage, "set distance type"); err != nil {
+				return nil, err
+			}
+		}
+		if state.nprobes != nil && *state.nprobes > 0 {
+			if err := apply(api.VectorQueryNprobes(query, uintptr(*state.nprobes), &errorMessage), errorMessage, "set nprobes"); err != nil {
+				return nil, err
+			}
+		}
+		if state.refineFactor != nil && *state.refineFactor > 0 {
+			if err := apply(api.VectorQueryRefineFactor(query, *state.refineFactor, &errorMessage), errorMessage, "set refine factor"); err != nil {
+				return nil, err
+			}
+		}
+		if state.ef != nil && *state.ef > 0 {
+			if err := apply(api.VectorQueryEf(query, uintptr(*state.ef), &errorMessage), errorMessage, "set ef"); err != nil {
+				return nil, err
+			}
+		}
+		if state.bypassVectorIndex {
+			if err := apply(api.VectorQueryBypassVectorIndex(query, &errorMessage), errorMessage, "bypass vector index"); err != nil {
+				return nil, err
+			}
+		}
+		if state.reranker != nil && state.reranker.Kind == contracts.RerankerRRF {
+			k := state.reranker.RRFK
+			if k <= 0 {
+				k = 60
+			}
+			if err := apply(api.VectorQueryRerankRRF(query, k, &errorMessage), errorMessage, "set RRF reranker"); err != nil {
+				return nil, err
+			}
+			switch state.reranker.Norm {
+			case contracts.NormalizeScore:
+				if err := apply(api.VectorQueryNorm(query, native.NormalizeScore, &errorMessage), errorMessage, "set normalization"); err != nil {
+					return nil, err
+				}
+			case contracts.NormalizeRank:
+				if err := apply(api.VectorQueryNorm(query, native.NormalizeRank, &errorMessage), errorMessage, "set normalization"); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	var result uintptr
+	if vectorQuery {
+		err = apply(api.VectorQueryExecuteWithStatus(query, &result, &errorMessage), errorMessage, "execute vector query")
+	} else {
+		err = apply(api.QueryExecuteWithStatus(query, &result, &errorMessage), errorMessage, "execute query")
+	}
+	executed = true
+	if err != nil {
+		return nil, err
+	}
+	if result == 0 {
+		return nil, fmt.Errorf("native query returned a null result")
+	}
+	return queryResultIPC(api, result)
 }
 
-// ApplyOptions applies query options to the vector query builder.
-// MaxResults maps to Limit; BypassVectorIndex is forwarded to the FFI.
-// UseFullPrecision is not exposed by upstream lancedb v0.24.0 and is ignored.
-func (vq *VectorQueryBuilder) ApplyOptions(options *lancedb.QueryOptions) lancedb.IVectorQueryBuilder {
-	if options == nil {
-		return vq
+func distanceTypeToNative(distance contracts.DistanceType) (int32, error) {
+	switch distance {
+	case contracts.DistanceTypeL2:
+		return native.DistanceL2, nil
+	case contracts.DistanceTypeCosine:
+		return native.DistanceCosine, nil
+	case contracts.DistanceTypeDot:
+		return native.DistanceDot, nil
+	case contracts.DistanceTypeHamming:
+		return native.DistanceHamming, nil
+	default:
+		return 0, fmt.Errorf("unknown DistanceType: %d", distance)
 	}
-	if options.MaxResults > 0 {
-		// Call vq.Limit() (not QueryBuilder.Limit) so limitSet is updated.
-		vq.Limit(options.MaxResults)
-	}
-	if options.BypassVectorIndex {
-		vq.BypassVectorIndex()
-	}
-	return vq
 }

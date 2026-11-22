@@ -1,282 +1,169 @@
 # LanceDB Go SDK
 
-A Go library for [LanceDB](https://github.com/lancedb/lancedb) with **pre-built native binaries**.
+Pure Go bindings for [LanceDB](https://github.com/lancedb/lancedb). The SDK
+loads the published `lancedb-c` shared library at runtime, so consumers need no
+Rust toolchain, no C compiler and no `CGO_ENABLED=1` build.
 
-✨ **Simple three-step installation** - download native libraries, `go get`, then set CGO variables. No build dependencies required!
+- Go 1.21 or newer.
+- `CGO_ENABLED=0`.
+- Linux amd64/arm64, Windows amd64/arm64 and macOS Apple Silicon.
+  Intel macOS is not supported.
+- Apache Arrow Go v17 types (`github.com/apache/arrow/go/v17`).
 
-## Installation
-
-### Step 1: Download Native Libraries and Headers
-
-First, download the platform-specific native libraries and C header files:
-
-```bash
-# Download and run the artifact downloader script
-curl -sSL https://raw.githubusercontent.com/lancedb/lancedb-go/main/scripts/download-artifacts.sh | bash
-
-# Or download a specific version
-curl -sSL https://raw.githubusercontent.com/lancedb/lancedb-go/main/scripts/download-artifacts.sh | bash -s v0.1.2
-```
-
-Alternatively, you can download the script and run it manually:
+## Install
 
 ```bash
-# Download the script
-curl -O https://raw.githubusercontent.com/lancedb/lancedb-go/main/scripts/download-artifacts.sh
-chmod +x download-artifacts.sh
-
-# Run it to get latest version
-./download-artifacts.sh
-
-# Or specify a version
-./download-artifacts.sh v0.1.2
+# The preview must be requested explicitly: @latest currently resolves to the
+# stable v0.1.2 module, which predates this migration.
+go get github.com/lancedb/lancedb-go@v0.2.0-preview.1
 ```
 
-This will create the following directory structure in your project:
+The first `Connect` downloads the pinned `lancedb-c` release for the running
+target, verifies both the archive and extracted library SHA-256 digests, and
+loads it from a private per-user cache. No source build happens on the consumer
+machine.
 
-```
-your-project/
-├── lib/
-│   └── {platform}_{arch}/          # Platform-specific native libraries
-│       ├── liblancedb_go.a         # Static library (all platforms)
-│       ├── liblancedb_go.dylib     # Dynamic library (macOS)
-│       ├── liblancedb_go.so        # Dynamic library (Linux)
-│       └── lancedb_go.dll          # Dynamic library (Windows)
-├── include/
-│   └── lancedb.h                   # C header file (REQUIRED)
-└── your-app/
-    └── main.go
-```
-
-**Important:** Both the `lib/` directory (with platform-specific libraries) and the `include/` directory (with `lancedb.h`) are required for compilation.
-
-### Step 2: Install Go Module
+To pre-seed the cache (for example in an offline image or CI):
 
 ```bash
-go get github.com/lancedb/lancedb-go
+go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@v0.2.0-preview.1
 ```
 
-### Step 3: Set CGO Environment Variables
+Discovery can be controlled explicitly:
 
-**Important:** You must set the CGO environment variables to build projects using lancedb-go. These flags tell Go where to find the native libraries and headers.
+| Environment variable | Purpose |
+| --- | --- |
+| `LANCEDB_C_LIBRARY_PATH` | Use this shared library file. When set, it is the only candidate; a bad path fails instead of falling back. |
+| `LANCEDB_C_CACHE_DIR` | Override the private cache root. Default: the platform user cache directory plus `lancedb-go/native`. |
+| `LANCEDB_C_RELEASE_BASE_URL` | Use a release mirror or loopback fixture. The pinned asset names and digests still apply. |
 
-```bash
-# Get the required CGO flags for your platform
-make platform-info
+The runtime version must match the C header the module was built against. For
+diagnostics, `lancedb.RuntimeVersion()` returns the loaded library's reported
+version. The loaded library is never unloaded: `lancedb-c` owns native threads
+and handles that may outlive a table.
 
-# Example output will show:
-# CGO_CFLAGS:  -I/path/to/your-project/include
-# CGO_LDFLAGS: /path/to/your-project/lib/darwin_arm64/liblancedb_go.a -framework Security -framework CoreFoundation
+The published Linux libraries require **glibc 2.35 or newer** on both amd64 and
+arm64. The 2.34 loader reports missing `GLIBC_2.35`; use a distribution with
+2.35+ (for example Ubuntu 22.04 or later).
 
-# Set the environment variables (REQUIRED):
-export CGO_CFLAGS="-I$(pwd)/include"
-export CGO_LDFLAGS="$(pwd)/lib/darwin_arm64/liblancedb_go.a -framework Security -framework CoreFoundation"
-
-# Now you can build your project:
-go build ./cmd/myapp
-```
-
-**Note:** Replace `darwin_arm64` with your actual platform (`linux_amd64`, `windows_amd64`, etc.) as shown by `make platform-info`. These environment variables must be set every time you build a project that uses lancedb-go.
-
-### Supported Platforms
-
-- **macOS**: Intel (amd64) and Apple Silicon (arm64)
-- **Linux**: Intel/AMD (amd64) and ARM (arm64)  
-- **Windows**: Intel/AMD (amd64)
-
-## Usage
-
-### Basic Example
+## Quick start
 
 ```go
+package main
+
 import (
     "context"
+    "fmt"
     "log"
-    
-    "github.com/lancedb/lancedb-go/pkg/lancedb"
+
     "github.com/apache/arrow/go/v17/arrow"
     "github.com/apache/arrow/go/v17/arrow/array"
     "github.com/apache/arrow/go/v17/arrow/memory"
+    "github.com/lancedb/lancedb-go/pkg/contracts"
+    "github.com/lancedb/lancedb-go/pkg/lancedb"
 )
 
-// Connect to a database
-ctx := context.Background()
-conn, err := lancedb.Connect(ctx, "data/sample-lancedb", nil)
-if err != nil {
-    log.Fatal(err)
-}
-defer conn.Close()
+func main() {
+    ctx := context.Background()
+    db, err := lancedb.Connect(ctx, "./data", nil)
+    if err != nil { log.Fatal(err) }
+    defer db.Close()
 
-// Create a table with Arrow schema
-fields := []arrow.Field{
-    {Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
-    {Name: "text", Type: arrow.BinaryTypes.String, Nullable: false},
-    {Name: "vector", Type: arrow.FixedSizeListOf(128, arrow.PrimitiveTypes.Float32), Nullable: false},
-}
-arrowSchema := arrow.NewSchema(fields, nil)
-schema, err := lancedb.NewSchema(arrowSchema)
-if err != nil {
-    log.Fatal(err)
-}
+    schema, err := lancedb.NewSchemaBuilder().
+        AddInt32Field("id", false).
+        AddStringField("text", true).
+        AddVectorField("embedding", 4, contracts.VectorDataTypeFloat32, false).
+        Build()
+    if err != nil { log.Fatal(err) }
 
-table, err := conn.CreateTable(ctx, "my_table", schema)
-if err != nil {
-    log.Fatal(err)
-}
-defer table.Close()
+    table, err := db.CreateTable(ctx, "documents", schema)
+    if err != nil { log.Fatal(err) }
+    defer table.Close()
 
-// Insert some data
-pool := memory.NewGoAllocator()
-// ... prepare your data arrays using Arrow builders ...
+    arrowSchema := schema.ToArrowSchema()
+    builder := array.NewRecordBuilder(memory.DefaultAllocator, arrowSchema)
+    defer builder.Release()
+    builder.Field(0).(*array.Int32Builder).Append(1)
+    builder.Field(1).(*array.StringBuilder).Append("hello")
+    builder.Field(2).(*array.FixedSizeListBuilder).Append(true)
+    builder.Field(2).(*array.FixedSizeListBuilder).ValueBuilder().(*array.Float32Builder).
+        AppendValues([]float32{0.1, 0.2, 0.3, 0.4}, nil)
+    record := builder.NewRecord()
+    defer record.Release()
+    if err := table.Add(ctx, record, nil); err != nil { log.Fatal(err) }
 
-// Perform vector search
-queryVector := []float32{0.1, 0.3, /* ... 128 dimensions */}
-results, err := table.VectorSearch(ctx, "vector", queryVector, 20)
-if err != nil {
-    log.Fatal(err)
+    count, err := table.Count(ctx)
+    if err != nil { log.Fatal(err) }
+    fmt.Println("rows:", count)
+
+    rows, err := table.SelectWithFilter(ctx, "id = 1")
+    if err != nil { log.Fatal(err) }
+    fmt.Println(rows)
 }
-fmt.Println(results)
 ```
 
-## Examples
+## Query API
 
-The [`examples/`](./examples) directory contains comprehensive examples demonstrating various LanceDB capabilities:
+The published v0.1.2 interfaces are preserved exactly. In particular,
+`IQueryBuilder.Execute()` returns `([]arrow.Record, error)` and
+`IVectorQueryBuilder.Execute()` keeps that shape.
 
-### 📚 Available Examples
+Additive query controls use companion interfaces with a separate receiver, so
+Go's lack of return-type overloading does not break published callers:
 
-1. **[Basic CRUD Operations](./examples/basic_crud/basic_crud.go)** - Fundamental database operations
-   - Database connection and table creation
-   - Schema definition with multiple data types
-   - Insert, query, update, and delete operations
-   - Error handling and resource management
-
-2. **[Vector Search](./examples/vector_search/vector_search.go)** - Vector similarity search
-   - Creating and storing vector embeddings
-   - Basic and advanced vector similarity search
-   - Performance benchmarking across different K values
-   - Vector search with metadata filtering
-
-3. **[Hybrid Search](./examples/hybrid_search/hybrid_search.go)** - Combining vector and traditional search
-   - E-commerce product catalog with vectors and metadata
-   - Vector search combined with SQL-like filters
-   - Multi-modal query patterns and recommendations
-   - Real-world search scenarios
-
-4. **[Index Management](./examples/index_management/index_management.go)** - Creating and managing indexes
-   - Vector indexes: IVF-PQ, IVF-Flat, HNSW-PQ, HNSW-SQ
-   - Scalar indexes: BTree for range queries, Bitmap for categorical data, Label List for multi-label fields
-   - Full-text search indexes
-   - Performance comparison and optimization
-
-5. **[Batch Operations](./examples/batch_operations/batch_operations.go)** - Efficient bulk data operations
-   - Different batch insertion strategies
-   - Memory-efficient processing of large datasets
-   - Concurrent batch operations with goroutines
-   - Error handling and recovery patterns
-
-6. **[Storage Configuration](./examples/storage_configuration/storage_configuration.go)** - Storage setup
-   - Local file system storage optimization
-   - AWS S3 configuration with authentication methods
-   - MinIO object storage for local development
-   - Azure Blob Storage (`az://`) and Google Cloud Storage (`gs://`)
-   - Performance comparison and optimization
-
-7. **[Merge Insert (Upsert)](./examples/merge_insert/merge_insert.go)** - Update-or-insert by key
-   - `WhenMatchedUpdateAll`, `WhenNotMatchedInsertAll`, `WhenNotMatchedBySourceDelete`
-   - Idempotent upsert pipelines
-
-8. **[Index Builder](./examples/index_builder/index_builder.go)** - `CreateIndexWithParams` with full tuning
-   - Named indexes via `CreateIndexWithName` and replace semantics via `CreateIndexOptions.Replace`
-   - IVF tuning (`num_partitions`, `num_sub_vectors`) and HNSW tuning (`m`, `ef_construction`)
-
-9. **[Wait For Index](./examples/wait_for_index/wait_for_index.go)** - Block until an index is ready
-   - Polls index build status with timeout
-   - Useful right after `CreateIndex` on large tables
-
-10. **[Query Tuning](./examples/query_tuning/query_tuning.go)** - Per-query vector knobs
-    - `nprobes`, `ef`, `refine_factor` overrides at query time
-    - Trade off recall vs latency without rebuilding the index
-
-11. **[Reranker (RRF)](./examples/reranker/reranker.go)** - Reciprocal Rank Fusion
-    - Apply RRF on hybrid result sets
-    - `RRFK` parameter tuning
-
-12. **[Hybrid Vector + FTS](./examples/hybrid_vector_fts/hybrid_vector_fts.go)** - Combine vector and full-text search
-    - `WithFullText` on `VectorQuery`
-    - Automatic RRF fusion across vector and FTS channels
-
-13. **[Optimize Action](./examples/optimize_action/optimize_action.go)** - Targeted maintenance sub-actions
-    - `OptimizeCompact`, `OptimizeIndex`, `OptimizePrune`
-    - Run individual optimizations instead of the full pipeline
-
-### 🚀 Quick Start
-
-```bash
-# Run any example
-cd examples/basic_crud
-go run basic_crud.go
-
-# Or run from the examples directory
-go run examples/basic_crud/basic_crud.go
+```go
+qv2 := table.(contracts.ITableQueryV2)
+record, err := qv2.QueryV2().
+    Filter("score > 0.8").
+    Columns([]string{"id", "text"}).
+    Limit(10).
+    Execute(ctx)
 ```
 
-See the detailed [examples README](./examples/README.md) for comprehensive documentation, configuration options, and advanced usage patterns.
+`contracts.ITableVectorQuery` provides `VectorQuery`, and
+`contracts.ITableIndexManagement`, `ITableMergeInsert`, `ITableOptimize`,
+`ITableUpdateExpr`, `ITableTimeTravel`, `ITableSchemaEvolve` and
+`ITablePrewarmIndex` expose the other additive capabilities.
 
-## 🚀 Binary Distribution
+Arrow IPC is the boundary for schemas, input records and query results. Input
+batches are sent in one write; query results preserve every batch for the
+published slice API and are concatenated for the context/single-record API.
 
-This package uses **pre-built native binaries** to eliminate build dependencies:
+## Cloud storage
 
-### ✅ What This Means for You
-- **No Rust installation required**
-- **No cbindgen or other build tools needed**  
-- **Simple three-step process**: download artifacts, `go get`, then set CGO variables
-- **Cross-platform** support out of the box
-- **Consistent experience** across all environments
+`Connect` keeps the published v0.1.2 `ConnectionOptions` shape. Use
+`ConnectWithStorageOptions` for the additive flat option map:
 
-### 🔧 For Contributors & Maintainers
-- **Build locally**: `make build-native`
-- **Build all platforms**: `make build-all-platforms`
-- **See detailed guide**: [BINARY_DISTRIBUTION.md](./BINARY_DISTRIBUTION.md)
+```go
+db, err := lancedb.ConnectWithStorageOptions(ctx, "s3://bucket/prefix", map[string]string{
+    contracts.StorageAWSProfile:        "primary",
+    contracts.StorageAWSRegion:         "us-east-1",
+    contracts.StorageEndpoint:          "http://127.0.0.1:9000",
+    contracts.StorageAllowHTTP:         "true",
+    contracts.StorageS3AddressingStyle: "path",
+})
+```
 
-### 📦 How It Works
-Pre-built libraries for all supported platforms are available via GitHub releases. The download script automatically detects your platform and downloads the correct binaries to the `lib/` directory. Go's CGO system then selects the correct library for your platform during compilation.
+`aws_profile` selects a named profile for embedded S3 and for the DynamoDB
+commit handler of `s3+ddb://`. `aws_region` wins over the environment and the
+profile. `dynamodb_endpoint` (or `DYNAMODB_ENDPOINT`) chooses the DynamoDB
+endpoint independently. The profile is applied per connection; the SDK does not
+mutate process environment variables.
 
-**Simple setup** - download once, then it just works! 🎉
+## SQL predicates
+
+The migration adopts the current LanceDB SDK SQL dialect. Double quotes delimit
+column identifiers; single quotes delimit string literals. An existing update or
+delete can therefore succeed while selecting different rows. Read
+[MIGRATION.md](MIGRATION.md) before upgrading.
 
 ## Development
 
-### Quick Start
-
-```shell
-# Install all development dependencies
-make install-deps
-
-# Build the project
-make build
-
-# Run tests
-make test
-
-# Lint code (requires golangci-lint)
-make lint
-
-# Format code
-make fmt
+```bash
+make test-native       # loader, cache and ABI layout checks
+make test              # full suite (downloads the pinned native artifact)
+make test-integration  # authenticated S3 + AWS profile/DynamoDB loopback tests
+make vet fmt-check
 ```
 
-### Go Linting
-
-This project uses [golangci-lint](https://golangci-lint.run/) for comprehensive Go code linting:
-
-```shell
-# Install golangci-lint (included in install-deps)
-make install-deps
-
-# Lint Go code
-make lint-go
-
-# Lint and auto-fix issues
-make lint-go-fix
-```
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for detailed development guidelines, linting configuration, and contribution instructions.
+See [RELEASE_PROCESS.md](RELEASE_PROCESS.md) for the Go-module release flow.

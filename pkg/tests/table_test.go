@@ -579,7 +579,7 @@ func TestOptimize(t *testing.T) {
 		t.Fatalf("Failed to create index: %v", err)
 	}
 
-	stats, err := table.IndexStats(context.Background(), "price_idx")
+	stats, err := asIndexManagement(t, table).IndexStats(context.Background(), "price_idx")
 	if err != nil {
 		t.Fatalf("Failed to get index stats: %v", err)
 	}
@@ -624,12 +624,12 @@ func TestOptimize(t *testing.T) {
 		t.Errorf("Expected 3 rows in table, got %d", count)
 	}
 
-	_, err = table.Optimize(context.Background())
+	_, err = asOptimize(t, table).Optimize(context.Background())
 	if err != nil {
 		t.Fatalf("Failed to optimize table: %v", err)
 	}
 
-	stats, err = table.IndexStats(context.Background(), "price_idx")
+	stats, err = asIndexManagement(t, table).IndexStats(context.Background(), "price_idx")
 	if err != nil {
 		t.Fatalf("Failed to get index stats: %v", err)
 	}

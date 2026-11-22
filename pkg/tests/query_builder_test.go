@@ -190,7 +190,7 @@ func TestQueryBuilderExecute(t *testing.T) {
 	defer cleanup()
 
 	t.Run("Execute with no options returns all rows", func(t *testing.T) {
-		record, err := table.Query().Execute(context.Background())
+		record, err := table.QueryV2().Execute(context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, record)
 		defer record.Release()
@@ -198,7 +198,7 @@ func TestQueryBuilderExecute(t *testing.T) {
 	})
 
 	t.Run("Execute with filter", func(t *testing.T) {
-		record, err := table.Query().Filter("score > 90").Execute(context.Background())
+		record, err := table.QueryV2().Filter("score > 90").Execute(context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, record)
 		defer record.Release()
@@ -212,7 +212,7 @@ func TestQueryBuilderExecute(t *testing.T) {
 	})
 
 	t.Run("Execute with multiple filters joined by AND", func(t *testing.T) {
-		record, err := table.Query().
+		record, err := table.QueryV2().
 			Filter("score > 85").
 			Filter("score < 95").
 			Execute(context.Background())
@@ -230,7 +230,7 @@ func TestQueryBuilderExecute(t *testing.T) {
 	})
 
 	t.Run("Execute with limit", func(t *testing.T) {
-		record, err := table.Query().Limit(2).Execute(context.Background())
+		record, err := table.QueryV2().Limit(2).Execute(context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, record)
 		defer record.Release()
@@ -238,7 +238,7 @@ func TestQueryBuilderExecute(t *testing.T) {
 	})
 
 	t.Run("Execute with offset", func(t *testing.T) {
-		record, err := table.Query().Offset(2).Execute(context.Background())
+		record, err := table.QueryV2().Offset(2).Execute(context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, record)
 		defer record.Release()
@@ -246,7 +246,7 @@ func TestQueryBuilderExecute(t *testing.T) {
 	})
 
 	t.Run("Execute with columns", func(t *testing.T) {
-		record, err := table.Query().Columns([]string{"id", "name"}).Execute(context.Background())
+		record, err := table.QueryV2().Columns([]string{"id", "name"}).Execute(context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, record)
 		defer record.Release()
@@ -258,7 +258,7 @@ func TestQueryBuilderExecute(t *testing.T) {
 	})
 
 	t.Run("Execute with filter and limit chained", func(t *testing.T) {
-		record, err := table.Query().Filter("score > 85").Limit(2).Execute(context.Background())
+		record, err := table.QueryV2().Filter("score > 85").Limit(2).Execute(context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, record)
 		defer record.Release()
@@ -270,7 +270,7 @@ func TestQueryBuilderExecute(t *testing.T) {
 		closedTable.Close()
 		defer closedCleanup()
 
-		_, err := closedTable.Query().Execute(context.Background())
+		_, err := closedTable.QueryV2().Execute(context.Background())
 		require.Error(t, err)
 	})
 }
@@ -280,7 +280,7 @@ func TestQueryBuilderExecuteAsync(t *testing.T) {
 	defer cleanup()
 
 	t.Run("ExecuteAsync returns results on channel", func(t *testing.T) {
-		resultChan, errChan := table.Query().Filter("score > 90").ExecuteAsync(context.Background())
+		resultChan, errChan := table.QueryV2().Filter("score > 90").ExecuteAsync(context.Background())
 
 		select {
 		case record, ok := <-resultChan:
@@ -309,7 +309,7 @@ func TestQueryBuilderExecuteAsync(t *testing.T) {
 		closedTable.Close()
 		defer closedCleanup()
 
-		resultChan, errChan := closedTable.Query().ExecuteAsync(context.Background())
+		resultChan, errChan := closedTable.QueryV2().ExecuteAsync(context.Background())
 
 		select {
 		case record, ok := <-resultChan:
