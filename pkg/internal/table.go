@@ -380,13 +380,28 @@ func (t *Table) Select(ctx context.Context, config contracts.QueryConfig) ([]map
 // IPC file bytes. A schema-only result is returned as a valid IPC file; an
 // entirely empty response is returned as nil.
 func (t *Table) SelectIPC(ctx context.Context, config contracts.QueryConfig) ([]byte, error) {
+	t.mu.RLock()
+	closed := t.closed || t.handle == 0
+	t.mu.RUnlock()
+	if closed {
+		return nil, fmt.Errorf("table is closed")
+	}
+	// v0.1.2 marshaled the whole config before looking at the query branch.
+	// Besides being the source of the nil-versus-empty vector distinction,
+	// this rejects NaN and infinities even when K would make the vector branch
+	// fall through to a plain scan.
+	if _, err := json.Marshal(config); err != nil {
+		return nil, fmt.Errorf("failed to marshal query config to JSON: %w", err)
+	}
+
 	state := newQueryState(t)
 	state.legacy = true
 	state.columns = append([]string(nil), config.Columns...)
 	if config.Where != "" {
 		state.filters = []string{config.Where}
 	}
-	if config.VectorSearch != nil && config.VectorSearch.K >= 0 {
+	vectorPresent := config.VectorSearch != nil && config.VectorSearch.Vector != nil
+	if vectorPresent && config.VectorSearch.K >= 0 {
 		state.vectorRequested = true
 		state.vector = append([]float32(nil), config.VectorSearch.Vector...)
 		state.vectorColumn = config.VectorSearch.Column
@@ -403,8 +418,9 @@ func (t *Table) SelectIPC(ctx context.Context, config contracts.QueryConfig) ([]
 	} else if config.FTSSearch != nil {
 		return nil, fmt.Errorf("failed to execute select query: Invalid input, Full-text search is not currently supported")
 	} else {
-		// A negative K fails the old vector branch's as_u64 check, so v0.1.2
-		// fell through to the ordinary query path.
+		// A nil vector is omitted from JSON as null, and a negative K fails the
+		// old vector branch's as_u64 check. Both fall through to the ordinary
+		// query path with its projection, filter, limit and offset.
 		if config.Limit != nil && *config.Limit >= 0 {
 			state.limit = *config.Limit
 			state.limitSet = true

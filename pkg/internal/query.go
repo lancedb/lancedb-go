@@ -332,6 +332,9 @@ func (t *Table) executeQueryIPC(ctx context.Context, state *queryState) ([]byte,
 	var query uintptr
 	if vectorQuery {
 		if len(state.vector) == 0 {
+			if state.legacy {
+				return nil, fmt.Errorf("failed to execute select query: Query vector must have non-zero length")
+			}
 			return nil, fmt.Errorf("vector search requires a non-empty query vector")
 		}
 		if state.vectorColumn == "" {

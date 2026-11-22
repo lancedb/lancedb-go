@@ -122,8 +122,12 @@ placeholder, but it keeps the old call contracts where behavior was observable:
   whole-table update.
 - `Select` keeps an explicit zero limit as zero rows. Negative limits and
   offsets are ignored, a negative vector `K` falls back to the ordinary query
-  path, a vector query ignores `Offset`, and a query with both `VectorSearch`
-  and `FTSSearch` remains a vector query. Legacy FTS still
+  path, and a vector query ignores `Offset`. A `VectorSearch` with a nil
+  vector is ignored, matching v0.1.2's JSON `null`; an explicitly empty vector
+  still fails. Non-finite vector values fail during the legacy JSON encoding
+  before branch selection, regardless of `K` or `Limit`. A query with both
+  `VectorSearch` and `FTSSearch` remains a vector query when the vector branch
+  is selected. Legacy FTS still
   returns the v0.1.2 `Full-text search is not currently supported` error; use
   `SelectV2` or the additive query interfaces for FTS.
 - Legacy map rows keep the old JSON conversion: `Int8`/`Int16`, `UInt8`,

@@ -344,6 +344,8 @@ func rustDebugType(dataType arrow.DataType) string {
 		return fmt.Sprintf("Decimal256(%d, %d)", value.Precision, value.Scale)
 	case *arrow.ListType:
 		return "List(" + rustFieldDebug(value.ElemField()) + ")"
+	case *arrow.FixedSizeListType:
+		return fmt.Sprintf("FixedSizeList(%s, %d)", rustFieldDebug(value.ElemField()), value.Len())
 	case *arrow.LargeListType:
 		return "LargeList(" + rustFieldDebug(value.ElemField()) + ")"
 	case *arrow.MapType:

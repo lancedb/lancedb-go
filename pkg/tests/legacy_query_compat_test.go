@@ -118,6 +118,50 @@ func TestLegacySelectScopeAndErrors(t *testing.T) {
 	})
 	require.Error(t, err, "legacy zero K remains an SDK error")
 
+	one := 1
+	two := 2
+	nilVectorRows, err := table.Select(ctx, contracts.QueryConfig{
+		Columns:      []string{"id"},
+		Where:        "id > 1",
+		Limit:        &two,
+		Offset:       &one,
+		VectorSearch: &contracts.VectorSearch{Column: "embedding", K: 2},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []float64{3, 4}, rowIDs(nilVectorRows), "nil vector must fall through to the ordinary scan with its options")
+	_, hasNilVectorDistance := nilVectorRows[0]["_distance"]
+	require.False(t, hasNilVectorDistance, "nil vector must not become a vector result")
+
+	_, err = table.Select(ctx, contracts.QueryConfig{
+		VectorSearch: &contracts.VectorSearch{Column: "embedding", K: 2},
+		FTSSearch:    &contracts.FTSSearch{Column: "name", Query: "Alice"},
+	})
+	require.Error(t, err, "nil vector must leave FTS precedence unchanged")
+
+	_, err = table.Select(ctx, contracts.QueryConfig{
+		VectorSearch: &contracts.VectorSearch{Column: "embedding", Vector: []float32{}, K: 2},
+	})
+	require.Error(t, err, "explicitly empty vector must still take the vector branch and fail")
+
+	for _, vector := range [][]float32{
+		{float32(math.NaN()), 1},
+		{float32(math.Inf(1)), 1},
+		{float32(math.Inf(-1)), 1},
+	} {
+		for _, k := range []int{-1, 2} {
+			_, err := table.Select(ctx, contracts.QueryConfig{
+				Columns:      []string{"id"},
+				VectorSearch: &contracts.VectorSearch{Column: "embedding", Vector: vector, K: k},
+			})
+			require.ErrorContains(t, err, "failed to marshal query config to JSON")
+		}
+	}
+	_, err = table.Select(ctx, contracts.QueryConfig{
+		VectorSearch: &contracts.VectorSearch{Column: "embedding", Vector: []float32{float32(math.NaN()), 1}, K: -1},
+		FTSSearch:    &contracts.FTSSearch{Column: "name", Query: "Alice"},
+	})
+	require.ErrorContains(t, err, "failed to marshal query config to JSON", "non-finite vector must fail before FTS branch selection")
+
 	baseRows, err := table.Select(ctx, contracts.QueryConfig{
 		Columns:      []string{"id"},
 		VectorSearch: &contracts.VectorSearch{Column: "embedding", Vector: queryVector, K: 2},
