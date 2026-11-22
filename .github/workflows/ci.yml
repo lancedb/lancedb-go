@@ -10,7 +10,6 @@ on:
 env:
   CGO_ENABLED: "0"
   GOTOOLCHAIN: local
-  LANCEDB_C_CACHE_DIR: ${{ runner.temp }}/lancedb-native
 
 jobs:
   test:
@@ -39,6 +38,10 @@ jobs:
         with:
           go-version: '1.21.13'
           cache: true
+
+      - name: Configure native cache
+        shell: bash
+        run: echo "LANCEDB_C_CACHE_DIR=$RUNNER_TEMP/lancedb-native" >> "$GITHUB_ENV"
 
       - name: Check formatting and vet
         shell: bash
@@ -84,6 +87,10 @@ jobs:
         with:
           go-version: '1.21.13'
           cache: true
+
+      - name: Configure native cache
+        shell: bash
+        run: echo "LANCEDB_C_CACHE_DIR=$RUNNER_TEMP/lancedb-native" >> "$GITHUB_ENV"
 
       - name: Cache native artifact
         uses: actions/cache@v4
