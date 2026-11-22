@@ -58,7 +58,7 @@ implementations of the published interfaces keep compiling.
   archive, verifies the archive and extracted library SHA-256 digests, checks
   the runtime version and keeps a private per-user cache. Explicit override:
   `LANCEDB_C_LIBRARY_PATH`; cache override: `LANCEDB_C_CACHE_DIR`; pre-install:
-  `go run github.com/lancedb/lancedb-go/cmd/lancedb-go-native@latest`.
+  `go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@v0.2.0-preview.1`.
 - **Platforms.** Linux amd64/arm64, Windows amd64/arm64 and macOS Apple Silicon.
   Intel macOS (`darwin/amd64`) is removed; its published release is not
   produced any more.
@@ -102,3 +102,38 @@ implementations of the published interfaces keep compiling.
 - The old `rust/` cgo FFI gets no new capabilities.
 - No new capability is invented in Go: unsupported backend behavior is returned
   as the SDK's error.
+
+## Legacy entry points keep v0.1.2 behavior
+
+The migration adds execution behind the published interfaces where v0.1.2 had a
+placeholder, but it keeps the old call contracts where behavior was observable:
+
+- `Update` still requires a non-empty predicate. Values are encoded as JSON
+  scalars first, so named strings, `time.Time`, typed nil pointers and custom
+  `json.Marshaler` results keep their old meaning; strings become SQL
+  single-quoted literals. Invalid `json.Number`, non-finite floats and composite
+  values fail before any write. `UpdateExpr` remains the raw-SQL path and
+  allows an empty filter for a whole-table update.
+- `Select` keeps an explicit zero limit as zero rows. Negative limits and
+  offsets are ignored, a vector query ignores `Offset`, and a query with both
+  `VectorSearch` and `FTSSearch` remains a vector query. Legacy FTS still
+  returns the v0.1.2 `Full-text search is not currently supported` error; use
+  `SelectV2` or the additive query interfaces for FTS.
+- Legacy map rows keep the old JSON conversion: `Int8`/`Int16`, `Binary` and
+  timestamp values use the old `Unsupported type: ...` placeholders, and
+  non-finite floats become nil. `GetAllIndexes` keeps the `FTS` spelling.
+- `Add(ctx, nil, nil)` on a closed table returns an error. Closing the
+  connection makes the legacy async query put an error on its error channel.
+  Legacy `Connect` and `Select` continue to execute with an already-canceled
+  context; additive `SelectV2` honors cancellation.
+- The legacy `Connect` structured S3 path only reads access key, secret,
+  session token, region and profile, as v0.1.2 did. Endpoint, path-style,
+  anonymous and TLS switches are explicit through `ConnectWithStorageOptions`.
+- `QueryV2`/`SelectV2` are additive. `Postfilter` and `Rerank` belong to the
+  vector builder; a direct `QueryConfigV2` with either but no vector query is
+  rejected. An explicitly empty `VectorQuery` is rejected instead of becoming
+  a table scan. `RerankerConfig.MarshalJSON` keeps the main wire shape for
+  callers that serialize it themselves.
+- `RuntimeVersion` is the only public native diagnostic retained; cache paths,
+  source observation and installation live in the internal package, and the
+  preinstall command is `pkg/cmd/lancedb-go-native`.

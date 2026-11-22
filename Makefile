@@ -13,16 +13,16 @@ build:
 	$(GO) build ./...
 
 test:
-	$(GO) test ./...
+	$(GO) test -count=1 ./...
 
 # Loader, cache and ABI-layout tests that do not need a native library.
 test-native:
-	$(GO) test ./pkg/internal/native
+	$(GO) test -count=1 ./pkg/internal/native
 
 # Requires an authenticated S3-compatible fixture and VERSITYGW_BIN for the
 # profile/DynamoDB loopback test.
 test-integration:
-	$(GO) test -tags=integration -v ./pkg/lancedb
+	$(GO) test -tags=integration -count=1 -v ./pkg/lancedb
 
 vet:
 	$(GO) vet ./...
@@ -35,7 +35,7 @@ fmt-check:
 
 # Download and verify the pinned lancedb-c artifact for this target.
 install-native:
-	$(GO) run ./cmd/lancedb-go-native
+	$(GO) run ./pkg/cmd/lancedb-go-native
 
 bench:
 	$(GO) test -bench=. -benchmem ./...

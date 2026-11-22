@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"runtime"
 	"sort"
-	"strconv"
 	"sync"
 
 	"github.com/lancedb/lancedb-go/pkg/contracts"
@@ -120,14 +119,14 @@ func (c *Connection) CreateTable(_ context.Context, name string, schema contract
 	if err != nil {
 		return nil, err
 	}
-	reader, arrowSchemaHandle, err := newIPCReader(api, ipcBytes, true)
+	arrowSchemaHandle, err := newIPCSchema(api, ipcBytes)
 	if err != nil {
 		return nil, err
 	}
 	var tableHandle uintptr
 	var errorMessage *byte
-	code := api.TableCreate(c.handle, name, arrowSchemaHandle, reader, &tableHandle, &errorMessage)
-	// The C API consumes the reader and borrows the schema.
+	code := api.TableCreate(c.handle, name, arrowSchemaHandle, 0, &tableHandle, &errorMessage)
+	// Empty table creation needs only the schema; the C API borrows it.
 	api.FreeArrowSchema(arrowSchemaHandle)
 	if err := check(api, code, errorMessage, fmt.Sprintf("failed to create table %s", name)); err != nil {
 		return nil, err
@@ -171,10 +170,7 @@ func ConnectWithStorageOptions(ctx context.Context, uri string, storageOptions m
 	return connect(ctx, uri, storageOptions)
 }
 
-func connect(ctx context.Context, uri string, storageOptions map[string]string) (contracts.IConnection, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+func connect(_ context.Context, uri string, storageOptions map[string]string) (contracts.IConnection, error) {
 	api, err := loadAPI()
 	if err != nil {
 		return nil, err
@@ -229,15 +225,8 @@ func legacyStorageOptions(options *contracts.StorageOptions) map[string]string {
 	put(contracts.StorageAWSSessionToken, s3.SessionToken)
 	put(contracts.StorageAWSRegion, s3.Region)
 	put(contracts.StorageAWSProfile, s3.Profile)
-	put(contracts.StorageAWSEndpoint, s3.Endpoint)
-	if s3.ForcePathStyle != nil {
-		out[contracts.StorageVirtualHostedStyleRequest] = strconv.FormatBool(!*s3.ForcePathStyle)
-	}
-	if s3.AnonymousAccess != nil {
-		out["skip_signature"] = strconv.FormatBool(*s3.AnonymousAccess)
-	}
-	if s3.UseSSL != nil {
-		out[contracts.StorageAllowHTTP] = strconv.FormatBool(!*s3.UseSSL)
-	}
+	// v0.1.2 only read credentials, session token, region and profile from
+	// the structured S3 config. Endpoint, addressing style, anonymous access
+	// and TLS switches stay explicit through ConnectWithStorageOptions.
 	return out
 }

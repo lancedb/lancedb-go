@@ -62,20 +62,19 @@ func TestVectorQuery_Rerank_DefaultK_UsesBackendDefault(t *testing.T) {
 	rec.Release()
 }
 
-// TestQuery_Rerank_RRF_Standard — the reranker wiring also reaches the
-// non-vector query path (currently a no-op backend-side, but the JSON must
-// still parse cleanly).
-func TestQuery_Rerank_RRF_Standard(t *testing.T) {
+// TestSelectV2_RerankerRequiresVector — the additive query builder does not
+// expose Rerank; a direct QueryConfigV2 with a reranker but no vector query is
+// rejected instead of silently ignoring the promise.
+func TestSelectV2_RerankerRequiresVector(t *testing.T) {
 	table, cleanup := setupQueryTestTable(t)
 	defer cleanup()
 
-	rec, err := table.QueryV2().
-		Rerank(contracts.RerankerConfig{Kind: contracts.RerankerRRF, RRFK: 60}).
-		Limit(5).
-		Execute(context.Background())
-	require.NoError(t, err)
-	require.NotNil(t, rec)
-	rec.Release()
+	limit := 3
+	_, err := table.SelectV2(context.Background(), contracts.QueryConfigV2{
+		Limit:    &limit,
+		Reranker: &contracts.RerankerConfig{Kind: contracts.RerankerRRF, RRFK: 60},
+	})
+	require.Error(t, err)
 }
 
 // TestSelect_RerankerNone_DirectQueryConfig — Strategy 1 (Edge): a user

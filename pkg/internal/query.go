@@ -18,11 +18,14 @@ import (
 type queryState struct {
 	table *Table
 
-	filters  []string
-	limit    int
-	limitSet bool
-	offset   int
-	columns  []string
+	legacy          bool
+	filters         []string
+	limit           int
+	limitSet        bool
+	zeroLimit       bool
+	offset          int
+	columns         []string
+	vectorRequested bool
 
 	withRowID  bool
 	fastSearch bool
@@ -81,6 +84,9 @@ func (q *QueryBuilder) ApplyOptions(options *contracts.QueryOptions) contracts.I
 }
 
 func (q *QueryBuilder) Execute() ([]arrow.Record, error) {
+	if q.state.table.connection != nil && q.state.table.connection.IsClosed() {
+		return nil, fmt.Errorf("table is closed")
+	}
 	return q.state.table.executeQueryRecords(context.Background(), q.state)
 }
 
@@ -135,17 +141,6 @@ func (q *QueryBuilderV2) WithRowID() contracts.IQueryBuilderV2 {
 
 func (q *QueryBuilderV2) FastSearch() contracts.IQueryBuilderV2 {
 	q.state.fastSearch = true
-	return q
-}
-
-func (q *QueryBuilderV2) Postfilter() contracts.IQueryBuilderV2 {
-	q.state.postfilter = true
-	return q
-}
-
-func (q *QueryBuilderV2) Rerank(config contracts.RerankerConfig) contracts.IQueryBuilderV2 {
-	copy := config
-	q.state.reranker = &copy
 	return q
 }
 
@@ -272,6 +267,7 @@ func (q *VectorQueryBuilderV2) ApplyOptions(options *contracts.QueryOptions) con
 func (q *VectorQueryBuilderV2) Execute(ctx context.Context) (arrow.Record, error) {
 	q.state.vector = append([]float32(nil), q.vector...)
 	q.state.vectorColumn = q.column
+	q.state.vectorRequested = true
 	return q.state.table.executeQueryRecord(ctx, q.state)
 }
 
@@ -315,8 +311,10 @@ func (t *Table) executeQueryRecord(ctx context.Context, state *queryState) (arro
 }
 
 func (t *Table) executeQueryIPC(ctx context.Context, state *queryState) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	if !state.legacy {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -327,8 +325,10 @@ func (t *Table) executeQueryIPC(ctx context.Context, state *queryState) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-
-	vectorQuery := len(state.vector) > 0 || state.vectorColumn != ""
+	vectorQuery := state.vectorRequested
+	if !vectorQuery && state.limitSet && state.limit < 0 {
+		return nil, fmt.Errorf("query limit must not be negative")
+	}
 	var query uintptr
 	if vectorQuery {
 		if len(state.vector) == 0 {
@@ -340,7 +340,7 @@ func (t *Table) executeQueryIPC(ctx context.Context, state *queryState) ([]byte,
 		if !state.limitSet {
 			return nil, fmt.Errorf("vector search requires a positive K value; call Limit or set QueryOptions.MaxResults")
 		}
-		if state.limit <= 0 {
+		if state.limit < 0 || (!state.legacy && state.limit == 0) {
 			return nil, fmt.Errorf("K must be a positive integer")
 		}
 		query = api.VectorQueryNew(t.handle, &state.vector[0], uintptr(len(state.vector)))
@@ -350,6 +350,13 @@ func (t *Table) executeQueryIPC(ctx context.Context, state *queryState) ([]byte,
 	}
 	if query == 0 {
 		return nil, fmt.Errorf("failed to create native query")
+	}
+	if vectorQuery {
+		var columnError *byte
+		if err := check(api, api.VectorQueryColumn(query, state.vectorColumn, &columnError), columnError, "set vector column"); err != nil {
+			api.VectorQueryFree(query)
+			return nil, err
+		}
 	}
 	executed := false
 	defer func() {
@@ -368,9 +375,10 @@ func (t *Table) executeQueryIPC(ctx context.Context, state *queryState) ([]byte,
 	var errorMessage *byte
 
 	if state.offset < 0 {
-		return nil, fmt.Errorf("query offset must not be negative")
-	}
-	if state.offset > 0 {
+		if !state.legacy {
+			return nil, fmt.Errorf("query offset must not be negative")
+		}
+	} else if state.offset > 0 && !(state.legacy && vectorQuery) {
 		if vectorQuery {
 			if err := apply(api.VectorQueryOffset(query, uintptr(state.offset), &errorMessage), errorMessage, "set query offset"); err != nil {
 				return nil, err
@@ -381,7 +389,7 @@ func (t *Table) executeQueryIPC(ctx context.Context, state *queryState) ([]byte,
 			}
 		}
 	}
-	if state.limitSet && state.limit > 0 {
+	if state.limitSet && (state.limit > 0 || state.zeroLimit) {
 		if vectorQuery {
 			if err := apply(api.VectorQueryLimit(query, uintptr(state.limit), &errorMessage), errorMessage, "set query limit"); err != nil {
 				return nil, err

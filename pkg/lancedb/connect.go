@@ -36,30 +36,3 @@ func RuntimeVersion() (string, error) {
 	}
 	return api.Version(), nil
 }
-
-// NativeLibrary describes the loaded native library. It is useful for
-// diagnostics and for verifying explicit override or cache discovery.
-type NativeLibrary struct {
-	Path    string
-	Source  string
-	Version string
-}
-
-// LoadedNativeLibrary returns the current native-library state without loading
-// a new library.
-func LoadedNativeLibrary() NativeLibrary {
-	state := native.Observe()
-	return NativeLibrary{
-		Path:    state.Path,
-		Source:  string(state.Source),
-		Version: state.Version,
-	}
-}
-
-// InstallNativeLibrary downloads, verifies and extracts the pinned lancedb-c
-// artifact for the running target into the private cache. It returns the
-// runtime library path. It is useful for pre-seeding an offline environment or
-// a CI cache; Load performs the same installation lazily.
-func InstallNativeLibrary() (string, error) {
-	return native.Install()
-}

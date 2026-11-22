@@ -162,14 +162,18 @@ func discover() (*Library, error) {
 }
 
 func openExplicit(path string) (*Library, error) {
-	info, err := os.Stat(path)
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s=%q: resolve absolute path: %w", EnvLibraryPath, path, err)
+	}
+	info, err := os.Stat(absolute)
 	if err != nil {
 		return nil, fmt.Errorf("%s=%q: %w", EnvLibraryPath, path, err)
 	}
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s=%q is not a regular file (mode %s)", EnvLibraryPath, path, info.Mode())
 	}
-	return openLibraryPath(path, SourceEnvironment)
+	return openLibraryPath(absolute, SourceEnvironment)
 }
 
 func openLibraryPath(path string, source Source) (*Library, error) {

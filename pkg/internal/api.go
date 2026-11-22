@@ -98,6 +98,27 @@ func goStringArray(ptrs **byte, count uintptr) []string {
 // newIPCReader imports an Arrow IPC file into a native record-batch reader.
 // The returned schema slot is optional; when requested, the caller must free it
 // with lancedb_free_arrow_schema after lancedb_table_create returns.
+func newIPCSchema(api *native.API, ipc []byte) (uintptr, error) {
+	var schema uintptr
+	var errorMessage *byte
+	var data *byte
+	if len(ipc) > 0 {
+		data = &ipc[0]
+	}
+	code := api.RecordBatchReaderFromIPCFile(data, uintptr(len(ipc)), nil, &schema, &errorMessage)
+	runtime.KeepAlive(ipc)
+	if err := check(api, code, errorMessage, "read Arrow IPC schema"); err != nil {
+		if schema != 0 {
+			api.FreeArrowSchema(schema)
+		}
+		return 0, err
+	}
+	if schema == 0 {
+		return 0, fmt.Errorf("lancedb-c returned an empty Arrow schema")
+	}
+	return schema, nil
+}
+
 func newIPCReader(api *native.API, ipc []byte, wantSchema bool) (reader, schema uintptr, err error) {
 	var errorMessage *byte
 	var data *byte

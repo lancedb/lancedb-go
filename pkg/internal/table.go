@@ -4,13 +4,13 @@
 package internal
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -100,6 +100,12 @@ func (t *Table) Schema(_ context.Context) (*arrow.Schema, error) {
 
 func (t *Table) Add(ctx context.Context, record arrow.Record, options *contracts.AddDataOptions) error {
 	if record == nil {
+		t.mu.RLock()
+		closed := t.closed || t.handle == 0
+		t.mu.RUnlock()
+		if closed {
+			return fmt.Errorf("table is closed")
+		}
 		return nil
 	}
 	return t.AddRecords(ctx, []arrow.Record{record}, options)
@@ -176,6 +182,9 @@ func (t *Table) Version(_ context.Context) (int, error) {
 }
 
 func (t *Table) Update(_ context.Context, filter string, updates map[string]interface{}) error {
+	if strings.TrimSpace(filter) == "" {
+		return fmt.Errorf("failed to update rows: predicate must not be empty")
+	}
 	if len(updates) == 0 {
 		return fmt.Errorf("updates map cannot be empty")
 	}
@@ -186,7 +195,7 @@ func (t *Table) Update(_ context.Context, filter string, updates map[string]inte
 	sort.Strings(columns)
 	expressions := make([]string, len(columns))
 	for i, column := range columns {
-		expression, err := sqlLiteral(updates[column])
+		expression, err := legacyJSONScalar(updates[column])
 		if err != nil {
 			return fmt.Errorf("update column %s: %w", column, err)
 		}
@@ -266,7 +275,9 @@ func (t *Table) MergeInsert(on []string) contracts.IMergeInsertBuilder {
 
 // Query returns the published v0.1.2 query builder.
 func (t *Table) Query() contracts.IQueryBuilder {
-	return &QueryBuilder{state: newQueryState(t)}
+	state := newQueryState(t)
+	state.legacy = true
+	return &QueryBuilder{state: state}
 }
 
 // QueryV2 returns the additive context/single-record query builder.
@@ -277,46 +288,42 @@ func (t *Table) QueryV2() contracts.IQueryBuilderV2 {
 // VectorQuery returns the additive vector query builder.
 func (t *Table) VectorQuery(column string, vector []float32) contracts.IVectorQueryBuilderV2 {
 	vectorCopy := append([]float32(nil), vector...)
-	return &VectorQueryBuilderV2{state: newQueryState(t), vector: vectorCopy, column: column}
+	state := newQueryState(t)
+	state.vectorRequested = true
+	return &VectorQueryBuilderV2{state: state, vector: vectorCopy, column: column}
 }
 
-func sqlLiteral(value interface{}) (string, error) {
-	switch v := value.(type) {
-	case nil:
-		return "NULL", nil
-	case string:
-		return "'" + strings.ReplaceAll(v, "'", "''") + "'", nil
-	case bool:
-		return strconv.FormatBool(v), nil
-	case int:
-		return strconv.Itoa(v), nil
-	case int8:
-		return strconv.FormatInt(int64(v), 10), nil
-	case int16:
-		return strconv.FormatInt(int64(v), 10), nil
-	case int32:
-		return strconv.FormatInt(int64(v), 10), nil
-	case int64:
-		return strconv.FormatInt(v, 10), nil
-	case uint:
-		return strconv.FormatUint(uint64(v), 10), nil
-	case uint8:
-		return strconv.FormatUint(uint64(v), 10), nil
-	case uint16:
-		return strconv.FormatUint(uint64(v), 10), nil
-	case uint32:
-		return strconv.FormatUint(uint64(v), 10), nil
-	case uint64:
-		return strconv.FormatUint(v, 10), nil
-	case float32:
-		return strconv.FormatFloat(float64(v), 'g', -1, 32), nil
-	case float64:
-		return strconv.FormatFloat(v, 'g', -1, 64), nil
-	case json.Number:
-		return v.String(), nil
-	default:
-		return "", fmt.Errorf("unsupported value type %T; update values must be string, number, bool or nil", value)
+func legacyJSONScalar(value interface{}) (string, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("value is not JSON-serializable: %w", err)
 	}
+	encoded = bytes.TrimSpace(encoded)
+	if len(encoded) == 0 {
+		return "", fmt.Errorf("value encoded to an empty JSON scalar")
+	}
+	switch encoded[0] {
+	case '"':
+		var text string
+		if err := json.Unmarshal(encoded, &text); err != nil {
+			return "", fmt.Errorf("decode JSON string: %w", err)
+		}
+		return "'" + strings.ReplaceAll(text, "'", "''") + "'", nil
+	case 'n':
+		if string(encoded) == "null" {
+			return "NULL", nil
+		}
+	case 't', 'f':
+		if string(encoded) == "true" || string(encoded) == "false" {
+			return string(encoded), nil
+		}
+	default:
+		if encoded[0] == '-' || (encoded[0] >= '0' && encoded[0] <= '9') {
+			// json.Marshal only produces valid JSON numbers.
+			return string(encoded), nil
+		}
+	}
+	return "", fmt.Errorf("unsupported composite JSON value %s", string(encoded))
 }
 
 // Select executes a published v0.1.2 query configuration and returns map rows.
@@ -337,29 +344,36 @@ func (t *Table) Select(ctx context.Context, config contracts.QueryConfig) ([]map
 // entirely empty response is returned as nil.
 func (t *Table) SelectIPC(ctx context.Context, config contracts.QueryConfig) ([]byte, error) {
 	state := newQueryState(t)
+	state.legacy = true
 	state.columns = append([]string(nil), config.Columns...)
-	state.filters = nil
 	if config.Where != "" {
 		state.filters = []string{config.Where}
 	}
-	if config.Limit != nil {
-		state.limit = *config.Limit
-		state.limitSet = true
-	}
-	if config.Offset != nil {
-		state.offset = *config.Offset
-	}
 	if config.VectorSearch != nil {
+		state.vectorRequested = true
 		state.vector = append([]float32(nil), config.VectorSearch.Vector...)
 		state.vectorColumn = config.VectorSearch.Column
-		if !state.limitSet {
+		if config.Limit != nil && *config.Limit >= 0 {
+			state.limit = *config.Limit
+			state.limitSet = true
+			state.zeroLimit = state.limit == 0
+		} else {
 			state.limit = config.VectorSearch.K
 			state.limitSet = true
+			state.zeroLimit = state.limit == 0
 		}
-	}
-	if config.FTSSearch != nil {
-		state.fullTextQuery = config.FTSSearch.Query
-		state.fullTextColumn = config.FTSSearch.Column
+		// v0.1.2 ignores Offset for vector queries.
+	} else if config.FTSSearch != nil {
+		return nil, fmt.Errorf("failed to execute select query: Invalid input, Full-text search is not currently supported")
+	} else {
+		if config.Limit != nil && *config.Limit >= 0 {
+			state.limit = *config.Limit
+			state.limitSet = true
+			state.zeroLimit = state.limit == 0
+		}
+		if config.Offset != nil && *config.Offset >= 0 {
+			state.offset = *config.Offset
+		}
 	}
 	return t.executeQueryIPC(ctx, state)
 }
@@ -389,6 +403,7 @@ func (t *Table) SelectIPCV2(ctx context.Context, config contracts.QueryConfigV2)
 		state.offset = *config.Offset
 	}
 	if config.VectorSearch != nil {
+		state.vectorRequested = true
 		state.vector = append([]float32(nil), config.VectorSearch.Vector...)
 		state.vectorColumn = config.VectorSearch.Column
 		if !state.limitSet {
@@ -402,10 +417,18 @@ func (t *Table) SelectIPCV2(ctx context.Context, config contracts.QueryConfigV2)
 		state.bypassVectorIndex = config.VectorSearch.BypassVectorIndex
 		state.fullTextQuery = config.VectorSearch.FullTextQuery
 		state.fullTextColumn = config.VectorSearch.FullTextColumn
-	}
-	if config.FTSSearch != nil {
+	} else if config.FTSSearch != nil {
+		if strings.TrimSpace(config.FTSSearch.Query) == "" {
+			return nil, fmt.Errorf("full-text search query must not be empty")
+		}
 		state.fullTextQuery = config.FTSSearch.Query
 		state.fullTextColumn = config.FTSSearch.Column
+	}
+	if config.Postfilter && config.VectorSearch == nil {
+		return nil, fmt.Errorf("postfilter requires a vector query")
+	}
+	if config.Reranker != nil && config.Reranker.Kind != contracts.RerankerNone && config.VectorSearch == nil {
+		return nil, fmt.Errorf("reranker requires a vector query")
 	}
 	state.withRowID = config.WithRowID
 	state.fastSearch = config.FastSearch

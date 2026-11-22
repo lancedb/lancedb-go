@@ -15,7 +15,6 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -60,7 +59,15 @@ func install(target Target) (string, error) {
 		}
 	}
 
-	tmp := filepath.Join(dir, "."+target.LibraryName+".tmp-"+strconv.Itoa(os.Getpid()))
+	tmpFile, err := os.CreateTemp(dir, "."+target.LibraryName+".tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("create temporary library in %s: %w", dir, err)
+	}
+	tmp := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("close temporary library %s: %w", tmp, err)
+	}
 	defer os.Remove(tmp)
 	if err := extractLibrary(archivePath, target, tmp); err != nil {
 		return "", err
@@ -78,8 +85,9 @@ func install(target Target) (string, error) {
 		}
 		return "", fmt.Errorf("publish cached library %s: %w", libPath, err)
 	}
-	// The archive is large and can be downloaded again; keep only the library.
-	_ = os.Remove(archivePath)
+	// Keep the verified archive. Removing it while another process is reading
+	// the same cache entry creates a cross-process race; the archive is also
+	// useful for an offline repair.
 	return libPath, nil
 }
 
@@ -106,13 +114,13 @@ func verifyFileIfExists(path, want string) error {
 }
 
 func downloadFile(url, destination, wantSHA256 string) error {
-	tmp := destination + ".tmp-" + strconv.Itoa(os.Getpid())
-	defer os.Remove(tmp)
-
-	f, err := os.Create(tmp)
+	tmpFile, err := os.CreateTemp(filepath.Dir(destination), "."+filepath.Base(destination)+".tmp-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temporary archive next to %s: %w", destination, err)
 	}
+	tmp := tmpFile.Name()
+	defer os.Remove(tmp)
+	f := tmpFile
 	defer f.Close()
 
 	client := &http.Client{Timeout: downloadTimeout}
@@ -143,7 +151,13 @@ func downloadFile(url, destination, wantSHA256 string) error {
 	if got := hex.EncodeToString(h.Sum(nil)); got != wantSHA256 {
 		return fmt.Errorf("archive sha256 is %s, want %s", got, wantSHA256)
 	}
-	return os.Rename(tmp, destination)
+	if err := os.Rename(tmp, destination); err != nil {
+		if verifyFile(destination, wantSHA256) == nil {
+			return nil
+		}
+		return fmt.Errorf("publish archive %s: %w", destination, err)
+	}
+	return nil
 }
 
 func extractLibrary(archivePath string, target Target, destination string) error {

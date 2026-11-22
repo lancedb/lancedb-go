@@ -3,7 +3,10 @@
 
 package contracts
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // The types in this file are additive capabilities introduced after the
 // published v0.1.2 API. They deliberately do not change the field layout or
@@ -116,6 +119,35 @@ type RerankerConfig struct {
 	Kind RerankerKind
 	RRFK float32
 	Norm NormalizeMethod
+}
+
+// MarshalJSON preserves the wire shape introduced on Go main for callers that
+// serialize a reranker configuration themselves. The native path does not use
+// this encoding, but it remains part of the additive public type contract.
+func (rc *RerankerConfig) MarshalJSON() ([]byte, error) {
+	if rc == nil || rc.Kind == RerankerNone {
+		return []byte("null"), nil
+	}
+	var wire struct {
+		Kind string   `json:"kind"`
+		K    *float32 `json:"k,omitempty"`
+		Norm string   `json:"norm,omitempty"`
+	}
+	switch rc.Kind {
+	case RerankerRRF:
+		wire.Kind = "rrf"
+	}
+	if rc.RRFK > 0 {
+		k := rc.RRFK
+		wire.K = &k
+	}
+	switch rc.Norm {
+	case NormalizeScore:
+		wire.Norm = "score"
+	case NormalizeRank:
+		wire.Norm = "rank"
+	}
+	return json.Marshal(wire)
 }
 
 // CompactionMetrics reports what compact did.

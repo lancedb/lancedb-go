@@ -51,7 +51,7 @@ jobs:
 
       - name: Loader and ABI layout tests
         shell: bash
-        run: go test ./pkg/internal/native
+        run: go test -count=1 ./pkg/internal/native
 
       - name: Cache native artifact
         uses: actions/cache@v4
@@ -62,13 +62,13 @@ jobs:
       - name: Install native artifact and run tests
         shell: bash
         run: |
-          go run ./cmd/lancedb-go-native
-          go test ./...
+          go run ./pkg/cmd/lancedb-go-native
+          go test -count=1 ./...
 
       - name: Explicit override path
         shell: bash
         run: |
-          LIB="$(go run ./cmd/lancedb-go-native)"
+          LIB="$(go run ./pkg/cmd/lancedb-go-native)"
           LANCEDB_C_LIBRARY_PATH="$LIB" go test ./pkg/tests -run 'TestTableName|TestMultiBatchIPCConcatenation|TestSQLDialectColumnVersusLiteral' -count=1
 
       - name: Build all packages without cgo
@@ -100,7 +100,7 @@ jobs:
 
       - name: Install native artifact
         shell: bash
-        run: go run ./cmd/lancedb-go-native
+        run: go run ./pkg/cmd/lancedb-go-native
 
       - name: Install loopback S3 fixture
         shell: bash
@@ -138,4 +138,4 @@ jobs:
           MINIO_ACCESS_KEY: TESTPRIMARY
           MINIO_SECRET_KEY: primary-secret
           MINIO_BUCKET: lancedb-go-integration
-        run: go test -tags=integration -v ./pkg/lancedb
+        run: go test -tags=integration -count=1 -v ./pkg/lancedb

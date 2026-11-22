@@ -332,14 +332,18 @@ func TestSelectQueries(t *testing.T) {
 			t.Fatalf("❌Failed to create FTS index: %v", err)
 		}
 
-		config := contracts.QueryConfig{
+		config := contracts.QueryConfigV2{
 			FTSSearch: &contracts.FTSSearch{
 				Column: "name",
 				Query:  "Alice",
 			},
 		}
 
-		results, err := table.Select(context.Background(), config)
+		queryV2, ok := table.(contracts.ITableQueryV2)
+		if !ok {
+			t.Fatal("❌Table does not implement ITableQueryV2")
+		}
+		results, err := queryV2.SelectV2(context.Background(), config)
 		if err != nil {
 			t.Fatalf("❌Unexpected error for FTS search: %v", err)
 		}

@@ -412,7 +412,7 @@ func indexTypeStringToGo(indexType string) string {
 	case "LABEL_LIST", "LABELLIST":
 		return "LabelList"
 	case "FTS":
-		return "Fts"
+		return "FTS"
 	case "AUTO":
 		return "Auto"
 	default:

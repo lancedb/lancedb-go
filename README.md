@@ -13,7 +13,9 @@ Rust toolchain, no C compiler and no `CGO_ENABLED=1` build.
 ## Install
 
 ```bash
-go get github.com/lancedb/lancedb-go
+# The preview must be requested explicitly: @latest currently resolves to the
+# stable v0.1.2 module, which predates this migration.
+go get github.com/lancedb/lancedb-go@v0.2.0-preview.1
 ```
 
 The first `Connect` downloads the pinned `lancedb-c` release for the running
@@ -24,7 +26,7 @@ machine.
 To pre-seed the cache (for example in an offline image or CI):
 
 ```bash
-go run github.com/lancedb/lancedb-go/cmd/lancedb-go-native@latest
+go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@v0.2.0-preview.1
 ```
 
 Discovery can be controlled explicitly:
@@ -35,9 +37,14 @@ Discovery can be controlled explicitly:
 | `LANCEDB_C_CACHE_DIR` | Override the private cache root. Default: the platform user cache directory plus `lancedb-go/native`. |
 | `LANCEDB_C_RELEASE_BASE_URL` | Use a release mirror or loopback fixture. The pinned asset names and digests still apply. |
 
-The runtime version must match the C header the module was built against. The
-loaded library is never unloaded: `lancedb-c` owns native threads and handles
-that may outlive a table.
+The runtime version must match the C header the module was built against. For
+diagnostics, `lancedb.RuntimeVersion()` returns the loaded library's reported
+version. The loaded library is never unloaded: `lancedb-c` owns native threads
+and handles that may outlive a table.
+
+The published Linux libraries require **glibc 2.35 or newer** on both amd64 and
+arm64. The 2.34 loader reports missing `GLIBC_2.35`; use a distribution with
+2.35+ (for example Ubuntu 22.04 or later).
 
 ## Quick start
 

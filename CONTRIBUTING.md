@@ -50,7 +50,7 @@ at a production account or real data.
 | `pkg/internal` | Go adapters: handles, locking, Arrow IPC conversion, lifecycle. |
 | `pkg/internal/native` | Library discovery, SHA-256 verification, cache, purego bindings, C structs and ABI layout tests. |
 | `include/lancedb.h` | Exact public C header from the pinned `lancedb-c` release. |
-| `cmd/lancedb-go-native` | Pre-download and verify the native artifact. |
+| `pkg/cmd/lancedb-go-native` | Pre-download and verify the native artifact. |
 
 `pkg/contracts` is a compatibility boundary. Do not add a method to a published
 interface or a field to a published struct to expose a new capability; add a

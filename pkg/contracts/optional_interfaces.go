@@ -20,8 +20,6 @@ type IQueryBuilderV2 interface {
 	Offset(offset int) IQueryBuilderV2
 	WithRowID() IQueryBuilderV2
 	FastSearch() IQueryBuilderV2
-	Postfilter() IQueryBuilderV2
-	Rerank(cfg RerankerConfig) IQueryBuilderV2
 	Execute(ctx context.Context) (arrow.Record, error)
 	ExecuteAsync(ctx context.Context) (<-chan arrow.Record, <-chan error)
 	ApplyOptions(options *QueryOptions) IQueryBuilderV2

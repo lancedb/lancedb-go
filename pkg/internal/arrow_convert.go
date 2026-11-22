@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
@@ -82,8 +83,9 @@ func ipcBytesToRecords(ipcBytes []byte) ([]arrow.Record, *arrow.Schema, error) {
 	return records, schema, nil
 }
 
-// ipcBytesToRecord decodes an Arrow IPC file into a single record. Multiple
-// batches are concatenated so the context/single-record API returns every row.
+// ipcBytesToRecord decodes an Arrow IPC file into a single record. Every
+// result batch contributes its rows; Arrow batches are concatenated by column
+// so the context/single-record API never silently drops a later batch.
 func ipcBytesToRecord(ipcBytes []byte) (arrow.Record, error) {
 	records, schema, err := ipcBytesToRecords(ipcBytes)
 	if err != nil {
@@ -118,16 +120,30 @@ func ipcBytesToRecord(ipcBytes []byte) (arrow.Record, error) {
 		return rec, nil
 	}
 
-	table := array.NewTableFromRecords(schema, records)
-	defer table.Release()
-	reader := array.NewTableReader(table, table.NumRows())
-	defer reader.Release()
-	if reader.Next() {
-		rec := reader.Record()
-		rec.Retain()
-		return rec, nil
+	columns := make([]arrow.Array, schema.NumFields())
+	for columnIndex := range columns {
+		arrays := make([]arrow.Array, len(records))
+		for recordIndex, record := range records {
+			arrays[recordIndex] = record.Column(columnIndex)
+		}
+		concatenated, err := array.Concatenate(arrays, memory.DefaultAllocator)
+		if err != nil {
+			for _, column := range columns[:columnIndex] {
+				column.Release()
+			}
+			return nil, fmt.Errorf("concatenate column %s across %d batches: %w", schema.Field(columnIndex).Name, len(records), err)
+		}
+		columns[columnIndex] = concatenated
 	}
-	return nil, fmt.Errorf("failed to concatenate IPC record batches")
+	totalRows := int64(0)
+	for _, record := range records {
+		totalRows += record.NumRows()
+	}
+	record := array.NewRecord(schema, columns, totalRows)
+	for _, column := range columns {
+		column.Release()
+	}
+	return record, nil
 }
 
 // ipcBytesToMaps converts Arrow rows to the legacy map representation. Numbers
@@ -171,10 +187,6 @@ func arrowValueToJSON(column arrow.Array, index int) (interface{}, error) {
 		return nil, nil
 	}
 	switch values := column.(type) {
-	case *array.Int8:
-		return float64(values.Value(index)), nil
-	case *array.Int16:
-		return float64(values.Value(index)), nil
 	case *array.Int32:
 		return float64(values.Value(index)), nil
 	case *array.Int64:
@@ -188,14 +200,20 @@ func arrowValueToJSON(column arrow.Array, index int) (interface{}, error) {
 	case *array.Uint64:
 		return float64(values.Value(index)), nil
 	case *array.Float32:
-		return float64(values.Value(index)), nil
+		value := float64(values.Value(index))
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return nil, nil
+		}
+		return value, nil
 	case *array.Float64:
-		return values.Value(index), nil
+		value := values.Value(index)
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return nil, nil
+		}
+		return value, nil
 	case *array.Boolean:
 		return values.Value(index), nil
 	case *array.String:
-		return values.Value(index), nil
-	case *array.LargeString:
 		return values.Value(index), nil
 	case *array.FixedSizeList:
 		start, end := values.ValueOffsets(index)
@@ -204,7 +222,76 @@ func arrowValueToJSON(column arrow.Array, index int) (interface{}, error) {
 		start, end := values.ValueOffsets(index)
 		return listValuesToJSON(values.ListValues(), start, end)
 	default:
-		return fmt.Sprintf("Unsupported type: %s", column.DataType()), nil
+		// The published Select path decoded a JSON response. Match the old
+		// converter's Rust Debug placeholder for types it did not support,
+		// rather than exposing a new Go-formatted or numeric value.
+		return "Unsupported type: " + rustDebugType(column.DataType()), nil
+	}
+}
+
+func rustDebugType(dataType arrow.DataType) string {
+	switch value := dataType.(type) {
+	case *arrow.Int8Type:
+		return "Int8"
+	case *arrow.Int16Type:
+		return "Int16"
+	case *arrow.Float16Type:
+		return "Float16"
+	case *arrow.BinaryType:
+		return "Binary"
+	case *arrow.LargeBinaryType:
+		return "LargeBinary"
+	case *arrow.FixedSizeBinaryType:
+		return fmt.Sprintf("FixedSizeBinary(%d)", value.ByteWidth)
+	case *arrow.BinaryViewType:
+		return "BinaryView"
+	case *arrow.StringViewType:
+		return "Utf8View"
+	case *arrow.LargeStringType:
+		return "LargeUtf8"
+	case *arrow.Date32Type:
+		return "Date32"
+	case *arrow.Date64Type:
+		return "Date64"
+	case *arrow.Time32Type:
+		return fmt.Sprintf("Time32(%s)", rustTimeUnit(value.Unit))
+	case *arrow.Time64Type:
+		return fmt.Sprintf("Time64(%s)", rustTimeUnit(value.Unit))
+	case *arrow.TimestampType:
+		zone := "None"
+		if value.TimeZone != "" {
+			zone = fmt.Sprintf("Some(%q)", value.TimeZone)
+		}
+		return fmt.Sprintf("Timestamp(%s, %s)", rustTimeUnit(value.Unit), zone)
+	case *arrow.DurationType:
+		return fmt.Sprintf("Duration(%s)", rustTimeUnit(value.Unit))
+	case *arrow.Decimal128Type:
+		return fmt.Sprintf("Decimal128(%d, %d)", value.Precision, value.Scale)
+	case *arrow.Decimal256Type:
+		return fmt.Sprintf("Decimal256(%d, %d)", value.Precision, value.Scale)
+	case *arrow.LargeListType:
+		return "LargeList"
+	case *arrow.MapType:
+		return "Map"
+	case *arrow.StructType:
+		return "Struct"
+	default:
+		return dataType.String()
+	}
+}
+
+func rustTimeUnit(unit arrow.TimeUnit) string {
+	switch unit {
+	case arrow.Second:
+		return "Second"
+	case arrow.Millisecond:
+		return "Millisecond"
+	case arrow.Microsecond:
+		return "Microsecond"
+	case arrow.Nanosecond:
+		return "Nanosecond"
+	default:
+		return "Unknown"
 	}
 }
 

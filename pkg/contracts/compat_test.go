@@ -139,3 +139,22 @@ func assertFields(t *testing.T, typ reflect.Type, want []string) {
 		}
 	}
 }
+
+func TestRerankerConfigMarshalJSON(t *testing.T) {
+	var none *contracts.RerankerConfig
+	data, err := none.MarshalJSON()
+	if err != nil || string(data) != "null" {
+		t.Fatalf("nil reranker JSON = %s, %v", data, err)
+	}
+	data, err = (&contracts.RerankerConfig{Kind: contracts.RerankerNone}).MarshalJSON()
+	if err != nil || string(data) != "null" {
+		t.Fatalf("none reranker JSON = %s, %v", data, err)
+	}
+	data, err = (&contracts.RerankerConfig{Kind: contracts.RerankerRRF, RRFK: 60, Norm: contracts.NormalizeRank}).MarshalJSON()
+	if err != nil {
+		t.Fatalf("rrf reranker JSON: %v", err)
+	}
+	if string(data) != `{"kind":"rrf","k":60,"norm":"rank"}` {
+		t.Fatalf("rrf reranker JSON = %s", data)
+	}
+}
