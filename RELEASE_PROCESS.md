@@ -1,9 +1,9 @@
 # Release process
 
-`lancedb-go` is a Go module. A release is a Git tag such as `v0.2.0-preview.1`;
-the Go module proxy serves the tagged source. The SDK does not build or attach
-native libraries: those come from the pinned `lancedb-c` release and are
-downloaded and verified by the loader.
+`lancedb-go` is a Go module. A release is a Git tag such as
+`vX.Y.Z-preview.N`; the Go module proxy serves the tagged source. The SDK does
+not build or attach native libraries: those come from the pinned `lancedb-c`
+release and are downloaded and verified by the loader.
 
 ## Before tagging
 
@@ -11,20 +11,33 @@ downloaded and verified by the loader.
    release tag, full commit, every published archive and its archive/library
    SHA-256 digests.
 2. Confirm CI is green on the exact commit for Linux amd64/arm64, Windows
-   amd64/arm64 and macOS Apple Silicon with `CGO_ENABLED=0`, and that the
-   authenticated S3 and AWS profile/DynamoDB loopback tests pass.
+   amd64/arm64 and macOS Apple Silicon with `CGO_ENABLED=0`, including the
+   external `examples` module consumer, and that the authenticated S3 and AWS
+   profile/DynamoDB loopback tests pass.
 3. Confirm the public API baseline and [MIGRATION.md](MIGRATION.md) are current.
 4. Verify the module graph declares Go 1.21 and that `go mod tidy` is clean.
+
+Keep release-specific facts (the pinned C release, bundled SDK and artifact
+digests) in the release notes and CHANGELOG. User-facing installation docs
+link to the releases page.
 
 ## Tagging
 
 ```bash
-git tag v0.2.0-preview.1
-git push origin v0.2.0-preview.1
+VERSION=vX.Y.Z-preview.N  # the tag being released
+git tag "$VERSION"
+git push origin "refs/tags/$VERSION"
 ```
 
-The first post-migration `lancedb-go` release is a preview owned by the
-maintenance loop. Stable releases remain with Xuanwo.
+Post-migration preview releases are owned by the maintenance loop. Stable
+releases remain with Xuanwo.
+
+## After tagging
+
+Verify the tag resolves through the public Go module proxy, then build and run
+a clean external module against the tagged version without a local `replace`.
+Record the resolved version and the native runtime check with the release
+evidence.
 
 ## Rollback
 

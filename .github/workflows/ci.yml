@@ -57,7 +57,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/lancedb-native
-          key: native-${{ matrix.target }}-v0.1.0-preview.2
+          key: native-${{ matrix.target }}-v0.1.0-preview.3
 
       - name: Install native artifact and run tests
         shell: bash
@@ -70,6 +70,15 @@ jobs:
         run: |
           LIB="$(go run ./pkg/cmd/lancedb-go-native)"
           LANCEDB_C_LIBRARY_PATH="$LIB" go test ./pkg/tests -run 'TestTableName|TestMultiBatchIPCConcatenation|TestSQLDialectColumnVersusLiteral' -count=1
+
+      # The examples module imports the SDK as an external module at the exact
+      # checkout, so this also proves the public import path and native runtime.
+      - name: External module consumer
+        shell: bash
+        run: |
+          cd examples
+          go run -mod=readonly ./basic_crud
+          go test -mod=readonly -count=1 -run 'TestTableName|TestMultiBatchIPCConcatenation|TestSQLDialectColumnVersusLiteral' github.com/lancedb/lancedb-go/pkg/tests
 
       - name: Build all packages without cgo
         shell: bash

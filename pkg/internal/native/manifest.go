@@ -12,9 +12,9 @@ import (
 // with the published release inventory; the full commit is part of every
 // asset name and must not be shortened or guessed.
 const (
-	ReleaseTag     = "v0.1.0-preview.2"
-	ReleaseVersion = "0.1.0-preview.2"
-	ReleaseCommit  = "250aa95153848c6fc6f4af571af70e979fb89ce3"
+	ReleaseTag     = "v0.1.0-preview.3"
+	ReleaseVersion = "0.1.0-preview.3"
+	ReleaseCommit  = "db285fa312ca922ded00cb503b12f6df629932ac"
 	ReleaseRepo    = "lancedb/lancedb-c"
 )
 
@@ -40,42 +40,42 @@ var Targets = map[string]Target{
 	"linux/amd64": {
 		Name:          "linux-amd64",
 		Archive:       "lancedb-c-" + ReleaseCommit + "-linux-amd64.tar.gz",
-		ArchiveSHA256: "bd1fd0688dba257887eafe4b855331bcaf0d0fc7209292cf90bb2e9fe7d0e6ee",
+		ArchiveSHA256: "8368dddbbe65e23f945eebb05d3408a4bc98a68bbd4bd89566617b150b84861d",
 		LibraryPath:   "lib/liblancedb.so",
 		LibraryName:   "liblancedb.so",
-		LibrarySHA256: "6731944f6c4c85201e127f1e83f41275c45233397504cc05a1e166d276c2a9ef",
+		LibrarySHA256: "9b15ae2d1b0e17879c69f6b6b8419e39bb926a91a25f0ce89ef8c3d9ed0166ae",
 	},
 	"linux/arm64": {
 		Name:          "linux-arm64",
 		Archive:       "lancedb-c-" + ReleaseCommit + "-linux-arm64.tar.gz",
-		ArchiveSHA256: "3812530e38a629505b83db96fa1d42fceb10425c9cbd165f8fdb50a1f1a56df6",
+		ArchiveSHA256: "acbe8f5015af081c626f1df532999f7b27ab5306dcffb7664462fc0cea73d11a",
 		LibraryPath:   "lib/liblancedb.so",
 		LibraryName:   "liblancedb.so",
-		LibrarySHA256: "9b85eebec8ebff3ea8dc2cfb9053564cd8c87da672e5aa4122c469a89b6cfab8",
+		LibrarySHA256: "b496f1736dd69db744d541cf5dc2ce3fbfcd35ae02a7793c427bcfbc559177da",
 	},
 	"darwin/arm64": {
 		Name:          "darwin-arm64",
 		Archive:       "lancedb-c-" + ReleaseCommit + "-darwin-arm64.tar.gz",
-		ArchiveSHA256: "d3974f838854b91a327591bb60c109da66bd101a5ac1254cfa6be278bd9171ac",
+		ArchiveSHA256: "9d72e7ec9c3f70d5b681be2b0b2563d9e210157ab33f9f0b50bf256762f721d3",
 		LibraryPath:   "lib/liblancedb.dylib",
 		LibraryName:   "liblancedb.dylib",
-		LibrarySHA256: "d9fa3f36164f26ffe28cecab8f8fdc4e5e60a0beb2f79903a0bff49b95ff14e8",
+		LibrarySHA256: "322573a2fc1d1d36b85b8b411603262ee2392a05bf858a4a1ca10e177a129cc2",
 	},
 	"windows/amd64": {
 		Name:          "windows-amd64",
 		Archive:       "lancedb-c-" + ReleaseCommit + "-windows-amd64.tar.gz",
-		ArchiveSHA256: "a65f762a3a95537064a5052ec9b79a199a22433e39ae21f4a2571f10b2ce425f",
+		ArchiveSHA256: "8118922136f000cd0758635bf63cd8051a1f15042945a8219a82e54500060d85",
 		LibraryPath:   "lib/lancedb.dll",
 		LibraryName:   "lancedb.dll",
-		LibrarySHA256: "2cf1a6e6100927c90845a0288d57fb5fc836ae0a276ec603b752a37da6fec467",
+		LibrarySHA256: "97b0ab0fe1a787b6d9f7959a629cb41919161f0e97d0652e4fd5c0576c682e8a",
 	},
 	"windows/arm64": {
 		Name:          "windows-arm64",
 		Archive:       "lancedb-c-" + ReleaseCommit + "-windows-arm64.tar.gz",
-		ArchiveSHA256: "17d05ad2d9e88a470f13f7e455796ee2189ebd7aa4bec087696cbe91e636f826",
+		ArchiveSHA256: "5975d7b038d0edc2739db486d4f5e22bbfcd052666bca41e56870807b77e12fa",
 		LibraryPath:   "lib/lancedb.dll",
 		LibraryName:   "lancedb.dll",
-		LibrarySHA256: "67f4685894301d9b9acc5cc2e6b13a8b858b3e53dda5b51b555275ff151c6668",
+		LibrarySHA256: "39eb2d0d1703fedf6b0733aaaf83dcd851cf27ee69a6a86b5fd2e8f20d7fe3b8",
 	},
 }
 

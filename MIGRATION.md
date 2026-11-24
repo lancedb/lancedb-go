@@ -2,9 +2,8 @@
 
 ## Read this first: SQL predicates can select different rows
 
-The migrated binding adopts the current LanceDB SDK SQL dialect. The old
-binding and the current SDK do not interpret the same predicate text the same
-way:
+The migrated binding adopts the LanceDB SDK SQL dialect. The old binding and
+the SDK do not interpret the same predicate text the same way:
 
 - Single quotes delimit a **string literal**: `s = 'active'`.
 - Double quotes delimit a **column identifier**: `s = "active"` compares the
@@ -53,12 +52,14 @@ implementations of the published interfaces keep compiling.
 - **Pure Go.** `rust/`, cgo and the static-library build are gone. The SDK loads
   the published `lancedb-c` shared library with `purego`, uses `CGO_ENABLED=0`
   and keeps the loaded library mapped for the process lifetime.
-- **Native artifacts.** The binding pins `lancedb-c v0.1.0-preview.2` (SDK
-  `0.42.0-beta.22`, Lance `15.0.0-beta.26`). It downloads the exact published
-  archive, verifies the archive and extracted library SHA-256 digests, checks
-  the runtime version and keeps a private per-user cache. Explicit override:
-  `LANCEDB_C_LIBRARY_PATH`; cache override: `LANCEDB_C_CACHE_DIR`; pre-install:
-  `go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@v0.2.0-preview.1`.
+- **Native artifacts.** The binding pins a published `lancedb-c` preview. The
+  release notes name the exact C release, bundled SDK and Lance versions. It
+  downloads the exact published archive, verifies the archive and extracted
+  library SHA-256 digests, checks the runtime version and keeps a private
+  per-user cache. Explicit override:
+  `LANCEDB_C_LIBRARY_PATH`; cache override: `LANCEDB_C_CACHE_DIR`; pre-install
+  with the module's tag:
+  `go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@vX.Y.Z-preview.N`.
   Concurrent installers serialize cache publication with a per-target OS file
   lock. Only a digest mismatch replaces an entry; a transient open/read/sharing
   error is reported, not treated as corruption.
