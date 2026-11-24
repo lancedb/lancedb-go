@@ -12,10 +12,12 @@ Rust toolchain, no C compiler and no `CGO_ENABLED=1` build.
 
 ## Install
 
+Preview releases are published on the
+[releases page](https://github.com/lancedb/lancedb-go/releases). Pass the tag of
+the preview you want to `go get`:
+
 ```bash
-# The preview must be requested explicitly: @latest currently resolves to the
-# stable v0.1.2 module, which predates this migration.
-go get github.com/lancedb/lancedb-go@v0.2.0-preview.1
+go get github.com/lancedb/lancedb-go@vX.Y.Z-preview.N
 ```
 
 The first `Connect` downloads the pinned `lancedb-c` release for the running
@@ -23,10 +25,11 @@ target, verifies both the archive and extracted library SHA-256 digests, and
 loads it from a private per-user cache. No source build happens on the consumer
 machine.
 
-To pre-seed the cache (for example in an offline image or CI):
+To pre-seed the cache (for example in an offline image or CI), use the same
+tag:
 
 ```bash
-go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@v0.2.0-preview.1
+go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@vX.Y.Z-preview.N
 ```
 
 Discovery can be controlled explicitly:
@@ -152,7 +155,7 @@ mutate process environment variables.
 
 ## SQL predicates
 
-The migration adopts the current LanceDB SDK SQL dialect. Double quotes delimit
+The migration adopts the LanceDB SDK SQL dialect. Double quotes delimit
 column identifiers; single quotes delimit string literals. An existing update or
 delete can therefore succeed while selecting different rows. Read
 [MIGRATION.md](MIGRATION.md) before upgrading.
