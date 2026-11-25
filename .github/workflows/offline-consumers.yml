@@ -77,7 +77,6 @@ jobs:
       TARGET_GOARCH: ${{ matrix.goarch }}
       EXPECTED_UNAME: ${{ matrix.uname }}
       LIBRARY_NAME: ${{ matrix.library }}
-      EVIDENCE_DIR: ${{ runner.temp }}/offline-consumer-evidence
     steps:
       - name: Check out the release revision
         uses: actions/checkout@v4
@@ -112,6 +111,8 @@ jobs:
 
       - name: Run offline consumer acceptance
         shell: bash
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/offline-consumer-evidence
         run: bash scripts/offline-consumer/run.sh
 
       - name: Upload evidence
