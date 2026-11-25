@@ -61,6 +61,7 @@ jobs:
             scripts/go-module-origin/mock-s3.py \
             scripts/go-module-origin/test-server.py \
             scripts/go-module-origin/holding-server.py \
+            scripts/go-module-origin/sigv4-verifier.py \
             scripts/go-module-origin/fetch-release.py \
             scripts/go-module-origin/record-candidate-identity.py \
             scripts/go-module-origin/verify-candidate-identity.py
@@ -72,6 +73,7 @@ jobs:
           bash -n scripts/go-module-origin/generate-candidates.sh
           bash -n scripts/go-module-origin/origin-fixture-test.sh
           bash -n scripts/go-module-origin/deadline-fixture-test.sh
+          bash -n scripts/go-module-origin/signed-path-fixture-test.sh
 
       - name: Candidate generation and origin fixture
         run: |
@@ -88,3 +90,8 @@ jobs:
         run: |
           set -euo pipefail
           scripts/go-module-origin/deadline-fixture-test.sh
+
+      - name: Signed-path lock probe fixture
+        run: |
+          set -euo pipefail
+          scripts/go-module-origin/signed-path-fixture-test.sh

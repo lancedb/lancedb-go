@@ -180,6 +180,13 @@ found" and readback hashes only a fully received current object, so a failed
 GET cannot reuse a previous temp file. Credentials reach curl through a
 mode-0600 netrc file, never through argv, and are never printed.
 
+The object path is URI-encoded for the request (`@v` becomes `%40v`) because
+curl signs the path exactly as sent, while AWS CLI and R2 canonicalize the
+encoded form. The signed-path fixture runs the real probe against a local
+SigV4 verifier with fixed test credentials and also performs an AWS CLI GET
+against the same verifier, so a raw-path regression fails with
+`SignatureDoesNotMatch`.
+
 ### Public verification
 
 `scripts/verify-origin-public.sh` runs after publication without credentials.
@@ -214,5 +221,6 @@ fixture holds a discovery request and a proxy request on a loopback server and
 requires the verifier to fail at its own per-target budget while still
 attempting the later target. It also measures a slow but successful discovery
 stage reducing the proxy stage's remaining budget, and a retry sleep clipped to
-the budget. The suite also exercises the public-verification refusal path. It
-never accesses R2.
+the budget. The signed-path fixture runs the real lock probe against a local
+SigV4 verifier and compares it with the proven AWS CLI path. The suite also
+exercises the public-verification refusal path. It never accesses R2.
