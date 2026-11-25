@@ -10,8 +10,10 @@ fail() {
 }
 
 # NET_CLEANUP_RULE is registered before the Windows rule is created so the
-# exit trap can remove a rule whose creation readback fails.
-NET_CLEANUP_RULE=${NET_CLEANUP_RULE:-}
+# exit trap can remove a rule whose creation readback fails. Always start
+# empty: inherited state must never reach the exit trap, especially on a host
+# where prepare_windows_network_off returns before accepting the rule.
+NET_CLEANUP_RULE=""
 
 # cleanup_network_off removes the ephemeral Windows rule and verifies it is
 # gone. It is safe to call from an exit trap and idempotent when no rule was
@@ -29,12 +31,13 @@ cleanup_network_off() {
     LDB_OFFLINE_RULE="$rule" "$ps" -NoProfile -NonInteractive -Command '
       $ErrorActionPreference = "Stop"
       $ruleName = $env:LDB_OFFLINE_RULE
-      $existing = Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue
-      if ($null -ne $existing) {
+      $all = @(Get-NetFirewallRule -ErrorAction Stop)
+      $existing = @($all | Where-Object { $_.Name -eq $ruleName })
+      if ($existing.Count -gt 0) {
         $existing | Remove-NetFirewallRule -Confirm:$false -ErrorAction Stop
       }
-      $remaining = Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue
-      if ($null -ne $remaining) {
+      $remaining = @((Get-NetFirewallRule -ErrorAction Stop) | Where-Object { $_.Name -eq $ruleName })
+      if ($remaining.Count -gt 0) {
         throw "firewall rule $ruleName still exists after removal"
       }
       Write-Host "network_cleanup=verified rule=$ruleName"
@@ -121,7 +124,7 @@ prepare_windows_network_off() {
       # this runner cmdlet does not support -PassThru. The unique -Name is the
       # ownership link; the readback below is the source of truth.
       New-NetFirewallRule -Name $ruleName -DisplayName $ruleName -Direction Outbound -Program $program -Action Block -Profile Any -ErrorAction Stop | Out-Null
-      $readback = @(Get-NetFirewallRule -Name $ruleName -ErrorAction Stop)
+      $readback = @((Get-NetFirewallRule -ErrorAction Stop) | Where-Object { $_.Name -eq $ruleName })
       if ($readback.Count -ne 1) { throw "expected one rule named $ruleName, got $($readback.Count)" }
       $rule = $readback[0]
       if ($rule.Name -ne $ruleName) { throw "rule Name is $($rule.Name), want $ruleName" }

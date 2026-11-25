@@ -91,7 +91,8 @@ jobs:
         shell: pwsh
         run: |
           $prefix = "lancedb-go-offline-$env:GITHUB_RUN_ID-"
-          $remaining = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "$prefix*" })
+          $all = @(Get-NetFirewallRule -ErrorAction Stop)
+          $remaining = @($all | Where-Object { $_.Name -like "$prefix*" })
           if ($remaining.Count -gt 0) {
             $remaining | Format-Table Name, DisplayName, Enabled, Direction, Action | Out-String | Write-Host
             throw "offline firewall rules remain after the lane: $($remaining.Count)"
