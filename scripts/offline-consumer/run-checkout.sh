@@ -34,7 +34,15 @@ fi
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/offline-checkout.XXXXXX")
+WORK_PARENT=${TMPDIR:-/tmp}
+if [[ -n ${RUNNER_TEMP:-} ]]; then
+  if command -v cygpath >/dev/null 2>&1; then
+    WORK_PARENT=$(cygpath -u "$RUNNER_TEMP")
+  else
+    WORK_PARENT=$RUNNER_TEMP
+  fi
+fi
+WORK=$(mktemp -d "$WORK_PARENT/lancedb-offline.XXXXXX")
 SUMMARY="$EVIDENCE_DIR/summary.txt"
 COMMANDS="$EVIDENCE_DIR/commands.log"
 : > "$SUMMARY"
