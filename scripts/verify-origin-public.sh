@@ -14,11 +14,13 @@
 #     check; and
 #   * byte-compares the payload inside the public zip with the staged payload.
 #
-# Each target owns one readable deadline. Every network attempt (discovery
-# curl, proxy `go mod download`, direct `go mod download`) receives only the
-# remaining seconds of that budget, runs under a hard timeout that also cleans
-# up child processes, and every retry sleep is clipped to the remaining time.
-# A failed target does not consume another target's budget.
+# Each target owns one monotonic, fractional deadline. Every network attempt
+# (discovery curl, proxy `go mod download`, direct `go mod download`) receives
+# only the remaining milliseconds of that budget, and every retry sleep is
+# clipped to the remaining time. A failed target does not consume another
+# target's budget. curl and go run under `timeout` with a one-second
+# TERM-to-KILL grace for the immediate command; this is not a general guarantee
+# for arbitrary detached descendants.
 #
 # The script never reads credentials.
 set -euo pipefail
@@ -33,7 +35,10 @@ The origin tree supplies the staged payload bytes compared with the public zip.
 
 --timeout-seconds is the total budget for one target, covering discovery,
 proxy resolution, the direct discovery-path resolution, and retry waits
-(default 900). --interval-seconds is the wait between attempts (default 20).
+(default 900). The budget keeps fractional monotonic time; every attempt gets
+only the remaining time. --interval-seconds is the wait between attempts
+(default 20), clipped to the remaining budget. curl and go are bounded with a
+one-second TERM-to-KILL grace for the immediate command.
 
 Environment overrides, for fixtures only:
   ORIGIN_BASE_URL  discovery base (default https://go.lancedb.io)
@@ -88,40 +93,79 @@ probe_dir="$work/probe"
 mkdir -p "$probe_dir"
 printf 'module public-origin-probe\n\ngo 1.21.0\n' > "$probe_dir/go.mod"
 
-now() {
-  date +%s
+# One monotonic deadline per target. Python is already required by this script,
+# so time.monotonic_ns() keeps fractional elapsed time without adding a new
+# dependency. Every stage recomputes the remaining milliseconds instead of
+# rounding to whole seconds.
+monotonic_ns() {
+  python3 -c 'import time; print(time.monotonic_ns())'
 }
 
-# remaining_budget DEADLINE prints the remaining whole seconds. It returns 1
+ms_to_seconds() {
+  local milliseconds=$1
+  printf '%d.%03d' $(( milliseconds / 1000 )) $(( milliseconds % 1000 ))
+}
+
+# remaining_ms DEADLINE_NS prints the remaining milliseconds. It returns 1
 # when the target budget is exhausted.
-remaining_budget() {
-  local deadline=$1 current
-  current=$(now)
-  if (( current >= deadline )); then
+remaining_ms() {
+  local deadline_ns=$1 current_ns remaining
+  current_ns=$(monotonic_ns)
+  remaining=$(( (deadline_ns - current_ns) / 1000000 ))
+  if (( remaining <= 0 )); then
     return 1
   fi
-  printf '%s\n' $(( deadline - current ))
+  printf '%s\n' "$remaining"
 }
 
 # bounded SECONDS COMMAND... runs one network attempt under a hard timeout.
-# timeout runs the command in its own process group and kills the group after
-# a one-second grace, so a stalled child cannot outlive the target budget.
+# curl and go are the only commands this covers; timeout signals their
+# immediate process group and uses a one-second TERM-to-KILL grace. This is not
+# a general guarantee for arbitrary detached descendants. The go case logs
+# whether the exact command from this attempt actually terminated.
 bounded() {
   local seconds=$1
   shift
   timeout --signal=TERM --kill-after=1s "${seconds}s" "$@"
 }
 
-# bounded_sleep DEADLINE INTERVAL sleeps for the retry interval, clipped to the
-# remaining target budget, and does nothing once the budget is exhausted.
+# bounded_sleep DEADLINE_NS INTERVAL sleeps for the retry interval, clipped to
+# the remaining fractional budget, and does nothing once it is exhausted.
 bounded_sleep() {
-  local deadline=$1 wait=$2 remaining
-  remaining=$(remaining_budget "$deadline") || return 0
-  if (( remaining > wait )); then
-    sleep "$wait"
-  else
-    sleep "$remaining"
+  local deadline_ns=$1 wait_seconds=$2 remaining limit
+  if ! remaining=$(remaining_ms "$deadline_ns"); then
+    return 0
   fi
+  limit=$(( wait_seconds * 1000 ))
+  if (( remaining > limit )); then
+    remaining=$limit
+  fi
+  sleep "$(ms_to_seconds "$remaining")"
+}
+
+# check_go_terminated MODULE VERSION MODE logs whether the exact go command
+# from this attempt is gone after a timeout. The pattern is scoped to this
+# run's unique probe directory, module and version.
+check_go_terminated() {
+  local module=$1 version=$2 mode=$3 pattern
+  pattern="go -C $probe_dir mod download -json $module@$version"
+  if ! command -v pgrep >/dev/null 2>&1; then
+    echo "  $mode: timeout reported the immediate go command terminated (pgrep unavailable for confirmation)" >&2
+    return 0
+  fi
+  if pgrep -f "$pattern" >/dev/null 2>&1; then
+    echo "  $mode: go process still present after timeout; sending TERM then KILL" >&2
+    pkill -TERM -f "$pattern" 2>/dev/null || true
+    sleep 0.2
+    if pgrep -f "$pattern" >/dev/null 2>&1; then
+      pkill -KILL -f "$pattern" 2>/dev/null || true
+      echo "  $mode: go process required SIGKILL after the timeout grace" >&2
+    else
+      echo "  $mode: go process terminated after TERM" >&2
+    fi
+    return 0
+  fi
+  echo "  $mode: go process terminated within the timeout grace" >&2
 }
 
 python3 - "$manifest" "$origin" "$version" > "$work/modules.tsv" <<'PY'
@@ -150,17 +194,18 @@ rows.sort()
 print("\n".join(rows))
 PY
 
-# resolve MODULE VERSION MODE CACHE_ROOT DEADLINE
-# Writes stdout.json and stderr.log inside CACHE_ROOT. Every network wait is
-# limited to the remaining target budget. Returns non-zero when the command
-# failed or the budget ran out.
+# resolve MODULE VERSION MODE CACHE_ROOT DEADLINE_NS
+# Writes stdout.json and stderr.log inside CACHE_ROOT. The go command gets the
+# fractional remaining target budget. Returns non-zero when the command failed
+# or the budget ran out.
 resolve() {
-  local module=$1 module_version=$2 mode=$3 cache_root=$4 deadline=$5
-  local remaining proxy rc
-  if ! remaining=$(remaining_budget "$deadline"); then
+  local module=$1 module_version=$2 mode=$3 cache_root=$4 deadline_ns=$5
+  local budget_ms remaining proxy rc
+  if ! budget_ms=$(remaining_ms "$deadline_ns"); then
     echo "  $mode attempt skipped: target budget exhausted" >&2
     return 1
   fi
+  remaining=$(ms_to_seconds "$budget_ms")
   if [[ $mode == direct ]]; then
     proxy=direct
   else
@@ -179,7 +224,8 @@ resolve() {
     rc=$?
   fi
   if (( rc == 124 )); then
-    echo "  $mode attempt timed out after ${remaining}s" >&2
+    echo "  $mode attempt timed out after ${remaining}s (one-second TERM/KILL grace)" >&2
+    check_go_terminated "$module" "$module_version" "$mode"
   fi
   return "$rc"
 }
@@ -242,22 +288,24 @@ while IFS=$'\t' read -r target module module_version zip_h1 gomod_h1 staged_zip;
   echo "public verification: $module@$module_version ($target)"
   discovery_path=${module#go.lancedb.io/}
   meta="content=\"$module mod https://go.lancedb.io/modules\""
-  deadline=$(( $(now) + timeout ))
+  deadline_ns=$(( $(monotonic_ns) + timeout * 1000000000 ))
   attempt=0
   success=0
 
   while :; do
-    if ! remaining=$(remaining_budget "$deadline"); then
+    if ! budget_ms=$(remaining_ms "$deadline_ns"); then
       break
     fi
     attempt=$((attempt + 1))
+    remaining=$(ms_to_seconds "$budget_ms")
     echo "  attempt $attempt: remaining ${remaining}s"
 
-    # Discovery is bounded by the remaining budget.
-    connect_timeout=$remaining
-    if (( connect_timeout > 10 )); then
-      connect_timeout=10
+    # Discovery is bounded by the remaining fractional budget.
+    connect_ms=$budget_ms
+    if (( connect_ms > 10000 )); then
+      connect_ms=10000
     fi
+    connect_timeout=$(ms_to_seconds "$connect_ms")
     if ! bounded "$remaining" curl -fsS --max-time "$remaining" --connect-timeout "$connect_timeout" \
       "$ORIGIN_BASE_URL/$discovery_path?go-get=1" > "$work/discovery.body" 2> "$work/discovery.stderr" \
       || ! grep -F "$meta" "$work/discovery.body" >/dev/null; then
@@ -265,12 +313,12 @@ while IFS=$'\t' read -r target module module_version zip_h1 gomod_h1 staged_zip;
       if [[ -f $work/discovery.stderr ]]; then
         tail -n 3 "$work/discovery.stderr" >&2 || true
       fi
-      bounded_sleep "$deadline" "$interval"
+      bounded_sleep "$deadline_ns" "$interval"
       continue
     fi
 
     proxy_cache="$work/$target/proxy-$attempt"
-    if resolve "$module" "$module_version" proxy "$proxy_cache" "$deadline" \
+    if resolve "$module" "$module_version" proxy "$proxy_cache" "$deadline_ns" \
       && check_download "$module" "$module_version" "$zip_h1" "$gomod_h1" "$proxy_cache" \
         > "$proxy_cache/check.log" 2>&1; then
       public_zip=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["Zip"])' "$proxy_cache/stdout.json")
@@ -278,13 +326,13 @@ while IFS=$'\t' read -r target module module_version zip_h1 gomod_h1 staged_zip;
         > "$proxy_cache/compare.log" 2>&1; then
         echo "  proxy attempt $attempt: public payload differs from the staged payload" >&2
         cat "$proxy_cache/compare.log" >&2 || true
-        bounded_sleep "$deadline" "$interval"
+        bounded_sleep "$deadline_ns" "$interval"
         continue
       fi
 
       if [[ $DIRECT_PROBE == 1 ]]; then
         direct_cache="$work/$target/direct-$attempt"
-        if ! resolve "$module" "$module_version" direct "$direct_cache" "$deadline" \
+        if ! resolve "$module" "$module_version" direct "$direct_cache" "$deadline_ns" \
           || ! check_download "$module" "$module_version" "$zip_h1" "$gomod_h1" "$direct_cache" \
             > "$direct_cache/check.log" 2>&1; then
           echo "  direct attempt $attempt failed or timed out" >&2
@@ -294,7 +342,7 @@ while IFS=$'\t' read -r target module module_version zip_h1 gomod_h1 staged_zip;
           if [[ -f $direct_cache/check.log ]]; then
             cat "$direct_cache/check.log" >&2 || true
           fi
-          bounded_sleep "$deadline" "$interval"
+          bounded_sleep "$deadline_ns" "$interval"
           continue
         fi
       fi
@@ -315,7 +363,7 @@ while IFS=$'\t' read -r target module module_version zip_h1 gomod_h1 staged_zip;
     if [[ -f $proxy_cache/check.log ]]; then
       cat "$proxy_cache/check.log" >&2 || true
     fi
-    bounded_sleep "$deadline" "$interval"
+    bounded_sleep "$deadline_ns" "$interval"
   done
 
   if [[ $success != 1 ]]; then

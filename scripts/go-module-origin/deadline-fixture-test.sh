@@ -67,12 +67,20 @@ fail() {
 }
 
 run_phase() {
-  local phase=$1 port_file log out port start elapsed rc
+  local phase=$1
+  shift
+  local mode=$phase port_file log out port start elapsed rc interval=${VERIFY_INTERVAL:-1}
+  if [[ $phase == preceding ]]; then
+    mode=proxy
+  fi
+  if [[ $phase == retry ]]; then
+    mode=missing
+  fi
   port_file="$work/port-$phase"
   log="$work/server-$phase.log"
   out="$work/verify-$phase.log"
   python3 "$repo_root/scripts/go-module-origin/holding-server.py" \
-    --mode "$phase" --port-file "$port_file" --log "$log" > "$work/server-$phase.stdout" 2>&1 &
+    --mode "$mode" --port-file "$port_file" --log "$log" "$@" > "$work/server-$phase.stdout" 2>&1 &
   server_pid=$!
   for _ in $(seq 1 100); do
     [[ -s $port_file ]] && break
@@ -81,6 +89,12 @@ run_phase() {
   [[ -s $port_file ]] || fail "$phase: holding server did not start"
   port=$(cat "$port_file")
 
+  if [[ $phase == preceding ]]; then
+    # Start just after an integer wall-clock tick so the old integer-second
+    # implementation gives the proxy a fresh 2s instead of the reduced budget;
+    # the fixed fractional deadline must still stop at the target budget.
+    python3 -c 'import time; time.sleep((0.08 - time.time()) % 1)'
+  fi
   start=$(date +%s)
   set +e
   ORIGIN_BASE_URL="http://127.0.0.1:$port" \
@@ -89,7 +103,7 @@ run_phase() {
   DIRECT_PROBE=0 \
     timeout 30 "$VERIFY_SCRIPT" \
       --manifest "$origin/manifest.json" --origin "$origin" \
-      --timeout-seconds 2 --interval-seconds 1 > "$out" 2>&1
+      --timeout-seconds 2 --interval-seconds "$interval" > "$out" 2>&1
   rc=$?
   set -e
   elapsed=$(( $(date +%s) - start ))
@@ -105,7 +119,7 @@ run_phase() {
     || fail "$phase: later target did not get its own budget"
   grep -F 'did not resolve within the 2s per-target deadline' "$out" >/dev/null \
     || fail "$phase: bounded failure diagnostic missing"
-  grep -F "$phase: received" "$log" >/dev/null \
+  grep -F "$mode: received" "$log" >/dev/null \
     || fail "$phase: the fixture never established a request before holding it"
   grep -F 'artifacts/linux-amd64' "$log" >/dev/null \
     || fail "$phase: no request for the first target reached the holding server"
@@ -116,5 +130,68 @@ run_phase() {
 
 run_phase discovery
 run_phase proxy
+
+# A successful but slow discovery stage must reduce the proxy stage's budget.
+# The server delays the discovery answer by 0.6s; the held proxy connection
+# must therefore close about 1.4s later, not a fresh 2s (the old integer
+# implementation closed it about 2.6s after discovery began).
+run_phase preceding --discovery-delay 0.6
+python3 - "$work/server-preceding.log" "$work/verify-preceding.log" <<'PY'
+import pathlib
+import sys
+
+lines = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+out = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+
+def timestamp(predicate):
+    for line in lines:
+        fields = line.split(maxsplit=1)
+        if len(fields) == 2 and predicate(fields[1]):
+            return float(fields[0])
+    raise SystemExit("missing event")
+
+received = timestamp(lambda line: "received discovery" in line and "linux-amd64" in line)
+served = timestamp(lambda line: "served discovery" in line and "linux-amd64" in line)
+held = timestamp(lambda line: "received " in line and "holding" in line and "linux-amd64" in line and "@v/" in line)
+closed = timestamp(lambda line: "closed" in line and "linux-amd64" in line and "@v/" in line)
+if served - received < 0.55:
+    raise SystemExit(f"discovery delay did not happen: {served - received:.3f}s")
+budget = closed - received
+if not 1.7 <= budget <= 2.25:
+    raise SystemExit(f"proxy stage did not inherit the reduced budget: closed {budget:.3f}s after discovery")
+if closed - held > 1.8:
+    raise SystemExit(f"proxy stage exceeded its reduced budget: {closed - held:.3f}s")
+if "linux-arm64" not in "\n".join(lines):
+    raise SystemExit("later target was not attempted")
+if "public verification: go.lancedb.io/lancedb-go/artifacts/linux-arm64@v0.0.1" not in out:
+    raise SystemExit("later target did not get its own budget")
+print(f"preceding-stage budget: discovery delay {served - received:.3f}s, closed {budget:.3f}s after start")
+PY
+
+# Retry sleeps must be clipped to the remaining budget rather than waiting
+# the full (20s) interval. The proxy answers 404 immediately, so the second
+# target's discovery must start about one 2s budget later, not 20s later.
+VERIFY_INTERVAL=20 run_phase retry
+python3 - "$work/server-retry.log" "$work/verify-retry.log" <<'PY'
+import pathlib
+import sys
+
+lines = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+out = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+
+def discovery_time(target):
+    for line in lines:
+        fields = line.split(maxsplit=1)
+        if len(fields) == 2 and "received discovery" in fields[1] and target in fields[1]:
+            return float(fields[0])
+    raise SystemExit(f"missing discovery event for {target}")
+
+gap = discovery_time("linux-arm64") - discovery_time("linux-amd64")
+if not 1.7 <= gap <= 2.5:
+    raise SystemExit(f"retry sleep was not clipped to the budget: {gap:.3f}s between targets")
+if "public verification: FAIL" not in out:
+    raise SystemExit("retry phase did not fail")
+print(f"retry budget: next target discovery {gap:.3f}s after the previous target")
+PY
 
 echo "public verification deadline fixture: PASS"

@@ -113,11 +113,13 @@ temporary probe module with fresh caches and the repository's `go.mod`/
 with `GOSUMDB=sum.golang.org` enabled, compares the public `Sum`/`GoModSum`
 with the manifest h1 values exactly, byte-compares the payload inside the
 public zip with the staged bytes, and re-resolves through `GOPROXY=direct` to
-exercise the discovery metadata. Each target has one bounded deadline: every
-discovery request and every proxy/direct download gets only the remaining
-seconds, runs under a hard timeout that cleans up its process group, and a
-retry wait cannot exceed the remaining budget; a failed target still leaves
-later targets their own budget. A missing checksum entry or a version that only
+exercise the discovery metadata. Each target has one monotonic, fractional
+deadline: every discovery request and every proxy/direct download gets only the
+remaining time, a retry wait cannot exceed the remaining budget, and a failed
+target still leaves later targets their own budget. curl and go run under
+`timeout` with a one-second TERM-to-KILL grace for the immediate command (not a
+general detached-descendant guarantee), and a timed-out go attempt logs whether
+that exact process terminated. A missing checksum entry or a version that only
 resolves from a local cache is a stop condition.
 
 ## 4. Evidence

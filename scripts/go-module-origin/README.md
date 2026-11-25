@@ -191,12 +191,14 @@ discovery HTML, resolves the exact version through
 `Version`, `Sum` and `GoModSum` to equal the manifest exactly, byte-compares
 the payload inside the public zip with the staged payload, and then resolves
 the same version through `GOPROXY=direct` to exercise the discovery path and
-sumdb. Each target has one bounded deadline; every discovery curl and every
-proxy/direct `go mod download` gets only the remaining seconds and runs under a
-hard timeout that also cleans up its process group, retry sleeps are clipped to
-the remaining time, and a failed target does not consume another target's
-budget. The script refuses to verify the public origin with the checksum
-database disabled.
+sumdb. Each target has one monotonic, fractional deadline; every discovery
+curl and every proxy/direct `go mod download` gets only the remaining time,
+retry sleeps are clipped to the remaining budget, and a failed target does not
+consume another target's budget. curl and go run under `timeout` with a
+one-second TERM-to-KILL grace for the immediate command, and a timed-out go
+attempt logs whether that exact process terminated; this is not a general
+detached-descendant guarantee. The script refuses to verify the public origin
+with the checksum database disabled.
 
 ## PR checks
 
@@ -210,5 +212,7 @@ an accepted delete, a delete that removes the object but loses the response, a
 failed GET with identical bytes, and a missing object. A focused deadline
 fixture holds a discovery request and a proxy request on a loopback server and
 requires the verifier to fail at its own per-target budget while still
-attempting the later target. The suite also exercises the public-verification
-retry and refusal paths. It never accesses R2.
+attempting the later target. It also measures a slow but successful discovery
+stage reducing the proxy stage's remaining budget, and a retry sleep clipped to
+the budget. The suite also exercises the public-verification refusal path. It
+never accesses R2.
