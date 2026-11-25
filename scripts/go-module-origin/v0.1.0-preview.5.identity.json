@@ -1,0 +1,83 @@
+{
+  "version": "v0.1.0-preview.5",
+  "time": "2026-11-25T09:03:17Z",
+  "module_prefix": "go.lancedb.io/lancedb-go/artifacts",
+  "base_url": "https://go.lancedb.io",
+  "go_version": "1.21.0",
+  "source_repo": "lancedb/lancedb-c",
+  "source_release": "v0.1.0-preview.5",
+  "source_commit": "3106de158b8da5dcb47e2a4acc820ed1b74b3e01",
+  "source_tag_object": "057f4db76c1fd49d4c1b2137c6e99bc72fa8deca",
+  "source_tag_type": "annotated",
+  "download_base_url": "https://github.com/lancedb/lancedb-c/releases/download/v0.1.0-preview.5",
+  "header_sha256": "c7d671b03d934d88791bb9ebefc0941ec603e32b30622b9c1c54fe01860b5ded",
+  "license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+  "targets": {
+    "linux-amd64": {
+      "archive": "lancedb-c-3106de158b8da5dcb47e2a4acc820ed1b74b3e01-linux-amd64.tar.gz",
+      "archive_sha256": "8c993eec7a27c76fcd7f3db8868d65563f71e9cf3ed620a33d7de80848e0068d",
+      "library": "lib/liblancedb.so.0.1",
+      "library_sha256": "4145c061702a652019a11eb5767c292d9b01c394eb16a3850c2cec53338767fd",
+      "candidate_artifact_go_sha256": "65f2d028554a9b155190fa1165a8aff480d500dfc80c36e66d226ad6353876c2",
+      "candidate_go_mod_sha256": "8b821cd118fbf12ed212e344cdf18b677d63666d3f24e9bec52cc585e3215b8a",
+      "candidate_license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "candidate_payload_sha256": "96ba1f5aef4a6eeac0d4b8a51b452203fa7098a6dadfdd16e8c3dc610cde44fc",
+      "payload_name": "liblancedb.so.zst",
+      "module_zip_h1": "h1:FwtCR68JqDsUJyLnyLg+ojhXRBvbboDRR6BYVJAAfN0=",
+      "module_gomod_h1": "h1:N6CinRlHCF09hIeN/oXvk8ZaxweJKmzlDgeH8t+vyAw="
+    },
+    "linux-arm64": {
+      "archive": "lancedb-c-3106de158b8da5dcb47e2a4acc820ed1b74b3e01-linux-arm64.tar.gz",
+      "archive_sha256": "b40bd3645f38311e8467a5cfc29aee3a59faf16a7a29463cec8253bbb8c00176",
+      "library": "lib/liblancedb.so.0.1",
+      "library_sha256": "7bd7378990d540c8d4c273e48f10ec155e959a49bca9e62534c38a401bbae50b",
+      "candidate_artifact_go_sha256": "56120f68b36f918c1da9dafb06cb3f17d56e6bbabf05150f7062b77e78358fae",
+      "candidate_go_mod_sha256": "8f1f64b672d8855164b1560fb4b555d7d35a6eb0a20f7d7cced0f1cbb2b3eabb",
+      "candidate_license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "candidate_payload_sha256": "ee43d99e5ac9adb904176930ce3c510ec5e9e36d6469a01bdc3c90c7a740d4a3",
+      "payload_name": "liblancedb.so.zst",
+      "module_zip_h1": "h1:T2XIuvwyVvQcYc7ZhhQfyK44AkA2QAHNK+pH7Xtz+Oc=",
+      "module_gomod_h1": "h1:AGx/IaS9Pn5ZoNcAM6+fAll1qkNqqAm0f4Q6dze506E="
+    },
+    "darwin-arm64": {
+      "archive": "lancedb-c-3106de158b8da5dcb47e2a4acc820ed1b74b3e01-darwin-arm64.tar.gz",
+      "archive_sha256": "9067693b0bafcb239a1921e355632895017ee80486b3e8d347d6c69d06f41c77",
+      "library": "lib/liblancedb.dylib",
+      "library_sha256": "727f43a57f33f0fb1955d5b2d5388817dbf720a2ace47c131b02def91994ea2d",
+      "candidate_artifact_go_sha256": "65710a159872a22e8506d9943b27b6f53c345c5fdd54690b7cfabbbe15ef14b1",
+      "candidate_go_mod_sha256": "93abfdcf652c07bb8a943d528e87219e5b38e0d45594b0760c3afc464fdd0c7a",
+      "candidate_license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "candidate_payload_sha256": "2752b2b19cd2bf98c1d4c7140805573b384b99a14fc9da161c23e755f81f6797",
+      "payload_name": "liblancedb.dylib.zst",
+      "module_zip_h1": "h1:zMcETuimQ1LX6gooUnrwiHC/YYKXeSRV3wG65i8+8ag=",
+      "module_gomod_h1": "h1:HA46k5nR8tQ+Fl1i7LQrRK031No8NaVDKmAxnZdsUF0="
+    },
+    "windows-amd64": {
+      "archive": "lancedb-c-3106de158b8da5dcb47e2a4acc820ed1b74b3e01-windows-amd64.tar.gz",
+      "archive_sha256": "557478ec7321a0cf484c1eab93b266a13a96128beac4a933ae241d97ff82600c",
+      "library": "lib/lancedb.dll",
+      "library_sha256": "4b9f90ba0ca48775c9b90cca200e6a6c22c9e8771628da3897ee473e0e805de2",
+      "candidate_artifact_go_sha256": "72a1dddacc20a7270e29ad8a3c4796637c9ac99a8e3aadcefb41a8ed230d3cba",
+      "candidate_go_mod_sha256": "52bed53ad2c921d8c43ede951cee854c04cde4a6c280ca40cd367bed9363a904",
+      "candidate_license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "candidate_payload_sha256": "52da1d9ac47e84e434e025fdfaccbfd8a2438d027b6a0e561b908aa88be69462",
+      "payload_name": "lancedb.dll.zst",
+      "module_zip_h1": "h1:W7zfC3Y3MAQzkEACod/zPbgcFllY59ZM14wy2Mvpzd0=",
+      "module_gomod_h1": "h1:+0ZCBEhd9l/Vef2OvtWKf7OKCtPU4dCaG++f/inS1lw="
+    },
+    "windows-arm64": {
+      "archive": "lancedb-c-3106de158b8da5dcb47e2a4acc820ed1b74b3e01-windows-arm64.tar.gz",
+      "archive_sha256": "a8a3300582689c1499abee8c22714fc5b4f0cf8dd011f58ef5e81dc201c0bd8e",
+      "library": "lib/lancedb.dll",
+      "library_sha256": "99b8e6ddf4203f0b2b2d435853f134bd2d5802dcf15d5b79f126301cd84f41fe",
+      "candidate_artifact_go_sha256": "3e923e0727e91394b73d44975adb4cbb70d815cb82968823fae1021810c152e1",
+      "candidate_go_mod_sha256": "dffd73ed4e8b2477c6bebb98a72d30e8794bb23613604e9689265a7289b94fb0",
+      "candidate_license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "candidate_payload_sha256": "fa184082528eae1451025bd291cabbdb75f2a58ae3952f192168775c1c434e14",
+      "payload_name": "lancedb.dll.zst",
+      "module_zip_h1": "h1:liFPRRalfEQ6OqNwBE65TLfNtvkuIX7gz2kLqVB/LJg=",
+      "module_gomod_h1": "h1:861JhqAPcHck3mlPs/yDr5tu125DisHD1o7xr41TLJg="
+    }
+  },
+  "manifest_sha256": "8a56fd80b137efed5725121071fc53bef994e54d5d613797ec9b869082736da1"
+}

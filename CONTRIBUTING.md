@@ -66,8 +66,10 @@ version, and the root `go.mod` requires the five per-target companion modules
 at their published artifact version. When updating the pin, verify that the
 published modules resolve through the public proxy and checksum database, that
 each artifact's `SourceRelease` matches the release tag, and that the built
-binary for every supported target links exactly its own artifact module. Do not
-add payloads or companion module tags to this repository.
+binary for every supported target links exactly its own artifact module. The
+release sequence and identity rules are in [RELEASING.md](RELEASING.md) and
+[scripts/go-module-origin/README.md](scripts/go-module-origin/README.md);
+payloads and companion-module tags never enter this repository.
 
 ## Pull requests
 

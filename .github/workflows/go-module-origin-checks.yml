@@ -1,0 +1,90 @@
+name: Go module origin checks
+
+on:
+  pull_request:
+    paths:
+      - "scripts/go-module-origin/**"
+      - "scripts/publish-go-module-origin.sh"
+      - "scripts/verify-origin-locks.sh"
+      - "scripts/verify-origin-public.sh"
+      - "scripts/test-go-module-origin.sh"
+      - "scripts/test-publish-go-module-origin.sh"
+      - ".github/workflows/go-module-origin-checks.yml"
+      - ".github/workflows/generate-go-module-origin-candidates.yml"
+      - ".github/workflows/publish-go-module-origin.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  GOWORK: "off"
+
+jobs:
+  checks:
+    name: Generator and publisher checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go 1.21
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.21.13"
+          cache: false
+
+      - name: Ensure zstd
+        run: |
+          set -euo pipefail
+          if ! command -v zstd >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          fi
+
+      - name: Test generator
+        run: |
+          set -euo pipefail
+          cd scripts/go-module-origin/generator
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+
+      - name: Check scripts and fixtures
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/go-module-origin/mock-s3.py \
+            scripts/go-module-origin/test-server.py \
+            scripts/go-module-origin/holding-server.py \
+            scripts/go-module-origin/fetch-release.py \
+            scripts/go-module-origin/record-candidate-identity.py \
+            scripts/go-module-origin/verify-candidate-identity.py
+          bash -n scripts/publish-go-module-origin.sh
+          bash -n scripts/verify-origin-locks.sh
+          bash -n scripts/verify-origin-public.sh
+          bash -n scripts/test-go-module-origin.sh
+          bash -n scripts/test-publish-go-module-origin.sh
+          bash -n scripts/go-module-origin/generate-candidates.sh
+          bash -n scripts/go-module-origin/origin-fixture-test.sh
+          bash -n scripts/go-module-origin/deadline-fixture-test.sh
+
+      - name: Candidate generation and origin fixture
+        run: |
+          set -euo pipefail
+          scripts/go-module-origin/origin-fixture-test.sh "$RUNNER_TEMP/origin-fixture"
+
+      - name: Publisher and lock probe fixture
+        run: |
+          set -euo pipefail
+          ORIGIN_DIR="$RUNNER_TEMP/origin-fixture/origin" \
+            scripts/test-publish-go-module-origin.sh
+
+      - name: Public verification deadline fixture
+        run: |
+          set -euo pipefail
+          scripts/go-module-origin/deadline-fixture-test.sh

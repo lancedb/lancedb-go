@@ -36,6 +36,12 @@ Thumbs.db
 *.log
 
 # -----------------------
+# Python tooling caches
+# -----------------------
+__pycache__/
+*.pyc
+
+# -----------------------
 # VSCode (if someone opens with it)
 # -----------------------
 .vscode/
@@ -45,8 +51,3 @@ tmp/
 # -----------------------
 # Native artifacts are downloaded into the user cache, not the repository.
 # -----------------------
-# -----------------------
-# Python bytecode caches (offline consumer harness)
-# -----------------------
-__pycache__/
-*.pyc
