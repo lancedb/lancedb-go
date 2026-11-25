@@ -115,21 +115,23 @@ prepare_windows_network_off() {
       $program = $item.FullName
       Write-Host "network_rule_program_full=$program"
       Write-Host "network_rule_program_type=$($item.Attributes) length=$($item.Length)"
-      # Omit -Enabled: the documented default is True and the readback below
-      # verifies it. The typed Enabled enum does not accept a Boolean value.
-      $created = New-NetFirewallRule -Name $ruleName -DisplayName $ruleName -Direction Outbound -Program $program -Action Block -Profile Any -ErrorAction Stop -PassThru
-      if ($null -eq $created) { throw "New-NetFirewallRule returned no rule" }
-      Write-Host "network_rule_id=$($created.InstanceID)"
-      $readback = Get-NetFirewallRule -Name $ruleName -ErrorAction Stop
-      if ($null -eq $readback) { throw "rule readback is empty" }
-      if ($readback.InstanceID -ne $created.InstanceID) {
-        throw "rule InstanceID changed: $($readback.InstanceID) != $($created.InstanceID)"
-      }
-      Write-Host "network_rule_readback=name=$($readback.Name) id=$($readback.InstanceID) enabled=$([string]$readback.Enabled) direction=$([string]$readback.Direction) action=$([string]$readback.Action)"
-      if ([string]$readback.Enabled -ne "True") { throw "rule Enabled is $([string]$readback.Enabled)" }
-      if ([string]$readback.Direction -ne "Outbound") { throw "rule Direction is $([string]$readback.Direction)" }
-      if ([string]$readback.Action -ne "Block") { throw "rule Action is $([string]$readback.Action)" }
-      $filter = @(Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $readback -ErrorAction Stop)
+      Write-Host "network_rule_cmdlet_parameters=$((Get-Command New-NetFirewallRule).Parameters.Keys -join ",")"
+      Write-Host "network_rule_filter_cmdlet_parameters=$((Get-Command Get-NetFirewallApplicationFilter).Parameters.Keys -join ",")"
+      # Omit -Enabled and -PassThru: the documented Enabled default is True and
+      # this runner cmdlet does not support -PassThru. The unique -Name is the
+      # ownership link; the readback below is the source of truth.
+      New-NetFirewallRule -Name $ruleName -DisplayName $ruleName -Direction Outbound -Program $program -Action Block -Profile Any -ErrorAction Stop | Out-Null
+      $readback = @(Get-NetFirewallRule -Name $ruleName -ErrorAction Stop)
+      if ($readback.Count -ne 1) { throw "expected one rule named $ruleName, got $($readback.Count)" }
+      $rule = $readback[0]
+      if ($rule.Name -ne $ruleName) { throw "rule Name is $($rule.Name), want $ruleName" }
+      if ([string]::IsNullOrEmpty($rule.InstanceID)) { throw "rule InstanceID is empty" }
+      Write-Host "network_rule_id=$($rule.InstanceID)"
+      Write-Host "network_rule_readback=name=$($rule.Name) id=$($rule.InstanceID) enabled=$([string]$rule.Enabled) direction=$([string]$rule.Direction) action=$([string]$rule.Action)"
+      if ([string]$rule.Enabled -ne "True") { throw "rule Enabled is $([string]$rule.Enabled)" }
+      if ([string]$rule.Direction -ne "Outbound") { throw "rule Direction is $([string]$rule.Direction)" }
+      if ([string]$rule.Action -ne "Block") { throw "rule Action is $([string]$rule.Action)" }
+      $filter = @(Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop)
       if ($filter.Count -ne 1) { throw "expected one application filter, got $($filter.Count)" }
       $filterProgram = $filter[0].Program
       Write-Host "network_rule_filter_program=$filterProgram"
@@ -140,7 +142,7 @@ prepare_windows_network_off() {
         throw "application filter program $filterProgram does not match $program"
       }
       Write-Host "network_rule_filter=$filterProgram"
-      Write-Host "network_rule_created=New-NetFirewallRule id=$($readback.InstanceID) enabled=$($readback.Enabled) direction=$($readback.Direction) action=$($readback.Action)"
+      Write-Host "network_rule_created=New-NetFirewallRule id=$($rule.InstanceID) enabled=$([string]$rule.Enabled) direction=$([string]$rule.Direction) action=$([string]$rule.Action)"
     ' 2>&1
   )
   rc=$?
