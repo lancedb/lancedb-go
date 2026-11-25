@@ -60,7 +60,7 @@ log() {
 }
 
 record() {
-  printf '%s=%s\n' "$1" "$2" >> "$SUMMARY"
+  printf '%s=%s\n' "$1" "$2" | tee -a "$SUMMARY"
 }
 
 fail() {
