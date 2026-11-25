@@ -29,12 +29,12 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Go 1.21
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.21.13"
           cache: false
@@ -82,7 +82,7 @@ jobs:
           ORIGIN_DIR="$ORIGIN_DIR" IDENTITY="$IDENTITY" scripts/test-go-module-origin.sh
 
       - name: Upload candidate modules
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: go-module-origin-candidates
           path: ${{ runner.temp }}/go-module-origin/candidates
@@ -90,7 +90,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload origin staging
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: go-module-origin-staging
           path: ${{ runner.temp }}/go-module-origin/origin
@@ -98,7 +98,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload recorded candidate identity
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: go-module-origin-candidate-identity
           path: ${{ runner.temp }}/go-module-origin/candidate-identity.json

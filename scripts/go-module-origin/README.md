@@ -131,14 +131,17 @@ overwrite fallback. `--dry-run` performs the full preflight without writes.
 ## Publish workflow and first publication
 
 `.github/workflows/publish-go-module-origin.yml` is manual `workflow_dispatch`
-only on `main` or a `v*` tag. The staging job downloads the exact public release
-archives, regenerates the origin tree with no credentials, verifies the
-candidate identity and manifest SHA-256, checks the protocol tree locally, and
-preflights the publisher. The protected `publish` job uses the `go-module-origin`
-GitHub Environment (secrets `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`; vars
-`R2_BUCKET`, `R2_S3_ENDPOINT`) and maps those credentials only on the publish
-and lock-probe steps; the staging job, PR CI and the public-verification step
-never see them.
+only, and live writes are limited to `refs/heads/main`: the publish job
+re-fetches `origin/main` and requires the checked-out commit to equal it and to
+track the reviewed identity file before any credential is used. The staging job
+downloads the exact public release archives, regenerates the origin tree with
+no credentials, verifies the candidate identity and manifest SHA-256, checks
+the protocol tree locally, and preflights the publisher. The protected
+`publish` job uses the `go-module-origin` GitHub Environment (secrets
+`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`; vars `R2_BUCKET`,
+`R2_S3_ENDPOINT`) and maps those credentials only on the publish and lock-probe
+steps; the staging job, PR CI and the public-verification step never see them.
+All privileged-job actions are pinned to the audited lance-go refs.
 
 First publication sequence:
 
@@ -148,14 +151,15 @@ First publication sequence:
 2. Merge the reviewed identity and workflow; dispatch
    `generate-go-module-origin-candidates.yml` on `main` with `verify=true` and
    confirm the recorded identity and manifest hash.
-3. Dispatch `publish-go-module-origin.yml` on `main` with `publish=true` and
-   `verify_protections=true`.
+3. Dispatch `publish-go-module-origin.yml` on `main` with `publish=true`.
+   `verify_protections` defaults to true, so the first publication always runs
+   the lock probe without any extra input.
 4. The workflow publishes `.info`/`.mod`/`.zip` first, then merges `@v/list`,
    then writes discovery; the lock probe and the public proxy/sumdb verification
    follow. A failed probe fails the publication run.
 
-Subsequent dispatches set `verify_protections=false`; the probe is a
-first-publication acceptance step.
+Subsequent dispatches may set `verify_protections=false` once the locks have
+been probed for that publication line.
 
 ### Lock probe
 
@@ -164,24 +168,35 @@ the exact version being published. It reads the object back and byte-compares
 it with the staged bytes, then:
 
 1. PUTs the identical reviewed bytes with no create-only precondition and
-   requires the service to deny the overwrite, retaining the denial response in
-   the publication log;
-2. DELETEs the object and requires the service to deny the delete; if the
-   delete is unexpectedly accepted, it immediately re-creates the exact staged
-   bytes with `If-None-Match: *`, verifies the readback, and fails the run
-   reporting a failed lock;
+   requires HTTP 409 with the `ObjectLockedByBucketPolicy` code, retaining the
+   actual denial response in the publication log;
+2. DELETEs the object and requires the same exact denial;
 3. reads the object back a final time and byte-compares it with the staged
    bytes.
+
+A transport failure, an access-denied response (403), any other status and any
+other error code are not accepted as proof. After an unexpected overwrite or
+delete result the probe performs an authoritative readback: a missing object
+(HTTP 404 with `NoSuchKey`) is immediately re-created from the exact staged
+bytes with `If-None-Match: *` and the readback is verified, and the run fails
+reporting the actual outcome. An unreadable response is never treated as "not
+found" and readback hashes only a fully received current object, so a failed
+GET cannot reuse a previous temp file. Credentials reach curl through a
+mode-0600 netrc file, never through argv, and are never printed.
 
 ### Public verification
 
 `scripts/verify-origin-public.sh` runs after publication without credentials.
-For every module it checks the discovery HTML, resolves the exact version
-through `https://proxy.golang.org` with a fresh module cache and
-`GOSUMDB=sum.golang.org`, requires `Version`, `Sum` and `GoModSum` to equal the
-manifest, byte-compares the payload inside the public zip with the staged
-payload, and then resolves the same version through `GOPROXY=direct` to
-exercise the discovery path and sumdb. Retries wait for proxy propagation.
+It runs `go mod download` from a dedicated temporary probe module with fresh
+`GOMODCACHE`/`GOCACHE` per attempt, `GOENV=off`, `GOWORK=off` and the
+repository's `go.mod`/`go.sum` out of scope. For every module it checks the
+discovery HTML, resolves the exact version through
+`https://proxy.golang.org` with `GOSUMDB=sum.golang.org` enabled, requires
+`Version`, `Sum` and `GoModSum` to equal the manifest exactly, byte-compares
+the payload inside the public zip with the staged payload, and then resolves
+the same version through `GOPROXY=direct` to exercise the discovery path and
+sumdb. Each target has its own bounded deadline with retries, and the script
+refuses to verify the public origin with the checksum database disabled.
 
 ## PR checks
 
@@ -189,5 +204,8 @@ exercise the discovery path and sumdb. Retries wait for proxy propagation.
 shell/Python syntax checks, an end-to-end fixture build (a synthetic release
 repository, archive set, candidate modules and origin tree), the local
 protocol/discovery verification and consumer cross-compiles, and the publisher
-fixture (repeat, immutable conflict, `@v/list` merge, lock denial and the
-delete repair path) against a local S3 mock. It never accesses R2.
+and lock-probe fixtures against a local S3 mock: exact denial success, plus
+negative cases for transport failure, a non-lock 403, an accepted overwrite,
+an accepted delete, a delete that removes the object but loses the response, a
+failed GET with identical bytes, and a missing object. It also exercises the
+public-verification retry and refusal paths. It never accesses R2.

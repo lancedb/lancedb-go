@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Exercise the publisher and the first-publication lock probe against a local
-# S3 mock: repeat, conflict, no-overwrite, @v/list merge, lock denial and the
-# repair path when a delete is unexpectedly accepted.
+# S3 mock: repeat, immutable conflict, @v/list merge, the exact 409
+# ObjectLockedByBucketPolicy denial, and every negative outcome (transport
+# failure, non-lock error, accepted overwrite, accepted delete, delete that
+# removes the object but loses the response, failed GET, missing object) must
+# fail the probe without leaving the object damaged.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -143,54 +146,129 @@ mapfile -t versions < <(cat "$store2/$list_key")
 [[ ${versions[*]} == "$version $test_version" ]] || { printf 'reverse list merge lost a version: %s\n' "${versions[*]}" >&2; exit 1; }
 stop_mock
 
-# --- Lock probe when the service denies overwrite and delete. ---
-store3="$work/store-locks"
-log3="$work/requests-locks.log"
+# --- Lock probe fixtures. ---
 lock_prefixes=()
 for target in linux-amd64 linux-arm64 darwin-arm64 windows-amd64 windows-arm64; do
   lock_prefixes+=(--lock-prefix "modules/${module_prefix}/${target}/@v/v")
 done
-start_mock "$store3" 18790 "$log3" "${lock_prefixes[@]}"
-publish_args=( --manifest "$manifest" --bucket lancedb-go-fixture --endpoint http://127.0.0.1:18790 --version "$version" )
-"${publish[@]}" "${publish_args[@]}" > "$work/lock-publish.log" 2>&1
-grep -F 'publication verified' "$work/lock-publish.log" >/dev/null
-"$repo_root/scripts/verify-origin-locks.sh" --manifest "$manifest" --bucket lancedb-go-fixture --endpoint http://127.0.0.1:18790 --version "$version" > "$work/lock-probe.log" 2>&1
-grep -F 'lock probe: PASS' "$work/lock-probe.log" >/dev/null || { cat "$work/lock-probe.log" >&2; exit 1; }
-grep -F 'AccessDenied' "$work/lock-probe.log" >/dev/null || { echo "probe log does not retain the lock-denial response" >&2; exit 1; }
-stop_mock
-
-# --- Lock probe repair path when a delete is unexpectedly accepted. ---
-store4="$work/store-repair"
-log4="$work/requests-repair.log"
-start_mock "$store4" 18790 "$log4" "${lock_prefixes[@]}" --allow-locked-delete
-"${publish[@]}" "${publish_args[@]}" > "$work/repair-publish.log" 2>&1
-grep -F 'publication verified' "$work/repair-publish.log" >/dev/null
-set +e
-"$repo_root/scripts/verify-origin-locks.sh" --manifest "$manifest" --bucket lancedb-go-fixture --endpoint http://127.0.0.1:18790 --version "$version" > "$work/repair-probe.log" 2>&1
-repair_rc=$?
-set -e
-[[ $repair_rc -ne 0 ]] || { echo "probe accepted an unlocked delete" >&2; exit 1; }
-grep -F 'FAIL delete was accepted' "$work/repair-probe.log" >/dev/null || { cat "$work/repair-probe.log" >&2; exit 1; }
 probe_key=$(python3 -c '
 import json,re,sys
 manifest = json.load(open(sys.argv[1]))
 pattern = re.compile(r"^modules/.*/@v/" + re.escape(sys.argv[2]) + r"\.info$")
 keys = sorted(obj["key"] for obj in manifest["objects"] if pattern.fullmatch(obj["key"]))
+assert keys, "no .info object for the version"
 print(keys[0])' "$manifest" "$version")
-sha256sum "$store4/$probe_key" | awk '{print $1}' > "$work/repaired.sha256"
-sha256sum "$origin/$probe_key" | awk '{print $1}' > "$work/staged.sha256"
-cmp "$work/repaired.sha256" "$work/staged.sha256" || { echo "repair did not restore the staged bytes" >&2; exit 1; }
+staged_hash=$(sha256sum "$origin/$probe_key" | awk '{print $1}')
+probe=( "$repo_root/scripts/verify-origin-locks.sh" --manifest "$manifest" --bucket lancedb-go-fixture --endpoint http://127.0.0.1:18790 --version "$version" )
+publish_args=( --manifest "$manifest" --bucket lancedb-go-fixture --endpoint http://127.0.0.1:18790 --version "$version" )
+
+run_expect_probe_failure() {
+  # run_expect_probe_failure LABEL MOCK_ARGS...
+  local label=$1
+  shift
+  local store="$work/store-$label" log="$work/log-$label.log"
+  start_mock "$store" 18790 "$log" "${lock_prefixes[@]}" "$@"
+  "${publish[@]}" "${publish_args[@]}" > "$work/publish-$label.log" 2>&1
+  grep -F 'publication verified' "$work/publish-$label.log" >/dev/null || { cat "$work/publish-$label.log" >&2; exit 1; }
+  set +e
+  "${probe[@]}" > "$work/probe-$label.log" 2>&1
+  local rc=$?
+  set -e
+  stop_mock
+  [[ $rc -ne 0 ]] || { echo "$label: probe passed when it must fail" >&2; cat "$work/probe-$label.log" >&2; exit 1; }
+  if grep -F 'lock probe: PASS' "$work/probe-$label.log" >/dev/null; then
+    echo "$label: probe reported PASS" >&2
+    cat "$work/probe-$label.log" >&2
+    exit 1
+  fi
+  local actual
+  actual=$(sha256sum "$store/$probe_key" 2>/dev/null | awk '{print $1}')
+  [[ $actual == "$staged_hash" ]] || { echo "$label: probe left the object bytes changed (${actual:-missing})" >&2; exit 1; }
+}
+
+# Positive: the exact R2 denial for both attempts passes the probe.
+store3="$work/store-locks"
+log3="$work/requests-locks.log"
+start_mock "$store3" 18790 "$log3" "${lock_prefixes[@]}"
+"${publish[@]}" "${publish_args[@]}" > "$work/lock-publish.log" 2>&1
+grep -F 'publication verified' "$work/lock-publish.log" >/dev/null
+"${probe[@]}" > "$work/lock-probe.log" 2>&1
+grep -F 'lock probe: PASS' "$work/lock-probe.log" >/dev/null || { cat "$work/lock-probe.log" >&2; exit 1; }
+grep -F 'HTTP 409 ObjectLockedByBucketPolicy' "$work/lock-probe.log" >/dev/null || { echo "probe log does not retain the exact lock-denial response" >&2; cat "$work/lock-probe.log" >&2; exit 1; }
+grep -c 'denied with HTTP 409 ObjectLockedByBucketPolicy' "$work/lock-probe.log" | grep -qx 2 || { echo "probe did not record both denials" >&2; cat "$work/lock-probe.log" >&2; exit 1; }
 stop_mock
 
+# Negative: transport failure on both attempts plus a successful GET must fail.
+run_expect_probe_failure transport-both --locked-write-mode transport --locked-delete-mode transport
+grep -F 'overwrite produced no HTTP response' "$work/probe-transport-both.log" >/dev/null || { cat "$work/probe-transport-both.log" >&2; exit 1; }
+
+# Negative: a non-lock 403 denial must not count as success.
+run_expect_probe_failure forbidden --locked-write-status 403 --locked-write-code AccessDenied --locked-delete-status 403 --locked-delete-code AccessDenied
+grep -F 'HTTP 403 code AccessDenied' "$work/probe-forbidden.log" >/dev/null || { cat "$work/probe-forbidden.log" >&2; exit 1; }
+
+# Negative: an accepted overwrite of identical bytes must fail the probe.
+run_expect_probe_failure overwrite-accepted --locked-write-mode accept
+grep -F 'overwrite response was HTTP 200' "$work/probe-overwrite-accepted.log" >/dev/null || { cat "$work/probe-overwrite-accepted.log" >&2; exit 1; }
+
+# Negative: an accepted delete triggers immediate repair and failure.
+run_expect_probe_failure delete-accepted --locked-delete-mode accept
+grep -F 'FAIL delete was accepted' "$work/probe-delete-accepted.log" >/dev/null || { cat "$work/probe-delete-accepted.log" >&2; exit 1; }
+grep -F 'object restored and readback verified' "$work/probe-delete-accepted.log" >/dev/null || { cat "$work/probe-delete-accepted.log" >&2; exit 1; }
+
+# Negative: a delete that removes the object but loses the response must be
+# detected by the authoritative readback, repaired and fail.
+run_expect_probe_failure delete-transport-remove --locked-delete-mode transport-remove
+grep -F 'delete produced no HTTP response' "$work/probe-delete-transport-remove.log" >/dev/null || { cat "$work/probe-delete-transport-remove.log" >&2; exit 1; }
+grep -F 'object is missing; restoring the exact staged bytes' "$work/probe-delete-transport-remove.log" >/dev/null || { cat "$work/probe-delete-transport-remove.log" >&2; exit 1; }
+grep -F 'object restored and readback verified' "$work/probe-delete-transport-remove.log" >/dev/null || { cat "$work/probe-delete-transport-remove.log" >&2; exit 1; }
+
+# Negative: a benign failed GET while the object bytes are identical must fail
+# explicitly instead of hashing a previous temp file and reporting PASS. The
+# object is published with a healthy read path first, then the read fails.
+store_failed_get="$work/store-failed-get"
+start_mock "$store_failed_get" 18790 "$work/log-failed-get-publish.log" "${lock_prefixes[@]}"
+"${publish[@]}" "${publish_args[@]}" > "$work/publish-failed-get.log" 2>&1
+grep -F 'publication verified' "$work/publish-failed-get.log" >/dev/null
+stop_mock
+start_mock "$store_failed_get" 18790 "$work/log-failed-get.log" "${lock_prefixes[@]}" --fail-get "$probe_key"
+set +e
+"${probe[@]}" > "$work/probe-failed-get.log" 2>&1
+failed_get_rc=$?
+set -e
+stop_mock
+[[ $failed_get_rc -ne 0 ]] || { echo "failed-get: probe passed" >&2; cat "$work/probe-failed-get.log" >&2; exit 1; }
+grep -F 'lock probe: PASS' "$work/probe-failed-get.log" >/dev/null && { echo "failed-get: probe reported PASS" >&2; cat "$work/probe-failed-get.log" >&2; exit 1; }
+grep -F 'unreadable no HTTP response' "$work/probe-failed-get.log" >/dev/null || { cat "$work/probe-failed-get.log" >&2; exit 1; }
+grep -F 'could not be determined' "$work/probe-failed-get.log" >/dev/null || { cat "$work/probe-failed-get.log" >&2; exit 1; }
+failed_get_hash=$(sha256sum "$store_failed_get/$probe_key" | awk '{print $1}')
+[[ $failed_get_hash == "$staged_hash" ]] || { echo "failed-get: object bytes changed" >&2; exit 1; }
+
+# Negative: a missing object fails the pre-probe readback (and is restored).
+store7="$work/store-missing"
+start_mock "$store7" 18790 "$work/log-missing.log" "${lock_prefixes[@]}"
+set +e
+"${probe[@]}" > "$work/probe-missing.log" 2>&1
+missing_rc=$?
+set -e
+stop_mock
+[[ $missing_rc -ne 0 ]] || { echo "missing object: probe passed" >&2; exit 1; }
+grep -F 'pre-probe readback did not show the reviewed object' "$work/probe-missing.log" >/dev/null || { cat "$work/probe-missing.log" >&2; exit 1; }
+
+
 # --- Public verification logic against the local origin server. ---
-python3 "$repo_root/scripts/go-module-origin/test-server.py" --root "$origin" --port 18888 > "$work/public-server.log" 2>&1 &
-server_pid=$!
-for _ in $(seq 1 50); do
-  if curl -fsS -o /dev/null "http://127.0.0.1:18888/lancedb-go/artifacts/linux-amd64?go-get=1" 2>/dev/null; then
-    break
-  fi
-  sleep 0.2
-done
+start_mock_server_on_18888() {
+  python3 "$repo_root/scripts/go-module-origin/test-server.py" --root "$origin" --port 18888 > "$work/public-server-$1.log" 2>&1 &
+  server_pid=$!
+  for _ in $(seq 1 50); do
+    if curl -fsS -o /dev/null "http://127.0.0.1:18888/lancedb-go/artifacts/linux-amd64?go-get=1" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+start_mock_server_on_18888 first >/dev/null || { echo "cannot start origin server" >&2; exit 1; }
 ORIGIN_BASE_URL=http://127.0.0.1:18888 \
 PROXY_URL=http://127.0.0.1:18888/modules \
 SUMDB=off \
@@ -200,5 +278,28 @@ DIRECT_PROBE=0 \
     > "$work/public-verify.log" 2>&1
 grep -F 'public verification: PASS' "$work/public-verify.log" >/dev/null || { cat "$work/public-verify.log" >&2; exit 1; }
 stop_mock
+
+# --- Public verification refusal and bounded failure. ---
+set +e
+SUMDB=off "$repo_root/scripts/verify-origin-public.sh" \
+  --manifest "$manifest" --origin "$origin" > "$work/public-refuse.log" 2>&1
+refuse_rc=$?
+set -e
+[[ $refuse_rc -ne 0 ]] || { echo "public verification accepted sumdb=off for the public origin" >&2; exit 1; }
+grep -F 'refusing to verify the public origin with the checksum database disabled' "$work/public-refuse.log" >/dev/null || { cat "$work/public-refuse.log" >&2; exit 1; }
+
+start_mock_server_on_18888 second >/dev/null || { echo "cannot start origin server" >&2; exit 1; }
+set +e
+ORIGIN_BASE_URL=http://127.0.0.1:18888 \
+PROXY_URL=http://127.0.0.1:18890 \
+DIRECT_PROBE=0 \
+  timeout 60 "$repo_root/scripts/verify-origin-public.sh" \
+    --manifest "$manifest" --origin "$origin" --timeout-seconds 2 --interval-seconds 1 \
+    > "$work/public-bounded.log" 2>&1
+bounded_rc=$?
+set -e
+stop_mock
+[[ $bounded_rc -ne 0 ]] || { echo "public verification passed with a dead proxy" >&2; exit 1; }
+grep -F 'did not resolve through the proxy within the deadline' "$work/public-bounded.log" >/dev/null || { cat "$work/public-bounded.log" >&2; exit 1; }
 
 echo "publisher repeat/conflict/list-merge/lock-probe/public-verification: PASS"

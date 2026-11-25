@@ -88,12 +88,17 @@ companion module imports nothing, contains only `go.mod`, `artifact.go`,
 Confirm the central thread's lock confirmation covers all five indefinite
 rules `modules/go.lancedb.io/lancedb-go/artifacts/<target>/@v/v`. Then dispatch
 `.github/workflows/publish-go-module-origin.yml` on `main` with
-`publish=true`. For the first publication also set `verify_protections=true`:
-the publish job then probes one retained `.info` object of the exact version,
-requires the service to deny an unconditional overwrite and a delete, repairs
-the object immediately if a delete is unexpectedly accepted, byte-compares the
-readback and fails the run if the lock is not enforcing. Publication
-acceptance fails with the probe.
+`publish=true`. The workflow accepts live writes only from `refs/heads/main`,
+re-fetches `origin/main` and requires the checked-out commit to equal it and to
+track the reviewed identity file before any credential is used, and pins its
+privileged-job actions to audited refs. `verify_protections` defaults to true,
+so the first publication probes one retained `.info` object of the exact
+version: it requires the service to deny an unconditional overwrite and a
+delete with HTTP 409 `ObjectLockedByBucketPolicy`, never accepts a transport
+failure or a 403 as proof, repairs the exact staged bytes immediately if an
+authoritative readback shows the object missing, byte-compares the readback and
+fails the run if the lock is not enforcing. Publication acceptance fails with
+the probe.
 
 The workflow uses the `go-module-origin` GitHub Environment
 (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`; vars `R2_BUCKET`,
@@ -102,13 +107,15 @@ Artifact module versions are immutable. Publish `.info`, `.mod` and `.zip`
 first, then the merged `@v/list`, then discovery last. Never create a Git tag
 for an artifact module and never move a published static version.
 
-After publication the workflow verifies all five modules through
-`proxy.golang.org` and `sum.golang.org` with fresh module caches and default
-sumdb verification, compares the public `Sum`/`GoModSum` with the manifest h1
-values, byte-compares the payload inside the public zip with the staged bytes,
-and re-resolves through `GOPROXY=direct` to exercise the discovery metadata. A
-missing checksum entry or a version that only resolves from a local cache is a
-stop condition.
+After publication the workflow runs `go mod download` from a dedicated
+temporary probe module with fresh caches and the repository's `go.mod`/
+`go.sum` out of scope, resolves all five modules through `proxy.golang.org`
+with `GOSUMDB=sum.golang.org` enabled, compares the public `Sum`/`GoModSum`
+with the manifest h1 values exactly, byte-compares the payload inside the
+public zip with the staged bytes, and re-resolves through `GOPROXY=direct` to
+exercise the discovery metadata. Each target has its own bounded deadline with
+retries. A missing checksum entry or a version that only resolves from a local
+cache is a stop condition.
 
 ## 4. Evidence
 

@@ -5,15 +5,18 @@
 # For every module in the manifest this script:
 #   * fetches `https://go.lancedb.io/<module>?go-get=1` and checks the exact
 #     three-field go-import meta;
-#   * resolves `@version` through https://proxy.golang.org with a fresh
-#     GOMODCACHE/GOCACHE and GOSUMDB=sum.golang.org, and requires the returned
-#     Version, Sum and GoModSum to equal the manifest values;
+#   * resolves `@version` through https://proxy.golang.org from a fresh
+#     temporary probe module (no root go.mod/go.sum or workspace influence)
+#     with fresh GOMODCACHE/GOCACHE and GOSUMDB=sum.golang.org, and requires
+#     the returned Version, Sum and GoModSum to equal the manifest values
+#     exactly;
 #   * resolves the same version through `GOPROXY=direct` as a discovery-path
 #     check; and
 #   * byte-compares the payload inside the public zip with the staged payload.
 #
-# The script never reads credentials. Retries wait for proxy propagation within
-# --timeout-seconds.
+# Each target gets its own bounded deadline: a transient discovery or proxy
+# failure retries until that deadline instead of consuming one shared window.
+# The script never reads credentials.
 set -euo pipefail
 
 usage() {
@@ -23,6 +26,16 @@ Usage: verify-origin-public.sh --manifest PATH --origin DIR [--version VERSION]
 
 Manifest supplies the five module paths, the exact version and the h1 sums.
 The origin tree supplies the staged payload bytes compared with the public zip.
+
+--timeout-seconds is the per-target deadline for discovery, proxy resolution
+and the direct discovery-path resolution (default 900). --interval-seconds is
+the wait between attempts (default 20).
+
+Environment overrides, for fixtures only:
+  ORIGIN_BASE_URL  discovery base (default https://go.lancedb.io)
+  PROXY_URL        proxy base (default https://proxy.golang.org)
+  SUMDB            checksum database (default sum.golang.org)
+  DIRECT_PROBE     1 to run GOPROXY=direct, 0 to skip (default 1)
 EOF
 }
 
@@ -49,17 +62,26 @@ command -v go >/dev/null || { echo "go is required" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 
-work=$(mktemp -d)
-trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT
-deadline=$(( $(date +%s) + timeout ))
-
-# The production defaults are the public origin, proxy and checksum database;
-# the fixture test overrides them with a local server. Keeping the defaults
-# means the real run has default sumdb verification enabled.
 ORIGIN_BASE_URL=${ORIGIN_BASE_URL:-https://go.lancedb.io}
 PROXY_URL=${PROXY_URL:-https://proxy.golang.org}
 SUMDB=${SUMDB:-sum.golang.org}
 DIRECT_PROBE=${DIRECT_PROBE:-1}
+
+# The public origin must be verified with the checksum database enabled. The
+# fixture test overrides both the base URL and the checksum database together.
+if [[ $SUMDB == off && $ORIGIN_BASE_URL == https://go.lancedb.io ]]; then
+  echo "verify-origin-public: refusing to verify the public origin with the checksum database disabled" >&2
+  exit 1
+fi
+
+work=$(mktemp -d)
+trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT
+
+# The probe runs from its own tiny module so the repository's go.mod, go.sum,
+# GOWORK or GOFLAGS cannot satisfy the resolution from local state.
+probe_dir="$work/probe"
+mkdir -p "$probe_dir"
+printf 'module public-origin-probe\n\ngo 1.21.0\n' > "$probe_dir/go.mod"
 
 python3 - "$manifest" "$origin" "$version" > "$work/modules.tsv" <<'PY'
 import json
@@ -75,18 +97,22 @@ full_version = data["version"]
 if requested:
     assert requested == full_version, (requested, full_version)
 
-modules = {obj["module"]: obj["gomod_h1"] for obj in data["objects"] if obj["key"].endswith(".mod")}
+mod_h1 = {obj["module"]: obj["gomod_h1"] for obj in data["objects"] if obj["key"].endswith(".mod")}
 rows = []
 for obj in data["objects"]:
     if not obj.get("target") or not obj["key"].endswith(".zip"):
         continue
-    rows.append("\t".join([obj["target"], obj["module"], obj["version"], obj["zip_h1"], modules[obj["module"]], str(origin / obj["key"])]))
+    staged_zip = origin / obj["key"]
+    assert staged_zip.is_file(), staged_zip
+    rows.append("\t".join([obj["target"], obj["module"], obj["version"], obj["zip_h1"], mod_h1[obj["module"]], str(staged_zip)]))
 rows.sort()
 print("\n".join(rows))
 PY
 
+# resolve MODULE VERSION MODE CACHE_ROOT
+# Writes stdout.json and stderr.log inside CACHE_ROOT. Returns non-zero when
+# the command could not produce a download result at all.
 resolve() {
-  # resolve MODULE VERSION MODE CACHE_ROOT
   local module=$1 module_version=$2 mode=$3 cache_root=$4
   local proxy
   if [[ $mode == direct ]]; then
@@ -95,17 +121,21 @@ resolve() {
     proxy=$PROXY_URL
   fi
   mkdir -p "$cache_root/mod" "$cache_root/build"
+  rm -f "$probe_dir/go.sum"
   env -u GOPRIVATE -u GONOPROXY -u GONOSUMDB -u GONOSUMCHECK -u GOFLAGS \
     GOENV=off GOWORK=off GOTOOLCHAIN=local \
     GOPROXY="$proxy" GOSUMDB="$SUMDB" \
     GOMODCACHE="$cache_root/mod" GOCACHE="$cache_root/build" \
-    go mod download -json "$module@$module_version" > "$cache_root/download.json" 2> "$cache_root/download.err"
+    go -C "$probe_dir" mod download -json "$module@$module_version" \
+    > "$cache_root/stdout.json" 2> "$cache_root/stderr.log" \
+    && return 0
+  return 1
 }
 
+# check_download MODULE VERSION ZIP_H1 GOMOD_H1 CACHE_ROOT
 check_download() {
-  # check_download MODULE VERSION ZIP_H1 GOMOD_H1 CACHE_ROOT
   local module=$1 module_version=$2 zip_h1=$3 gomod_h1=$4 cache_root=$5
-  python3 - "$cache_root/download.json" "$module" "$module_version" "$zip_h1" "$gomod_h1" <<'PY'
+  python3 - "$cache_root/stdout.json" "$module" "$module_version" "$zip_h1" "$gomod_h1" <<'PY'
 import json
 import pathlib
 import sys
@@ -128,8 +158,8 @@ print(f"{module}: sums ok")
 PY
 }
 
+# compare_payload MODULE VERSION PUBLIC_ZIP STAGED_ZIP
 compare_payload() {
-  # compare_payload MODULE VERSION PUBLIC_ZIP STAGED_ZIP
   local module=$1 module_version=$2 public_zip=$3 staged_zip=$4
   python3 - "$module" "$module_version" "$public_zip" "$staged_zip" <<'PY'
 import hashlib
@@ -154,63 +184,83 @@ print(f"{module}: payload bytes ok")
 PY
 }
 
-while IFS=$'\t' read -r target module module_version zip_h1 gomod_h1 staged_zip; do
-  [[ -n $target ]] || continue
-  echo "public verification: $module@$module_version ($target)"
-  meta="content=\"$module mod https://go.lancedb.io/modules\""
-  discovery_path=${module#go.lancedb.io/}
-  if ! curl -fsS "$ORIGIN_BASE_URL/$discovery_path?go-get=1" | grep -F "$meta" >/dev/null; then
-    echo "public verification: discovery meta missing for $module" >&2
-    exit 1
-  fi
-  echo "  discovery html: ok"
-
-  resolved=0
-  last_error=""
-  attempt=0
+resolve_until() {
+  # resolve_until MODULE VERSION MODE LABEL DEADLINE CACHE_PREFIX ZIP_H1 GOMOD_H1
+  # Prints the successful cache root. On timeout, prints the last diagnostics
+  # to stderr and returns 1.
+  local module=$1 module_version=$2 mode=$3 label=$4 deadline=$5 cache_prefix=$6 zip_h1=$7 gomod_h1=$8
+  local attempt=0 cache_root
   while [[ $(date +%s) -lt $deadline ]]; do
     attempt=$((attempt + 1))
-    cache_root="$work/$target/proxy-$attempt"
-    if resolve "$module" "$module_version" proxy "$cache_root"; then
-      if check_download "$module" "$module_version" "$zip_h1" "$gomod_h1" "$cache_root" > "$cache_root/check" 2>&1; then
-        public_zip=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["Zip"])' "$cache_root/download.json")
-        if compare_payload "$module" "$module_version" "$public_zip" "$staged_zip" > "$cache_root/compare" 2>&1; then
-          resolved=1
-          last_error="$cache_root"
-          break
-        fi
-      fi
-      last_error="$cache_root/check"
-      cat "$last_error" >&2 || true
-    else
-      last_error="$cache_root/error"
-      cat "$last_error" >&2 || true
+    cache_root="$cache_prefix-$attempt"
+    if resolve "$module" "$module_version" "$mode" "$cache_root" \
+      && check_download "$module" "$module_version" "$zip_h1" "$gomod_h1" "$cache_root" > "$cache_root/check.log" 2>&1; then
+      printf '%s\n' "$cache_root"
+      return 0
+    fi
+    echo "  $label attempt $attempt: not ready" >&2
+    if [[ -f $cache_root/stderr.log ]]; then
+      tail -n 3 "$cache_root/stderr.log" >&2 || true
+    fi
+    if [[ -f $cache_root/check.log ]]; then
+      cat "$cache_root/check.log" >&2 || true
     fi
     sleep "$interval"
   done
-  if [[ $resolved != 1 ]]; then
-    echo "public verification: FAIL $module@$module_version did not resolve through the public proxy" >&2
-    [[ -n $last_error ]] && cat "$last_error" >&2 || true
-    exit 1
-  fi
-  echo "  proxy and sumdb: ok"
+  echo "  $label did not succeed within the per-target deadline" >&2
+  return 1
+}
 
-  if [[ $DIRECT_PROBE != 1 ]]; then
+status=0
+while IFS=$'\t' read -r target module module_version zip_h1 gomod_h1 staged_zip; do
+  [[ -n $target ]] || continue
+  echo "public verification: $module@$module_version ($target)"
+  discovery_path=${module#go.lancedb.io/}
+  meta="content=\"$module mod https://go.lancedb.io/modules\""
+  deadline=$(( $(date +%s) + timeout ))
+
+  # Discovery and proxy/sumdb resolution share the target's deadline; both are
+  # retried so a transient proxy or origin propagation pause does not fail the
+  # target immediately.
+  proxy_cache=""
+  attempt=0
+  while [[ $(date +%s) -lt $deadline ]]; do
+    attempt=$((attempt + 1))
+    if ! curl -fsS "$ORIGIN_BASE_URL/$discovery_path?go-get=1" | grep -F "$meta" >/dev/null; then
+      echo "  discovery attempt $attempt: meta not ready" >&2
+      sleep "$interval"
+      continue
+    fi
+    if proxy_cache=$(resolve_until "$module" "$module_version" proxy "proxy + sumdb" "$deadline" "$work/$target/proxy" "$zip_h1" "$gomod_h1"); then
+      break
+    fi
+  done
+  if [[ -z $proxy_cache ]]; then
+    echo "public verification: FAIL $module@$module_version did not resolve through the proxy within the deadline" >&2
+    status=1
     continue
   fi
+  public_zip=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["Zip"])' "$proxy_cache/stdout.json")
+  if ! compare_payload "$module" "$module_version" "$public_zip" "$staged_zip"; then
+    echo "public verification: FAIL $module@$module_version public payload differs from the staged payload" >&2
+    status=1
+    continue
+  fi
+  echo "  discovery html: ok"
+  echo "  proxy and sumdb: ok"
 
-  direct_cache="$work/$target/direct"
-  if ! resolve "$module" "$module_version" direct "$direct_cache"; then
-    echo "public verification: FAIL $module@$module_version did not resolve through discovery (GOPROXY=direct)" >&2
-    cat "$direct_cache/error" >&2 || true
-    exit 1
+  if [[ $DIRECT_PROBE == 1 ]]; then
+    if ! resolve_until "$module" "$module_version" direct "discovery path + sumdb" "$deadline" "$work/$target/direct" "$zip_h1" "$gomod_h1" >/dev/null; then
+      echo "public verification: FAIL $module@$module_version did not resolve through discovery within the deadline" >&2
+      status=1
+      continue
+    fi
+    echo "  discovery path + sumdb: ok"
   fi
-  if ! check_download "$module" "$module_version" "$zip_h1" "$gomod_h1" "$direct_cache" > "$direct_cache/check" 2>&1; then
-    echo "public verification: FAIL $module@$module_version sums differ through direct resolution" >&2
-    cat "$direct_cache/check" >&2 || true
-    exit 1
-  fi
-  echo "  discovery path + sum.golang.org: ok"
 done < "$work/modules.tsv"
 
+if [[ $status != 0 ]]; then
+  echo "public verification: FAIL" >&2
+  exit 1
+fi
 echo "public verification: PASS"
