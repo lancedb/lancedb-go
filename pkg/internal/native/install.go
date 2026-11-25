@@ -4,28 +4,32 @@
 package native
 
 import (
-	"archive/tar"
-	"compress/gzip"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime"
-	"strings"
-	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
-const downloadTimeout = 20 * time.Minute
-
-// install returns the verified cache path for target, downloading and
-// extracting the published archive when the cache does not already hold the
-// exact library bytes.
+// install returns the verified cache path for target. On a cold or damaged
+// entry it decompresses the compiled-in companion payload for the running
+// target; a verified entry is reused without touching its inode and without
+// decompressing the payload again.
+//
+// The payload comes from the per-target artifact module linked by a
+// build-tagged selector, so installation never uses the network at runtime.
 func install(target Target) (string, error) {
+	bundle, err := bundleFor(target)
+	if err != nil {
+		return "", err
+	}
+
 	dir, err := cacheDirFor(target)
 	if err != nil {
 		return "", err
@@ -43,178 +47,79 @@ func install(target Target) (string, error) {
 	defer lock.Close()
 
 	libPath := filepath.Join(dir, target.LibraryName)
-	usable, err := prepareCachedLibrary(libPath, target.LibrarySHA256)
+	usable, err := prepareCachedLibrary(libPath, bundle.UncompressedSHA256)
 	if err != nil {
 		return "", err
 	}
 	if usable {
-		// A verified library is a complete cache entry. Do not require the
-		// archive or the network to reuse it, and do not replace its inode.
+		// A verified library is a complete cache entry. Do not decompress the
+		// payload again and do not replace its inode.
 		return libPath, nil
 	}
 
-	archivePath := filepath.Join(dir, target.Archive)
-	if err := verifyFileIfExists(archivePath, target.ArchiveSHA256); err != nil {
+	if err := extractBundle(bundle, dir, libPath); err != nil {
 		return "", err
 	}
-	if _, statErr := os.Stat(archivePath); os.IsNotExist(statErr) {
-		url := releaseBaseURL() + "/" + target.Archive
-		if err := downloadFile(url, archivePath, target.ArchiveSHA256); err != nil {
-			return "", fmt.Errorf("download %s: %w", url, err)
-		}
-	}
-
-	tmpFile, err := os.CreateTemp(dir, "."+target.LibraryName+".tmp-*")
-	if err != nil {
-		return "", fmt.Errorf("create temporary library in %s: %w", dir, err)
-	}
-	tmp := tmpFile.Name()
-	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return "", fmt.Errorf("close temporary library %s: %w", tmp, err)
-	}
-	defer os.Remove(tmp)
-	if err := extractLibrary(archivePath, target, tmp); err != nil {
-		return "", err
-	}
-	if err := verifyFile(tmp, target.LibrarySHA256); err != nil {
-		return "", fmt.Errorf("extracted library: %w", err)
-	}
-	if err := os.Chmod(tmp, 0o500); err != nil && !isWindows() {
-		return "", fmt.Errorf("protect extracted library: %w", err)
-	}
-	if err := os.Rename(tmp, libPath); err != nil {
-		// Another installer may have published the same verified bytes before
-		// this process acquired the shared cache lock.
-		if verifyFile(libPath, target.LibrarySHA256) == nil {
-			return libPath, nil
-		}
-		return "", fmt.Errorf("publish cached library %s: %w", libPath, err)
-	}
-	// Keep the verified archive. Removing it while another process is reading
-	// the same cache entry creates a cross-process race; the archive is also
-	// useful for an offline repair.
 	return libPath, nil
 }
 
-func releaseBaseURL() string {
-	if base := os.Getenv(EnvReleaseBaseURL); base != "" {
-		return strings.TrimRight(base, "/")
+// extractBundle verifies the compiled-in payload and publishes the library
+// into dir. The caller holds the per-target cache lock.
+func extractBundle(bundle *Bundle, dir, destination string) error {
+	if sum := sha256.Sum256(bundle.Compressed); hex.EncodeToString(sum[:]) != bundle.CompressedSHA256 {
+		return fmt.Errorf("compiled-in %s payload: %w: sha256 is %s, want %s", bundle.Module, errDigestMismatch, hex.EncodeToString(sum[:]), bundle.CompressedSHA256)
 	}
-	return "https://github.com/" + ReleaseRepo + "/releases/download/" + ReleaseTag
-}
 
-func verifyFileIfExists(path, want string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("inspect %s: %w", path, err)
-	}
-	if err := verifyFile(path, want); err != nil {
-		if !errors.Is(err, errDigestMismatch) {
-			// A transient open/read/sharing error is not a corrupt archive.
-			return fmt.Errorf("verify archive %s: %w", path, err)
-		}
-		// A partial or stale download is not a usable cache entry. Remove it
-		// and let the caller fetch the published archive again.
-		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
-			return fmt.Errorf("remove unusable archive %s: %w", path, removeErr)
-		}
-	}
-	return nil
-}
-
-func downloadFile(url, destination, wantSHA256 string) error {
-	tmpFile, err := os.CreateTemp(filepath.Dir(destination), "."+filepath.Base(destination)+".tmp-*")
+	tmpFile, err := os.CreateTemp(dir, "."+filepath.Base(destination)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("create temporary archive next to %s: %w", destination, err)
+		return fmt.Errorf("create temporary library in %s: %w", dir, err)
 	}
 	tmp := tmpFile.Name()
-	defer os.Remove(tmp)
-	f := tmpFile
-	defer f.Close()
+	published := false
+	defer func() {
+		if published {
+			return
+		}
+		tmpFile.Close()
+		os.Remove(tmp)
+	}()
 
-	client := &http.Client{Timeout: downloadTimeout}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	decoder, err := zstd.NewReader(bytes.NewReader(bundle.Compressed))
 	if err != nil {
-		return err
+		return fmt.Errorf("open compiled-in %s payload: %w", bundle.Module, err)
 	}
-	req.Header.Set("User-Agent", "lancedb-go/"+ReleaseVersion)
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %s", resp.Status)
-	}
+	defer decoder.Close()
 
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
-		return err
+	written, err := io.Copy(io.MultiWriter(tmpFile, h), io.LimitReader(decoder, bundle.UncompressedSize+1))
+	if err != nil {
+		return fmt.Errorf("decompress compiled-in %s payload: %w", bundle.Module, err)
 	}
-	if err := f.Sync(); err != nil {
-		return err
+	if written != bundle.UncompressedSize {
+		return fmt.Errorf("compiled-in %s payload: %w: decompressed %d bytes, want %d", bundle.Module, errDigestMismatch, written, bundle.UncompressedSize)
 	}
-	if err := f.Close(); err != nil {
-		return err
+	if got := hex.EncodeToString(h.Sum(nil)); got != bundle.UncompressedSHA256 {
+		return fmt.Errorf("compiled-in %s payload: %w: library sha256 is %s, want %s", bundle.Module, errDigestMismatch, got, bundle.UncompressedSHA256)
 	}
-	if got := hex.EncodeToString(h.Sum(nil)); got != wantSHA256 {
-		return fmt.Errorf("archive sha256 is %s, want %s", got, wantSHA256)
+	if err := os.Chmod(tmp, 0o500); err != nil && !isWindows() {
+		return fmt.Errorf("protect extracted library: %w", err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		return fmt.Errorf("sync extracted library: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temporary library %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, destination); err != nil {
-		if verifyFile(destination, wantSHA256) == nil {
+		// Another installer may have published the same verified bytes before
+		// this process acquired the shared cache lock.
+		if verifyFile(destination, bundle.UncompressedSHA256) == nil {
 			return nil
 		}
-		return fmt.Errorf("publish archive %s: %w", destination, err)
+		return fmt.Errorf("publish cached library %s: %w", destination, err)
 	}
+	published = true
 	return nil
-}
-
-func extractLibrary(archivePath string, target Target, destination string) error {
-	f, err := os.Open(archivePath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return fmt.Errorf("open archive %s: %w", archivePath, err)
-	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("read archive %s: %w", archivePath, err)
-		}
-		if hdr.Typeflag != tar.TypeReg {
-			continue
-		}
-		name := path.Clean(strings.TrimPrefix(hdr.Name, "./"))
-		base := path.Base(name)
-		// Linux stores the runtime bytes as liblancedb.so.0.1 behind the
-		// liblancedb.so linker symlink. The other targets use the plain name.
-		if base != target.LibraryName && base != target.LibraryName+".0.1" {
-			continue
-		}
-		out, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, io.LimitReader(tr, hdr.Size)); err != nil {
-			out.Close()
-			return err
-		}
-		if err := out.Close(); err != nil {
-			return err
-		}
-		return nil
-	}
-	return fmt.Errorf("archive %s does not contain %s or %s.0.1", archivePath, target.LibraryName, target.LibraryName)
 }
 
 // prepareCachedLibrary verifies an existing library and returns true when it
@@ -250,7 +155,7 @@ func isWindows() bool {
 	return runtime.GOOS == "windows"
 }
 
-// Install downloads, verifies and extracts the published artifact for the
+// Install verifies and extracts the compiled-in companion payload for the
 // running target into the private cache. It returns the runtime library path.
 // Load calls the same logic lazily; this entry point lets an installer or CI
 // pre-populate the cache without loading the library.

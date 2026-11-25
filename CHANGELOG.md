@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.2.0-preview.3
+
+### Changed
+
+- Distribute the native library through the Go module graph. The payload for
+  each supported target is delivered by a companion module at
+  `go.lancedb.io/lancedb-go/artifacts/<target>`, built from the exact
+  `lancedb-c` release; the root module requires all five and build-tagged
+  selectors link exactly the one matching the build. Native payloads and
+  companion tags stay out of this repository.
+- Replace the first-`Connect` HTTP download with verification and extraction of
+  the compiled-in payload into the existing per-target locked cache. Cache
+  repair, permissions, concurrency and the explicit `LANCEDB_C_LIBRARY_PATH`
+  override are unchanged; the loader no longer uses the network at runtime.
+- Point installation docs at `@latest` and the releases page, and add the
+  hosted offline consumer lane that proves a cold default `Connect` on all five
+  targets with no network access.
+
+### Removed
+
+- Remove `LANCEDB_C_RELEASE_BASE_URL`, the release archive download, and the
+  archive/mirror handling they supported.
+
 ## v0.2.0-preview.2
 
 ### Changed

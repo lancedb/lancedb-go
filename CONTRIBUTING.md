@@ -12,14 +12,16 @@
 ```bash
 make build            # go build ./... with CGO_ENABLED=0
 make test-native      # loader, cache and ABI layout tests (no native library)
-make test             # full suite; downloads and verifies the pinned artifact
+make test             # full suite; uses the compiled-in native payload
 make vet fmt-check
 ```
 
-The first test or `Connect` downloads the pinned artifact into
-`LANCEDB_C_CACHE_DIR` (default: the user cache directory). For an offline
-environment, run `make install-native` on a connected machine and copy the
-cache, or point `LANCEDB_C_LIBRARY_PATH` at a library you installed yourself.
+The first test or `Connect` extracts the compiled-in native payload into
+`LANCEDB_C_CACHE_DIR` (default: the user cache directory) and verifies it
+against the companion module's published digests. For an offline environment,
+run `make install-native` on a machine where `go get` has already resolved the
+modules and copy the cache, or point `LANCEDB_C_LIBRARY_PATH` at a library you
+installed yourself.
 
 ## Authenticated S3 and AWS profile tests
 
@@ -48,9 +50,9 @@ at a production account or real data.
 | `pkg/contracts` | Published v0.1.2 API plus additive companion interfaces and types. |
 | `pkg/lancedb` | Public constructors (`Connect`, schemas, native install/version helpers). |
 | `pkg/internal` | Go adapters: handles, locking, Arrow IPC conversion, lifecycle. |
-| `pkg/internal/native` | Library discovery, SHA-256 verification, cache, purego bindings, C structs and ABI layout tests. |
+| `pkg/internal/native` | Library discovery, companion-module payload extraction, SHA-256 verification, cache, purego bindings, C structs and ABI layout tests. |
 | `include/lancedb.h` | Exact public C header from the pinned `lancedb-c` release. |
-| `pkg/cmd/lancedb-go-native` | Pre-download and verify the native artifact. |
+| `pkg/cmd/lancedb-go-native` | Extract and verify the compiled-in native payload into the cache. |
 
 `pkg/contracts` is a compatibility boundary. Do not add a method to a published
 interface or a field to a published struct to expose a new capability; add a
@@ -59,10 +61,13 @@ is separate because Go cannot overload `Execute` by argument or return type.
 
 ## Native artifact changes
 
-`pkg/internal/native/manifest.go` pins the release tag, full commit, exact
-archive names, archive SHA-256, library paths and library SHA-256. When updating
-the pin, verify the public release inventory and update the version check. Do
-not derive an asset name from a shortened hash.
+`pkg/internal/native/manifest.go` pins the `lancedb-c` release tag and runtime
+version, and the root `go.mod` requires the five per-target companion modules
+at their published artifact version. When updating the pin, verify that the
+published modules resolve through the public proxy and checksum database, that
+each artifact's `SourceRelease` matches the release tag, and that the built
+binary for every supported target links exactly its own artifact module. Do not
+add payloads or companion module tags to this repository.
 
 ## Pull requests
 

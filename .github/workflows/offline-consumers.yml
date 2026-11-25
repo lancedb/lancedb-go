@@ -1,0 +1,124 @@
+name: Offline consumers
+
+# Native acceptance for the published offline distribution: one exact release
+# tag is resolved from the public Go module proxy, the consumer is built
+# standalone with CGO_ENABLED=0, and a cold default Connect runs with the
+# network disabled, an empty private cache and no explicit library path.
+#
+# This lane never runs for a branch push or a commit SHA. Exact-head CI covers
+# the checkout build; this workflow covers the published module graph.
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: "Exact release tag (for example v0.2.0-preview.3) to resolve from proxy.golang.org"
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CGO_ENABLED: "0"
+  GOTOOLCHAIN: local
+  GOWORK: "off"
+  GOENV: "off"
+
+jobs:
+  offline-consumer:
+    name: Offline consumer ${{ matrix.slug }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: linux-amd64
+            runner: ubuntu-22.04
+            goos: linux
+            goarch: amd64
+            uname: x86_64
+            library: liblancedb.so
+          - slug: linux-arm64
+            runner: ubuntu-22.04-arm
+            goos: linux
+            goarch: arm64
+            uname: aarch64
+            library: liblancedb.so
+          - slug: darwin-arm64
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+            uname: arm64
+            library: liblancedb.dylib
+          - slug: windows-amd64
+            runner: windows-2025
+            goos: windows
+            goarch: amd64
+            uname: ""
+            library: lancedb.dll
+          - slug: windows-arm64
+            runner: windows-11-arm
+            goos: windows
+            goarch: arm64
+            uname: ""
+            library: lancedb.dll
+    env:
+      ROOT_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.revision }}
+      TARGET_GOOS: ${{ matrix.goos }}
+      TARGET_GOARCH: ${{ matrix.goarch }}
+      EXPECTED_UNAME: ${{ matrix.uname }}
+      LIBRARY_NAME: ${{ matrix.library }}
+      EVIDENCE_DIR: ${{ runner.temp }}/offline-consumer-evidence
+    steps:
+      - name: Check out the release revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || inputs.revision }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require the checked-out release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$ROOT_VERSION" in
+            v[0-9]*) ;;
+            *)
+              echo "offline consumers only run for an official release tag, got: $ROOT_VERSION" >&2
+              exit 1
+              ;;
+          esac
+          head_commit=$(git rev-parse HEAD)
+          tag_commits=$(git ls-remote --tags origin "refs/tags/$ROOT_VERSION" "refs/tags/$ROOT_VERSION^{}" | awk '{print $1}')
+          if ! printf '%s\n' "$tag_commits" | grep -Fxq "$head_commit"; then
+            echo "checked-out HEAD $head_commit is not the tag $ROOT_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run offline consumer acceptance
+        shell: bash
+        run: bash scripts/offline-consumer/run.sh
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: offline-consumer-${{ matrix.slug }}
+          path: ${{ runner.temp }}/offline-consumer-evidence
+          if-no-files-found: ignore
+          retention-days: 14

@@ -53,11 +53,18 @@ jobs:
         shell: bash
         run: go test -count=1 ./pkg/internal/native
 
+      - name: Offline consumer harness self-tests
+        shell: bash
+        run: |
+          PYTHON=$(command -v python3 || command -v python)
+          bash -n scripts/offline-consumer/run.sh
+          "$PYTHON" scripts/offline-consumer/verify_test.py
+
       - name: Cache native artifact
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/lancedb-native
-          key: native-${{ matrix.target }}-v0.1.0-preview.3
+          key: native-${{ matrix.target }}-${{ hashFiles('pkg/internal/native/manifest.go') }}
 
       - name: Install native artifact and run tests
         shell: bash
