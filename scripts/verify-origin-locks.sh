@@ -134,7 +134,11 @@ staged_hash=$(sha256sum "$staged_path" | awk '{print $1}')
 echo "lock probe: key=$probe_key version=$version staged_sha256=$staged_hash"
 
 endpoint="${endpoint%/}"
-url="$endpoint/$bucket/$probe_key"
+# S3 canonical signing uses the URI-encoded path. curl signs the path exactly as
+# given, while AWS CLI encodes '@' and other non-unreserved characters; the raw
+# key produced SignatureDoesNotMatch for the '@v' path segment on R2.
+encoded_key=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="/"))' "$probe_key")
+url="$endpoint/$bucket/$encoded_key"
 
 # curl_method METHOD URL OUT_STATUS OUT_BODY [EXTRA...]
 #
