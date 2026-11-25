@@ -43,6 +43,8 @@ if [[ -z $PYTHON ]]; then
 fi
 [[ -n $PYTHON ]] || { echo "ERROR: python3 or python is required" >&2; exit 1; }
 CONSUMER_SOURCE="$REPO_DIR/scripts/offline-consumer/consumer/main.go"
+# shellcheck source=lib.sh
+source "$SCRIPT_DIR/lib.sh"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/offline-consumer.XXXXXX")
 SUMMARY="$EVIDENCE_DIR/summary.txt"
@@ -128,63 +130,6 @@ required_artifacts() {
   ' "$1" | awk -v p="$ARTIFACT_PREFIX" 'index($0, p "/") == 1' | LC_ALL=C sort -u
 }
 
-detect_network_off() {
-  case "$(uname -s)" in
-    Linux)
-      if unshare -rn true >/dev/null 2>&1; then
-        NET_OFF=(unshare -rn)
-        NET_KIND=netns
-      elif sudo -n unshare -n true >/dev/null 2>&1; then
-        NET_OFF=(sudo -n unshare -n)
-        NET_KIND=netns-sudo
-      else
-        return 1
-      fi
-      ;;
-    Darwin)
-      if command -v sandbox-exec >/dev/null 2>&1; then
-        NET_OFF=(sandbox-exec -p '(version 1)(allow default)(deny network*)')
-        NET_KIND=sandbox-exec
-      else
-        return 1
-      fi
-      ;;
-    *)
-      # Windows runners have no network namespace or sandbox in the shell. The
-      # run still disables Go module fetch and routes HTTP through a dead
-      # proxy, so an accidental runtime download fails instead of succeeding.
-      NET_OFF=()
-      NET_KIND=env-blocked
-      ;;
-  esac
-  return 0
-}
-
-run_consumer() {
-  local binary=$1 cache=$2 db=$3 out=$4 label=$5
-  mkdir -p "$cache" "$db"
-  : > "$out"
-  printf '+ run=%s LANCEDB_C_CACHE_DIR=%s %s %s -uri %s\n' \
-    "$label" "$cache" "${NET_OFF[*]}" "$binary" "$db" >> "$COMMANDS"
-  set +e
-  env -u LANCEDB_C_LIBRARY_PATH \
-    LANCEDB_C_CACHE_DIR="$cache" \
-    GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local \
-    HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 NO_PROXY= \
-    "${NET_OFF[@]}" "$binary" -uri "$db" > "$out" 2>&1
-  local rc=$?
-  set -e
-  cat "$out" | tee -a "$SUMMARY"
-  return "$rc"
-}
-
-expect_field() {
-  local out=$1 key=$2 want=$3
-  local got
-  got=$(awk -F= -v k="$key" '$1 == k { print substr($0, length(k) + 2) }' "$out" | head -1)
-  [[ $got == "$want" ]] || fail "$key is '$got', want '$want'"
-}
-
 # ---------------------------------------------------------------------------
 # Preconditions
 
@@ -265,10 +210,13 @@ MANIFEST_SOURCE="$SETUP_MODCACHE/$ROOT_MODULE@$ROOT_VERSION/pkg/internal/native/
 [[ -f $MANIFEST_SOURCE ]] || fail "resolved root source is missing: $MANIFEST_SOURCE"
 EXPECTED_RUNTIME=$(sed -n 's/.*ReleaseVersion = "\([^"]*\)".*/\1/p' "$MANIFEST_SOURCE" | head -1)
 RELEASE_TAG=$(sed -n 's/.*ReleaseTag = "v\([^"]*\)".*/\1/p' "$MANIFEST_SOURCE" | head -1)
+RELEASE_COMMIT=$(sed -n 's/.*ReleaseCommit = "\([^"]*\)".*/\1/p' "$MANIFEST_SOURCE" | head -1)
 [[ -n $EXPECTED_RUNTIME ]] || fail "root source does not declare ReleaseVersion"
 [[ -n $RELEASE_TAG ]] || fail "root source does not declare ReleaseTag"
+[[ -n $RELEASE_COMMIT ]] || fail "root source does not declare ReleaseCommit"
 record runtime_version "$EXPECTED_RUNTIME"
 record release_tag "v$RELEASE_TAG"
+record release_commit "$RELEASE_COMMIT"
 
 ARTIFACT_JSON="$EVIDENCE_DIR/artifact.json"
 run_verify artifact \
@@ -277,7 +225,7 @@ run_verify artifact \
   --module "$ARTIFACT_PREFIX/$SLUG" \
   --expected-target "$TARGET_GOOS/$TARGET_GOARCH" \
   --expected-library "$LIBRARY_NAME" \
-  --expected-source-release "v$RELEASE_TAG" \
+  --expected-upstream-commit "$RELEASE_COMMIT" \
   --out "$ARTIFACT_JSON" 2>&1 | tee -a "$SUMMARY"
 ARTIFACT_SIZE=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["uncompressed_size"])' "$ARTIFACT_JSON")
 ARTIFACT_SHA=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["uncompressed_sha256"])' "$ARTIFACT_JSON")

@@ -65,7 +65,7 @@ is separate because Go cannot overload `Execute` by argument or return type.
 version, and the root `go.mod` requires the five per-target companion modules
 at their published artifact version. When updating the pin, verify that the
 published modules resolve through the public proxy and checksum database, that
-each artifact's `SourceRelease` matches the release tag, and that the built
+each artifact's `UpstreamCommit` matches the pinned `ReleaseCommit`, and that the built
 binary for every supported target links exactly its own artifact module. The
 release sequence and identity rules are in [RELEASING.md](RELEASING.md) and
 [scripts/go-module-origin/README.md](scripts/go-module-origin/README.md);

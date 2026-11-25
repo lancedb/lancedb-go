@@ -34,12 +34,10 @@ type Bundle struct {
 	UncompressedSize int64
 	// UncompressedSHA256 is the lowercase SHA-256 of the shared library.
 	UncompressedSHA256 string
-	// SourceRepo, SourceRelease and SourceCommit identify the lancedb-c
-	// source the payload was packaged from. SourceRelease must equal the
-	// release this binding is compiled against.
-	SourceRepo    string
-	SourceRelease string
-	SourceCommit  string
+	// UpstreamRepo and UpstreamCommit identify the lancedb-c source the
+	// payload was packaged from. UpstreamCommit must equal ReleaseCommit.
+	UpstreamRepo   string
+	UpstreamCommit string
 	// HeaderSHA256 is the SHA-256 of the C header used during packaging.
 	// These provenance fields are packaging-time claims, not properties
 	// verified from the shared library.
@@ -76,8 +74,8 @@ func bundleFor(target Target) (*Bundle, error) {
 	if bundle.LibraryName != target.LibraryName {
 		return nil, fmt.Errorf("compiled-in native payload for %s names library %q, want %q", bundle.Target, bundle.LibraryName, target.LibraryName)
 	}
-	if bundle.SourceRelease != ReleaseTag {
-		return nil, fmt.Errorf("compiled-in native payload was packaged from %s, want %s", bundle.SourceRelease, ReleaseTag)
+	if bundle.UpstreamCommit != ReleaseCommit {
+		return nil, fmt.Errorf("compiled-in native payload was packaged from %s, want %s", bundle.UpstreamCommit, ReleaseCommit)
 	}
 	return bundle, nil
 }
@@ -105,14 +103,11 @@ func (b *Bundle) validate() error {
 	if !isLowerHex(b.UncompressedSHA256, 64) {
 		return fmt.Errorf("payload uncompressed SHA-256 %q is not 64 lowercase hex characters", b.UncompressedSHA256)
 	}
-	if b.SourceRepo == "" {
-		return errors.New("payload source repository is empty")
+	if b.UpstreamRepo == "" {
+		return errors.New("payload upstream repository is empty")
 	}
-	if b.SourceRelease == "" {
-		return errors.New("payload source release is empty")
-	}
-	if !isLowerHex(b.SourceCommit, 40) {
-		return fmt.Errorf("payload source commit %q is not a 40-character lowercase hex commit", b.SourceCommit)
+	if !isLowerHex(b.UpstreamCommit, 40) {
+		return fmt.Errorf("payload upstream commit %q is not a 40-character lowercase hex commit", b.UpstreamCommit)
 	}
 	if !isLowerHex(b.HeaderSHA256, 64) {
 		return fmt.Errorf("payload header SHA-256 %q is not 64 lowercase hex characters", b.HeaderSHA256)

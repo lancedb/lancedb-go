@@ -19,9 +19,8 @@ func init() {
 		CompressedSHA256:   artifact.CompressedSHA256,
 		UncompressedSize:   artifact.UncompressedSize,
 		UncompressedSHA256: artifact.UncompressedSHA256,
-		SourceRepo:         artifact.SourceRepo,
-		SourceRelease:      artifact.SourceRelease,
-		SourceCommit:       artifact.SourceCommit,
+		UpstreamRepo:       artifact.UpstreamRepo,
+		UpstreamCommit:     artifact.UpstreamCommit,
 		HeaderSHA256:       artifact.HeaderSHA256,
 	})
 }

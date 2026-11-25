@@ -11,6 +11,13 @@ It does not rebuild native code, use Rust, protoc, a private module proxy or a
 it runs for a root `v*` release tag or a manual dispatch that names that tag,
 and never for a commit SHA or pseudo-version.
 
+`run-checkout.sh` is the pre-release counterpart used by the five-target
+`ci.yml` matrix. It builds the consumer from the checkout, verifies the
+artifact module required by the checkout's `go.mod`, then performs the same
+cold default `Connect` and separate explicit override runs against fresh
+caches. The tag-based `run.sh` lane remains the published-module acceptance
+after a root release tag exists.
+
 ## What is checked
 
 For the requested target, with Go 1.21 and `CGO_ENABLED=0`:
@@ -20,8 +27,9 @@ For the requested target, with Go 1.21 and `CGO_ENABLED=0`:
   `go.lancedb.io/lancedb-go/artifacts/<target>` at one version.
 - The selected artifact module archive matches its own `artifact.go` metadata:
   target, library name, compressed size and SHA-256, uncompressed size and
-  SHA-256, source repository, source release, source commit and header SHA-256.
-  Its `go.mod` declares `go 1.21.0` and no requirements.
+  SHA-256, upstream repository, upstream commit and header SHA-256. The
+  upstream commit must equal the root manifest's `ReleaseCommit`. Its `go.mod`
+  declares `go 1.21.0` and no requirements.
 - A fresh target build downloads exactly the selected artifact payload archive,
   and the built binary embeds exactly one artifact dependency with
   `CGO_ENABLED=0`.

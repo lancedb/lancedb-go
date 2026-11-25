@@ -18,10 +18,13 @@ import (
 const (
 	// ReleaseTag is the lancedb-c release the companion payloads were built
 	// from.
-	ReleaseTag = "v0.1.0-preview.4"
+	ReleaseTag = "v0.1.0-preview.5"
+	// ReleaseCommit is the peeled lancedb-c commit for ReleaseTag. Companion
+	// payloads record it as UpstreamCommit and the loader requires a match.
+	ReleaseCommit = "3106de158b8da5dcb47e2a4acc820ed1b74b3e01"
 	// ReleaseVersion is the version lancedb_c_version() must report for the
 	// loaded library.
-	ReleaseVersion = "0.1.0-preview.4"
+	ReleaseVersion = "0.1.0-preview.5"
 	// ArtifactModulePrefix is the import prefix of the per-target companion
 	// modules.
 	ArtifactModulePrefix = "go.lancedb.io/lancedb-go/artifacts"

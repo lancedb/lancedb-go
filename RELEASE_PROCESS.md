@@ -16,7 +16,7 @@ payloads, and no companion-module tag is created in Git.
 2. Confirm `pkg/internal/native/manifest.go` pins that `lancedb-c` release tag
    and runtime version, that the root `go.mod` requires all five companion
    modules at the published artifact version, and that each artifact module's
-   `SourceRelease` matches `ReleaseTag`.
+   `UpstreamCommit` matches `ReleaseCommit`.
 3. Confirm a real `CGO_ENABLED=0` consumer runs offline on all five targets
    with an empty native cache and no explicit library path, including the
    separate `LANCEDB_C_LIBRARY_PATH` override. The tag-based

@@ -41,9 +41,8 @@ const (
 	CompressedSHA256    = "%s"
 	UncompressedSize  int64 = 7
 	UncompressedSHA256  = "%s"
-	SourceRepo          = "lancedb/lancedb-c"
-	SourceRelease       = "v0.1.0-preview.4"
-	SourceCommit        = "%s"
+	UpstreamRepo        = "lancedb/lancedb-c"
+	UpstreamCommit      = "%s"
 	HeaderSHA256        = "%s"
 )
 ''' % (
@@ -78,7 +77,7 @@ def run_artifact(tmp, zip_path, mod_path):
         "--module", MODULE,
         "--expected-target", "linux/amd64",
         "--expected-library", "libfake.so",
-        "--expected-source-release", "v0.1.0-preview.4",
+        "--expected-upstream-commit", "a" * 40,
         "--out", str(out),
     ]
     return verify.main(args), out

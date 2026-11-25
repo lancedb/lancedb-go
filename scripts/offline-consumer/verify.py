@@ -24,9 +24,8 @@ CONSTANT_NAMES = {
     "CompressedSHA256",
     "UncompressedSize",
     "UncompressedSHA256",
-    "SourceRepo",
-    "SourceRelease",
-    "SourceCommit",
+    "UpstreamRepo",
+    "UpstreamCommit",
     "HeaderSHA256",
 }
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -101,15 +100,17 @@ def cmd_artifact(args):
     if missing:
         errors.append("artifact.go is missing constants: %s" % ", ".join(missing))
     for field, pattern in (("CompressedSHA256", HEX64), ("UncompressedSHA256", HEX64),
-                           ("SourceCommit", HEX40), ("HeaderSHA256", HEX64)):
+                           ("UpstreamCommit", HEX40), ("HeaderSHA256", HEX64)):
         if field in constants and not pattern.match(str(constants[field])):
             errors.append("%s is not the expected lowercase hex form: %r" % (field, constants[field]))
     if constants.get("Target") != args.expected_target:
         errors.append("Target is %r, want %r" % (constants.get("Target"), args.expected_target))
     if constants.get("LibraryName") != args.expected_library:
         errors.append("LibraryName is %r, want %r" % (constants.get("LibraryName"), args.expected_library))
-    if constants.get("SourceRelease") != args.expected_source_release:
-        errors.append("SourceRelease is %r, want %r" % (constants.get("SourceRelease"), args.expected_source_release))
+    if constants.get("UpstreamCommit") != args.expected_upstream_commit:
+        errors.append("UpstreamCommit is %r, want %r" % (constants.get("UpstreamCommit"), args.expected_upstream_commit))
+    if not constants.get("UpstreamRepo"):
+        errors.append("UpstreamRepo is empty")
     if constants.get("CompressedSize") != len(payload):
         errors.append("CompressedSize is %r, payload has %d bytes" % (constants.get("CompressedSize"), len(payload)))
     if constants.get("CompressedSHA256") != hashlib.sha256(payload).hexdigest():
@@ -141,9 +142,8 @@ def cmd_artifact(args):
         "compressed_sha256": constants["CompressedSHA256"],
         "uncompressed_size": constants["UncompressedSize"],
         "uncompressed_sha256": constants["UncompressedSHA256"],
-        "source_repo": constants["SourceRepo"],
-        "source_release": constants["SourceRelease"],
-        "source_commit": constants["SourceCommit"],
+        "upstream_repo": constants["UpstreamRepo"],
+        "upstream_commit": constants["UpstreamCommit"],
         "header_sha256": constants["HeaderSHA256"],
         "payload_member": payload_name,
     }
@@ -158,6 +158,7 @@ def cmd_binary(args):
     metadata = Path(args.metadata).read_text(encoding="utf-8")
     build = {}
     deps = []
+    main = None
     for line in metadata.splitlines():
         fields = line.strip().split("\t")
         if len(fields) == 2 and fields[0] == "build" and "=" in fields[1]:
@@ -165,6 +166,8 @@ def cmd_binary(args):
             build[key] = value
         elif len(fields) >= 3 and fields[0] == "dep":
             deps.append(fields[1:])
+        elif len(fields) >= 3 and fields[0] == "mod":
+            main = fields[1:]
 
     if build.get("CGO_ENABLED") != "0":
         errors.append("binary CGO_ENABLED is %r, want 0" % build.get("CGO_ENABLED"))
@@ -172,11 +175,19 @@ def cmd_binary(args):
         errors.append("binary GOOS is %r, want %r" % (build.get("GOOS"), args.goos))
     if build.get("GOARCH") != args.goarch:
         errors.append("binary GOARCH is %r, want %r" % (build.get("GOARCH"), args.goarch))
-    root = [dep for dep in deps if dep[0] == args.root_module]
-    if len(root) != 1:
-        errors.append("binary records %d %s dependencies, want exactly 1" % (len(root), args.root_module))
-    elif root[0][1] != args.root_version:
-        errors.append("binary builds %s %s, want %s" % (args.root_module, root[0][1], args.root_version))
+    if args.root_kind == "mod":
+        if main is None:
+            errors.append("binary records no main module")
+        elif main[0] != args.root_module:
+            errors.append("binary main module is %s, want %s" % (main[0], args.root_module))
+        elif main[1] != args.root_version:
+            errors.append("binary builds %s %s, want %s" % (args.root_module, main[1], args.root_version))
+    else:
+        root = [dep for dep in deps if dep[0] == args.root_module]
+        if len(root) != 1:
+            errors.append("binary records %d %s dependencies, want exactly 1" % (len(root), args.root_module))
+        elif root[0][1] != args.root_version:
+            errors.append("binary builds %s %s, want %s" % (args.root_module, root[0][1], args.root_version))
     selected = [dep for dep in deps if dep[0].startswith(args.artifact_prefix + "/")]
     if len(selected) != 1:
         errors.append("binary records %d artifact dependencies, want exactly 1: %s" % (
@@ -242,7 +253,7 @@ def main(argv=None):
     artifact.add_argument("--module", required=True)
     artifact.add_argument("--expected-target", required=True)
     artifact.add_argument("--expected-library", required=True)
-    artifact.add_argument("--expected-source-release", required=True)
+    artifact.add_argument("--expected-upstream-commit", required=True)
     artifact.add_argument("--max-go", default="1.21.0")
     artifact.add_argument("--out", required=True)
     artifact.set_defaults(func=cmd_artifact)
@@ -250,6 +261,7 @@ def main(argv=None):
     binary = subparsers.add_parser("binary", help="verify built binary module metadata")
     binary.add_argument("--metadata", required=True)
     binary.add_argument("--root-module", required=True)
+    binary.add_argument("--root-kind", choices=("dep", "mod"), default="dep")
     binary.add_argument("--root-version", required=True)
     binary.add_argument("--artifact-prefix", required=True)
     binary.add_argument("--slug", required=True)

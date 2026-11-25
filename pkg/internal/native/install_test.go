@@ -258,6 +258,9 @@ func TestCompiledSelectorMatchesCurrentTarget(t *testing.T) {
 	if bundle.LibraryName != target.LibraryName {
 		t.Fatalf("bundle library = %q, want %q", bundle.LibraryName, target.LibraryName)
 	}
+	if bundle.UpstreamCommit != ReleaseCommit {
+		t.Fatalf("bundle upstream commit = %q, want %q", bundle.UpstreamCommit, ReleaseCommit)
+	}
 }
 
 func TestInstallConcurrentColdCache(t *testing.T) {
@@ -388,9 +391,8 @@ func TestInstallCacheHelper(t *testing.T) {
 		CompressedSHA256:   os.Getenv("LANCEDB_INSTALL_COMPRESSED_SHA"),
 		UncompressedSize:   uncompressedSize,
 		UncompressedSHA256: os.Getenv("LANCEDB_INSTALL_UNCOMPRESSED_SHA"),
-		SourceRepo:         "lancedb/lancedb-c",
-		SourceRelease:      ReleaseTag,
-		SourceCommit:       strings.Repeat("a", 40),
+		UpstreamRepo:       "lancedb/lancedb-c",
+		UpstreamCommit:     ReleaseCommit,
 		HeaderSHA256:       strings.Repeat("b", 64),
 	}
 	if err := os.Setenv(EnvCacheDir, os.Getenv("LANCEDB_INSTALL_CACHE")); err != nil {
@@ -583,9 +585,8 @@ func testBundle(t *testing.T, target Target, library []byte) *Bundle {
 		CompressedSHA256:   sha256Hex(compressed),
 		UncompressedSize:   int64(len(library)),
 		UncompressedSHA256: sha256Hex(library),
-		SourceRepo:         "lancedb/lancedb-c",
-		SourceRelease:      ReleaseTag,
-		SourceCommit:       strings.Repeat("a", 40),
+		UpstreamRepo:       "lancedb/lancedb-c",
+		UpstreamCommit:     ReleaseCommit,
 		HeaderSHA256:       strings.Repeat("b", 64),
 	}
 }
