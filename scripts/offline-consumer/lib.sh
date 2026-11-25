@@ -115,7 +115,9 @@ prepare_windows_network_off() {
       $program = $item.FullName
       Write-Host "network_rule_program_full=$program"
       Write-Host "network_rule_program_type=$($item.Attributes) length=$($item.Length)"
-      $created = New-NetFirewallRule -Name $ruleName -DisplayName $ruleName -Direction Outbound -Program $program -Action Block -Profile Any -Enabled $true -ErrorAction Stop -PassThru
+      # Omit -Enabled: the documented default is True and the readback below
+      # verifies it. The typed Enabled enum does not accept a Boolean value.
+      $created = New-NetFirewallRule -Name $ruleName -DisplayName $ruleName -Direction Outbound -Program $program -Action Block -Profile Any -ErrorAction Stop -PassThru
       if ($null -eq $created) { throw "New-NetFirewallRule returned no rule" }
       Write-Host "network_rule_id=$($created.InstanceID)"
       $readback = Get-NetFirewallRule -Name $ruleName -ErrorAction Stop
@@ -123,12 +125,14 @@ prepare_windows_network_off() {
       if ($readback.InstanceID -ne $created.InstanceID) {
         throw "rule InstanceID changed: $($readback.InstanceID) != $($created.InstanceID)"
       }
-      if ($readback.Enabled -ne $true) { throw "rule Enabled is $($readback.Enabled)" }
-      if ([string]$readback.Direction -ne "Outbound") { throw "rule Direction is $($readback.Direction)" }
-      if ([string]$readback.Action -ne "Block") { throw "rule Action is $($readback.Action)" }
+      Write-Host "network_rule_readback=name=$($readback.Name) id=$($readback.InstanceID) enabled=$([string]$readback.Enabled) direction=$([string]$readback.Direction) action=$([string]$readback.Action)"
+      if ([string]$readback.Enabled -ne "True") { throw "rule Enabled is $([string]$readback.Enabled)" }
+      if ([string]$readback.Direction -ne "Outbound") { throw "rule Direction is $([string]$readback.Direction)" }
+      if ([string]$readback.Action -ne "Block") { throw "rule Action is $([string]$readback.Action)" }
       $filter = @(Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $readback -ErrorAction Stop)
       if ($filter.Count -ne 1) { throw "expected one application filter, got $($filter.Count)" }
       $filterProgram = $filter[0].Program
+      Write-Host "network_rule_filter_program=$filterProgram"
       if ([string]::IsNullOrEmpty($filterProgram)) { throw "application filter has no program" }
       $want = [System.IO.Path]::GetFullPath($program)
       $got = [System.IO.Path]::GetFullPath($filterProgram)
