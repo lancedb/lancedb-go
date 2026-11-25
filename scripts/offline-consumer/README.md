@@ -46,11 +46,17 @@ For the requested target, with Go 1.21 and `CGO_ENABLED=0`:
 
 Each run refuses to claim an offline check without a real isolation mechanism:
 
-- Linux: `unshare -rn` (or passwordless `sudo -n unshare -n`) network namespace.
+- Linux: `unshare -rn` network namespace.
 - macOS: `sandbox-exec` with a deny-network profile.
-- Windows: no shell-level network sandbox exists on the hosted runners, so the
-  run disables Go module fetch and routes `HTTP_PROXY`/`HTTPS_PROXY` through a
-  dead address. The summary records `network_disable=env-blocked` for that case.
+- Windows: a per-executable outbound Windows Firewall rule for the built
+  consumer. The lane first proves direct egress from that executable, installs
+  the rule, proves the same executable is blocked, then runs the cold and
+  override consumers. The rule is scoped to the executable path, is created
+  only in the ephemeral CI job, and is removed by the exit trap on success and
+  on errors.
+
+The tag-based `run.sh` lane uses the same validation, so the release-tag
+external consumers are covered by the same isolation contract.
 
 The published Linux libraries require glibc 2.35 or newer; the lane refuses to
 run on older Linux hosts instead of reporting a load failure as a product bug.

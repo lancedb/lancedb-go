@@ -47,6 +47,7 @@ GO_ENV=(
 
 finish() {
   local rc=$?
+  cleanup_network_off
   printf '%s\n' "$rc" > "$EVIDENCE_DIR/exit-code.txt"
   if [[ $rc -ne 0 ]]; then
     printf 'result=FAIL\nexit_code=%s\n' "$rc" >> "$SUMMARY"
@@ -160,7 +161,7 @@ env "${GO_ENV[@]}" go version -m "$BIN" > "$EVIDENCE_DIR/binary-modules.txt"
 # ---------------------------------------------------------------------------
 # Cold default Connect with no network, an empty cache and no override.
 
-if ! detect_network_off; then
+if ! detect_network_off "$BIN"; then
   fail "no network-off mechanism is available on $(uname -s); refusing to claim an offline run"
 fi
 record network_disable "$NET_KIND"

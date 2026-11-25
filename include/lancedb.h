@@ -26,7 +26,7 @@
 #define LANCEDB_VERSION_MAJOR 0
 #define LANCEDB_VERSION_MINOR 1
 #define LANCEDB_VERSION_PATCH 0
-#define LANCEDB_VERSION_STRING "0.1.0-preview.3"
+#define LANCEDB_VERSION_STRING "0.1.0-preview.5"
 #define LANCEDB_VERSION LANCEDB_VERSION_STRING
 
 /** @} */
@@ -3950,7 +3950,7 @@ LanceDBVectorQuery* lancedb_vector_query_new(
  * On a multivector column, `limit` selects table rows in total and each row's
  * `_distance` includes the contribution of every input vector.
  *
- * The pinned SDK beta.26 cannot merge a hybrid query whose vector leg returns
+ * The pinned SDK beta.30 cannot merge a hybrid query whose vector leg returns
  * batch results with `query_index` and whose full-text leg returns matches:
  * the SDK's RRF merge combines the batch `query_index` column with the
  * full-text schema and returns an Arrow schema error. This includes multiple
@@ -4032,6 +4032,10 @@ LanceDBError lancedb_vector_query_add_query_vector(
 
 /**
  * Set limit for query
+ *
+ * This limits the final query result. It is independent of a structured
+ * full-text query's candidate ceiling, which is set with
+ * lancedb_fts_query_limit().
  *
  * @param query - pointer to LanceDBQuery
  * @param limit - maximum number of results
@@ -4610,7 +4614,9 @@ typedef struct {
  * C representation, and a child can itself be a Boolean or Boost handle. The
  * constructor copies each clause's structured query node and occurrence, so
  * child handles may be reused in several clauses or freed after this call
- * returns.
+ * returns. Only the node is copied; a child handle's candidate limit set with
+ * lancedb_fts_query_limit() is not part of the node and does not constrain the
+ * Boolean query.
  *
  * SDK clause semantics apply unchanged. MUST clauses must all match and their
  * scores are summed. SHOULD clauses are optional when a MUST clause exists and
@@ -4687,7 +4693,9 @@ LanceDBError lancedb_fts_query_new_boolean(
  *
  * `positive` and `negative` are required borrowed handles; the constructor
  * copies each handle's structured query node, so the caller may reuse or free
- * the handles after this call returns. `negative_boost` may be
+ * the handles after this call returns. Only the node is copied; a child
+ * handle's candidate limit set with lancedb_fts_query_limit() is not part of
+ * the node and does not constrain the Boost query. `negative_boost` may be
  * NULL, which passes "unset" to the SDK constructor so the SDK supplies its
  * default of 0.5. A pointed-to value is forwarded unchanged. The embedded dataset
  * scanner requires a finite, non-negative multiplier when it plans the query
@@ -4760,9 +4768,9 @@ LanceDBError lancedb_fts_query_new_boost(
  *
  * This applies the pinned SDK's `FullTextSearchQuery::with_columns` to a copy
  * and publishes the result only after the SDK accepts it. A failure leaves the
- * handle's previous query and settings unchanged. The operation replaces the
- * columns of every Match and Phrase leaf; it does not fill only leaves that
- * lack a column.
+ * handle's previous query, candidate limit and settings unchanged. The
+ * operation replaces the columns of every Match and Phrase leaf; it does not
+ * fill only leaves that lack a column.
  *
  * A Match leaf becomes one leaf per selected column. Several columns therefore
  * turn it into a MultiMatch, and every scalar setting of the original leaf
@@ -4808,6 +4816,79 @@ LanceDBError lancedb_fts_query_with_columns(
     LanceDBFtsQuery* query,
     const char* const* columns,
     size_t num_columns,
+    char** error_message
+);
+
+/**
+ * Set the candidate limit of a structured full-text query
+ *
+ * This sets the pinned SDK's FullTextSearchQuery candidate ceiling. It is
+ * separate from lancedb_query_limit() and lancedb_vector_query_limit(), which
+ * limit the final query result. On a backend that consumes the field, zero
+ * requests no full-text candidates, so a standalone full-text query returns no
+ * rows and a hybrid query keeps only its vector contribution. A positive value
+ * caps the candidates the full-text leg may produce before the final query
+ * limit and offset are applied.
+ *
+ * The value is forwarded unchanged as int64_t. Embedded planning converts it
+ * to size_t, so a negative value becomes a very large ceiling on a 64-bit
+ * target. The native MemWAL LSM path rejects a negative value at execution
+ * with LANCEDB_INVALID_INPUT. This setter does not clamp or reject negative
+ * values; the selected backend determines the outcome.
+ *
+ * There is no upper bound. A very large positive value can exhaust memory or
+ * otherwise fail during execution. The native MemWAL LSM path is the most
+ * exposed because it applies the value to every planned FTS column. When the
+ * intent is no explicit ceiling, call lancedb_fts_query_unset_limit() instead
+ * of passing a very large value.
+ *
+ * The pinned SDK consumes the ceiling for standalone embedded full-text
+ * search, for the full-text leg of an embedded hybrid query, and for a native
+ * MemWAL LSM full-text query. Namespace QueryTable pushdown and LanceDB
+ * Enterprise requests do not carry the field: only their outer result limit
+ * applies, so the ceiling is silently absent on those backends.
+ *
+ * The limit belongs to the full-text search wrapper, not to the query tree.
+ * lancedb_fts_query_new_boolean() and lancedb_fts_query_new_boost() copy child
+ * query nodes and do not copy a child's candidate limit. Attaching the handle
+ * with lancedb_query_full_text_search_query() or
+ * lancedb_vector_query_full_text_search_query() copies the whole wrapper,
+ * including this limit, so later changes to the handle do not affect builders
+ * that already attached it.
+ *
+ * @param query - pointer to LanceDBFtsQuery
+ * @param limit - candidate ceiling
+ * @param error_message - optional pointer to receive detailed error message (NULL to ignore)
+ * @return Error code indicating success or failure
+ *
+ * If error_message is provided and an error occurs, the caller must free
+ * the error message with lancedb_free_string().
+ */
+LanceDBError lancedb_fts_query_limit(
+    LanceDBFtsQuery* query,
+    int64_t limit,
+    char** error_message
+);
+
+/**
+ * Remove the candidate limit from a structured full-text query
+ *
+ * This sets the pinned SDK FullTextSearchQuery limit to unset. Embedded
+ * standalone full-text search derives its search ceiling from the final query
+ * limit, plus any offset, when that limit is set. With an explicit column
+ * ordering, no ceiling is derived: the full match set is retained so the
+ * ordering can select the page. Native MemWAL derives its ceiling from the
+ * scanner limit and offset. The final query result limit remains independent.
+ *
+ * @param query - pointer to LanceDBFtsQuery
+ * @param error_message - optional pointer to receive detailed error message (NULL to ignore)
+ * @return Error code indicating success or failure
+ *
+ * If error_message is provided and an error occurs, the caller must free
+ * the error message with lancedb_free_string().
+ */
+LanceDBError lancedb_fts_query_unset_limit(
+    LanceDBFtsQuery* query,
     char** error_message
 );
 
@@ -4865,6 +4946,10 @@ LanceDBError lancedb_query_df_filter(
 
 /**
  * Set limit for vector query
+ *
+ * This limits the final query result. It is independent of a structured
+ * full-text query's candidate ceiling, which is set with
+ * lancedb_fts_query_limit().
  *
  * @param query - pointer to LanceDBVectorQuery
  * @param limit - maximum number of results
@@ -5140,7 +5225,7 @@ LanceDBError lancedb_vector_query_where_filter(
  * error. Execute the query instead.
  *
  * If the vector leg returns batch results with `query_index` and the full-text
- * leg returns matches, the pinned SDK beta.26 RRF merge fails with an Arrow
+ * leg returns matches, the pinned SDK beta.30 RRF merge fails with an Arrow
  * schema error. See lancedb_vector_query_new_typed() for the vector types and
  * routing that produce `query_index`.
  *
@@ -5178,7 +5263,7 @@ LanceDBError lancedb_vector_query_full_text_search(
  * lancedb_fts_query_new_boolean() and lancedb_fts_query_new_boost().
  *
  * If the vector leg returns batch results with `query_index` and the full-text
- * leg returns matches, the pinned SDK beta.26 RRF merge fails with an Arrow
+ * leg returns matches, the pinned SDK beta.30 RRF merge fails with an Arrow
  * schema error. See lancedb_vector_query_new_typed() for the vector types and
  * routing that produce `query_index`.
  *

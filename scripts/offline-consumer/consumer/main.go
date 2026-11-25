@@ -13,7 +13,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"strings"
+	"time"
 
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/memory"
@@ -24,7 +26,20 @@ const missingTable = "offline_consumer_missing"
 
 func main() {
 	uri := flag.String("uri", "", "database directory to use")
+	probeNetwork := flag.Bool("probe-network", false, "probe direct outbound TCP egress and exit")
+	probeAddress := flag.String("probe-address", "proxy.golang.org:443", "address for -probe-network")
 	flag.Parse()
+	if *probeNetwork {
+		conn, err := net.DialTimeout("tcp", *probeAddress, 5*time.Second)
+		if err != nil {
+			log.Fatalf("network probe: %v", err)
+		}
+		if err := conn.Close(); err != nil {
+			log.Fatalf("network probe close: %v", err)
+		}
+		fmt.Println("network_probe=egress-ok")
+		return
+	}
 	if *uri == "" {
 		log.Fatal("-uri is required")
 	}

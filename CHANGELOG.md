@@ -17,9 +17,10 @@
   the compiled-in payload into the existing per-target locked cache. Cache
   repair, permissions, concurrency and the explicit `LANCEDB_C_LIBRARY_PATH`
   override are unchanged; the loader no longer uses the network at runtime.
-- Point installation docs at `@latest` and the releases page, and add the
-  hosted offline consumer lane that proves a cold default `Connect` on all five
-  targets with no network access.
+- Point installation docs at the releases page and the explicit
+  `v0.2.0-preview.3` preview version (`@latest` stays on the stable `v0.1.2`
+  line), and add the hosted offline consumer lane that proves a cold default
+  `Connect` on all five targets with no network access.
 
 The published library SHA-256 values are `4145c061702a652019a11eb5767c292d9b01c394eb16a3850c2cec53338767fd`
 (linux-amd64), `7bd7378990d540c8d4c273e48f10ec155e959a49bca9e62534c38a401bbae50b`
