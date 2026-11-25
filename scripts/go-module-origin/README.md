@@ -191,8 +191,12 @@ discovery HTML, resolves the exact version through
 `Version`, `Sum` and `GoModSum` to equal the manifest exactly, byte-compares
 the payload inside the public zip with the staged payload, and then resolves
 the same version through `GOPROXY=direct` to exercise the discovery path and
-sumdb. Each target has its own bounded deadline with retries, and the script
-refuses to verify the public origin with the checksum database disabled.
+sumdb. Each target has one bounded deadline; every discovery curl and every
+proxy/direct `go mod download` gets only the remaining seconds and runs under a
+hard timeout that also cleans up its process group, retry sleeps are clipped to
+the remaining time, and a failed target does not consume another target's
+budget. The script refuses to verify the public origin with the checksum
+database disabled.
 
 ## PR checks
 
@@ -203,5 +207,8 @@ protocol/discovery verification and consumer cross-compiles, and the publisher
 and lock-probe fixtures against a local S3 mock: exact denial success, plus
 negative cases for transport failure, a non-lock 403, an accepted overwrite,
 an accepted delete, a delete that removes the object but loses the response, a
-failed GET with identical bytes, and a missing object. It also exercises the
-public-verification retry and refusal paths. It never accesses R2.
+failed GET with identical bytes, and a missing object. A focused deadline
+fixture holds a discovery request and a proxy request on a loopback server and
+requires the verifier to fail at its own per-target budget while still
+attempting the later target. The suite also exercises the public-verification
+retry and refusal paths. It never accesses R2.

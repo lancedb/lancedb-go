@@ -14,8 +14,12 @@
 #     check; and
 #   * byte-compares the payload inside the public zip with the staged payload.
 #
-# Each target gets its own bounded deadline: a transient discovery or proxy
-# failure retries until that deadline instead of consuming one shared window.
+# Each target owns one readable deadline. Every network attempt (discovery
+# curl, proxy `go mod download`, direct `go mod download`) receives only the
+# remaining seconds of that budget, runs under a hard timeout that also cleans
+# up child processes, and every retry sleep is clipped to the remaining time.
+# A failed target does not consume another target's budget.
+#
 # The script never reads credentials.
 set -euo pipefail
 
@@ -27,9 +31,9 @@ Usage: verify-origin-public.sh --manifest PATH --origin DIR [--version VERSION]
 Manifest supplies the five module paths, the exact version and the h1 sums.
 The origin tree supplies the staged payload bytes compared with the public zip.
 
---timeout-seconds is the per-target deadline for discovery, proxy resolution
-and the direct discovery-path resolution (default 900). --interval-seconds is
-the wait between attempts (default 20).
+--timeout-seconds is the total budget for one target, covering discovery,
+proxy resolution, the direct discovery-path resolution, and retry waits
+(default 900). --interval-seconds is the wait between attempts (default 20).
 
 Environment overrides, for fixtures only:
   ORIGIN_BASE_URL  discovery base (default https://go.lancedb.io)
@@ -61,6 +65,7 @@ done
 command -v go >/dev/null || { echo "go is required" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
+command -v timeout >/dev/null || { echo "timeout (coreutils) is required" >&2; exit 1; }
 
 ORIGIN_BASE_URL=${ORIGIN_BASE_URL:-https://go.lancedb.io}
 PROXY_URL=${PROXY_URL:-https://proxy.golang.org}
@@ -82,6 +87,42 @@ trap 'chmod -R u+w "$work" 2>/dev/null || true; rm -rf "$work"' EXIT
 probe_dir="$work/probe"
 mkdir -p "$probe_dir"
 printf 'module public-origin-probe\n\ngo 1.21.0\n' > "$probe_dir/go.mod"
+
+now() {
+  date +%s
+}
+
+# remaining_budget DEADLINE prints the remaining whole seconds. It returns 1
+# when the target budget is exhausted.
+remaining_budget() {
+  local deadline=$1 current
+  current=$(now)
+  if (( current >= deadline )); then
+    return 1
+  fi
+  printf '%s\n' $(( deadline - current ))
+}
+
+# bounded SECONDS COMMAND... runs one network attempt under a hard timeout.
+# timeout runs the command in its own process group and kills the group after
+# a one-second grace, so a stalled child cannot outlive the target budget.
+bounded() {
+  local seconds=$1
+  shift
+  timeout --signal=TERM --kill-after=1s "${seconds}s" "$@"
+}
+
+# bounded_sleep DEADLINE INTERVAL sleeps for the retry interval, clipped to the
+# remaining target budget, and does nothing once the budget is exhausted.
+bounded_sleep() {
+  local deadline=$1 wait=$2 remaining
+  remaining=$(remaining_budget "$deadline") || return 0
+  if (( remaining > wait )); then
+    sleep "$wait"
+  else
+    sleep "$remaining"
+  fi
+}
 
 python3 - "$manifest" "$origin" "$version" > "$work/modules.tsv" <<'PY'
 import json
@@ -109,12 +150,17 @@ rows.sort()
 print("\n".join(rows))
 PY
 
-# resolve MODULE VERSION MODE CACHE_ROOT
-# Writes stdout.json and stderr.log inside CACHE_ROOT. Returns non-zero when
-# the command could not produce a download result at all.
+# resolve MODULE VERSION MODE CACHE_ROOT DEADLINE
+# Writes stdout.json and stderr.log inside CACHE_ROOT. Every network wait is
+# limited to the remaining target budget. Returns non-zero when the command
+# failed or the budget ran out.
 resolve() {
-  local module=$1 module_version=$2 mode=$3 cache_root=$4
-  local proxy
+  local module=$1 module_version=$2 mode=$3 cache_root=$4 deadline=$5
+  local remaining proxy rc
+  if ! remaining=$(remaining_budget "$deadline"); then
+    echo "  $mode attempt skipped: target budget exhausted" >&2
+    return 1
+  fi
   if [[ $mode == direct ]]; then
     proxy=direct
   else
@@ -122,14 +168,20 @@ resolve() {
   fi
   mkdir -p "$cache_root/mod" "$cache_root/build"
   rm -f "$probe_dir/go.sum"
-  env -u GOPRIVATE -u GONOPROXY -u GONOSUMDB -u GONOSUMCHECK -u GOFLAGS \
+  if bounded "$remaining" env -u GOPRIVATE -u GONOPROXY -u GONOSUMDB -u GONOSUMCHECK -u GOFLAGS \
     GOENV=off GOWORK=off GOTOOLCHAIN=local \
     GOPROXY="$proxy" GOSUMDB="$SUMDB" \
     GOMODCACHE="$cache_root/mod" GOCACHE="$cache_root/build" \
     go -C "$probe_dir" mod download -json "$module@$module_version" \
-    > "$cache_root/stdout.json" 2> "$cache_root/stderr.log" \
-    && return 0
-  return 1
+    > "$cache_root/stdout.json" 2> "$cache_root/stderr.log"; then
+    return 0
+  else
+    rc=$?
+  fi
+  if (( rc == 124 )); then
+    echo "  $mode attempt timed out after ${remaining}s" >&2
+  fi
+  return "$rc"
 }
 
 # check_download MODULE VERSION ZIP_H1 GOMOD_H1 CACHE_ROOT
@@ -184,78 +236,91 @@ print(f"{module}: payload bytes ok")
 PY
 }
 
-resolve_until() {
-  # resolve_until MODULE VERSION MODE LABEL DEADLINE CACHE_PREFIX ZIP_H1 GOMOD_H1
-  # Prints the successful cache root. On timeout, prints the last diagnostics
-  # to stderr and returns 1.
-  local module=$1 module_version=$2 mode=$3 label=$4 deadline=$5 cache_prefix=$6 zip_h1=$7 gomod_h1=$8
-  local attempt=0 cache_root
-  while [[ $(date +%s) -lt $deadline ]]; do
-    attempt=$((attempt + 1))
-    cache_root="$cache_prefix-$attempt"
-    if resolve "$module" "$module_version" "$mode" "$cache_root" \
-      && check_download "$module" "$module_version" "$zip_h1" "$gomod_h1" "$cache_root" > "$cache_root/check.log" 2>&1; then
-      printf '%s\n' "$cache_root"
-      return 0
-    fi
-    echo "  $label attempt $attempt: not ready" >&2
-    if [[ -f $cache_root/stderr.log ]]; then
-      tail -n 3 "$cache_root/stderr.log" >&2 || true
-    fi
-    if [[ -f $cache_root/check.log ]]; then
-      cat "$cache_root/check.log" >&2 || true
-    fi
-    sleep "$interval"
-  done
-  echo "  $label did not succeed within the per-target deadline" >&2
-  return 1
-}
-
 status=0
 while IFS=$'\t' read -r target module module_version zip_h1 gomod_h1 staged_zip; do
   [[ -n $target ]] || continue
   echo "public verification: $module@$module_version ($target)"
   discovery_path=${module#go.lancedb.io/}
   meta="content=\"$module mod https://go.lancedb.io/modules\""
-  deadline=$(( $(date +%s) + timeout ))
-
-  # Discovery and proxy/sumdb resolution share the target's deadline; both are
-  # retried so a transient proxy or origin propagation pause does not fail the
-  # target immediately.
-  proxy_cache=""
+  deadline=$(( $(now) + timeout ))
   attempt=0
-  while [[ $(date +%s) -lt $deadline ]]; do
-    attempt=$((attempt + 1))
-    if ! curl -fsS "$ORIGIN_BASE_URL/$discovery_path?go-get=1" | grep -F "$meta" >/dev/null; then
-      echo "  discovery attempt $attempt: meta not ready" >&2
-      sleep "$interval"
-      continue
-    fi
-    if proxy_cache=$(resolve_until "$module" "$module_version" proxy "proxy + sumdb" "$deadline" "$work/$target/proxy" "$zip_h1" "$gomod_h1"); then
+  success=0
+
+  while :; do
+    if ! remaining=$(remaining_budget "$deadline"); then
       break
     fi
-  done
-  if [[ -z $proxy_cache ]]; then
-    echo "public verification: FAIL $module@$module_version did not resolve through the proxy within the deadline" >&2
-    status=1
-    continue
-  fi
-  public_zip=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["Zip"])' "$proxy_cache/stdout.json")
-  if ! compare_payload "$module" "$module_version" "$public_zip" "$staged_zip"; then
-    echo "public verification: FAIL $module@$module_version public payload differs from the staged payload" >&2
-    status=1
-    continue
-  fi
-  echo "  discovery html: ok"
-  echo "  proxy and sumdb: ok"
+    attempt=$((attempt + 1))
+    echo "  attempt $attempt: remaining ${remaining}s"
 
-  if [[ $DIRECT_PROBE == 1 ]]; then
-    if ! resolve_until "$module" "$module_version" direct "discovery path + sumdb" "$deadline" "$work/$target/direct" "$zip_h1" "$gomod_h1" >/dev/null; then
-      echo "public verification: FAIL $module@$module_version did not resolve through discovery within the deadline" >&2
-      status=1
+    # Discovery is bounded by the remaining budget.
+    connect_timeout=$remaining
+    if (( connect_timeout > 10 )); then
+      connect_timeout=10
+    fi
+    if ! bounded "$remaining" curl -fsS --max-time "$remaining" --connect-timeout "$connect_timeout" \
+      "$ORIGIN_BASE_URL/$discovery_path?go-get=1" > "$work/discovery.body" 2> "$work/discovery.stderr" \
+      || ! grep -F "$meta" "$work/discovery.body" >/dev/null; then
+      echo "  discovery attempt $attempt failed or timed out" >&2
+      if [[ -f $work/discovery.stderr ]]; then
+        tail -n 3 "$work/discovery.stderr" >&2 || true
+      fi
+      bounded_sleep "$deadline" "$interval"
       continue
     fi
-    echo "  discovery path + sumdb: ok"
+
+    proxy_cache="$work/$target/proxy-$attempt"
+    if resolve "$module" "$module_version" proxy "$proxy_cache" "$deadline" \
+      && check_download "$module" "$module_version" "$zip_h1" "$gomod_h1" "$proxy_cache" \
+        > "$proxy_cache/check.log" 2>&1; then
+      public_zip=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["Zip"])' "$proxy_cache/stdout.json")
+      if ! compare_payload "$module" "$module_version" "$public_zip" "$staged_zip" \
+        > "$proxy_cache/compare.log" 2>&1; then
+        echo "  proxy attempt $attempt: public payload differs from the staged payload" >&2
+        cat "$proxy_cache/compare.log" >&2 || true
+        bounded_sleep "$deadline" "$interval"
+        continue
+      fi
+
+      if [[ $DIRECT_PROBE == 1 ]]; then
+        direct_cache="$work/$target/direct-$attempt"
+        if ! resolve "$module" "$module_version" direct "$direct_cache" "$deadline" \
+          || ! check_download "$module" "$module_version" "$zip_h1" "$gomod_h1" "$direct_cache" \
+            > "$direct_cache/check.log" 2>&1; then
+          echo "  direct attempt $attempt failed or timed out" >&2
+          if [[ -f $direct_cache/stderr.log ]]; then
+            tail -n 5 "$direct_cache/stderr.log" >&2 || true
+          fi
+          if [[ -f $direct_cache/check.log ]]; then
+            cat "$direct_cache/check.log" >&2 || true
+          fi
+          bounded_sleep "$deadline" "$interval"
+          continue
+        fi
+      fi
+
+      echo "  discovery html: ok"
+      echo "  proxy and sumdb: ok"
+      if [[ $DIRECT_PROBE == 1 ]]; then
+        echo "  discovery path + sumdb: ok"
+      fi
+      success=1
+      break
+    fi
+
+    echo "  proxy attempt $attempt failed or timed out" >&2
+    if [[ -f $proxy_cache/stderr.log ]]; then
+      tail -n 5 "$proxy_cache/stderr.log" >&2 || true
+    fi
+    if [[ -f $proxy_cache/check.log ]]; then
+      cat "$proxy_cache/check.log" >&2 || true
+    fi
+    bounded_sleep "$deadline" "$interval"
+  done
+
+  if [[ $success != 1 ]]; then
+    echo "public verification: FAIL $module@$module_version did not resolve within the ${timeout}s per-target deadline" >&2
+    status=1
   fi
 done < "$work/modules.tsv"
 

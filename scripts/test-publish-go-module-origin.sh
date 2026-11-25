@@ -338,6 +338,6 @@ bounded_rc=$?
 set -e
 stop_mock
 [[ $bounded_rc -ne 0 ]] || { echo "public verification passed with a dead proxy" >&2; exit 1; }
-grep -F 'did not resolve through the proxy within the deadline' "$work/public-bounded.log" >/dev/null || { cat "$work/public-bounded.log" >&2; exit 1; }
+grep -F 'did not resolve within the 2s per-target deadline' "$work/public-bounded.log" >/dev/null || { cat "$work/public-bounded.log" >&2; exit 1; }
 
 echo "publisher repeat/conflict/list-merge/lock-probe/public-verification: PASS"
