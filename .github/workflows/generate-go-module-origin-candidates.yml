@@ -1,0 +1,106 @@
+name: Generate Go module origin candidates
+
+# Reproducible candidate generation for the per-target companion modules from
+# one exact lancedb-c release. This workflow downloads the pinned public
+# release archives, verifies the tag/checksum/header/library identity, builds
+# the candidate modules and the origin staging tree, and uploads them as review
+# evidence. It never publishes and never uses credentials.
+
+on:
+  workflow_dispatch:
+    inputs:
+      identity:
+        description: "Committed release identity path, for example scripts/go-module-origin/v0.1.0-preview.5.identity.json"
+        required: true
+        type: string
+      verify:
+        description: "Verify the generated candidates against the committed identity"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  candidates:
+    name: Generate and verify candidates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go 1.21
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.13"
+          cache: false
+
+      - name: Ensure zstd
+        run: |
+          set -euo pipefail
+          if ! command -v zstd >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          fi
+
+      - name: Generate candidates and origin
+        env:
+          GOTOOLCHAIN: local
+          GOWORK: "off"
+          IDENTITY: ${{ inputs.identity }}
+          WORK_DIR: ${{ runner.temp }}/go-module-origin
+          CANDIDATES_DIR: ${{ runner.temp }}/go-module-origin/candidates
+          DOWNLOADS_DIR: ${{ runner.temp }}/go-module-origin/downloads
+          ORIGIN_DIR: ${{ runner.temp }}/go-module-origin/origin
+          IDENTITY_OUT: ${{ runner.temp }}/go-module-origin/candidate-identity.json
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          scripts/go-module-origin/generate-candidates.sh
+
+      - name: Verify candidates against the committed identity
+        if: inputs.verify
+        env:
+          IDENTITY: ${{ inputs.identity }}
+          CANDIDATES_DIR: ${{ runner.temp }}/go-module-origin/candidates
+        run: |
+          set -euo pipefail
+          python3 scripts/go-module-origin/verify-candidate-identity.py "$IDENTITY" "$CANDIDATES_DIR"
+
+      - name: Verify the origin protocol tree
+        env:
+          GOTOOLCHAIN: local
+          GOWORK: "off"
+          ORIGIN_DIR: ${{ runner.temp }}/go-module-origin/origin
+          IDENTITY: ${{ runner.temp }}/go-module-origin/candidate-identity.json
+        run: |
+          set -euo pipefail
+          ORIGIN_DIR="$ORIGIN_DIR" IDENTITY="$IDENTITY" scripts/test-go-module-origin.sh
+
+      - name: Upload candidate modules
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-module-origin-candidates
+          path: ${{ runner.temp }}/go-module-origin/candidates
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload origin staging
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-module-origin-staging
+          path: ${{ runner.temp }}/go-module-origin/origin
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload recorded candidate identity
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-module-origin-candidate-identity
+          path: ${{ runner.temp }}/go-module-origin/candidate-identity.json
+          retention-days: 7
+          if-no-files-found: error
