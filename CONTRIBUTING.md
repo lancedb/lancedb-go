@@ -64,6 +64,11 @@ archive names, archive SHA-256, library paths and library SHA-256. When updating
 the pin, verify the public release inventory and update the version check. Do
 not derive an asset name from a shortened hash.
 
+Native payloads are published separately as per-target companion modules from
+exact `lancedb-c` release archives. See [RELEASING.md](RELEASING.md) and
+[scripts/go-module-origin/README.md](scripts/go-module-origin/README.md).
+Payloads and companion-module tags never enter this repository.
+
 ## Pull requests
 
 Keep changes append-only. Run `make fmt-check vet test-native test` before

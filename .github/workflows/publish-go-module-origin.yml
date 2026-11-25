@@ -1,0 +1,252 @@
+name: Publish Go module origin
+
+# Static-origin publication for the per-target companion modules. Manual
+# workflow_dispatch only, and live writes are limited to the default branch:
+# the publish job runs only for refs/heads/main, re-verifies that the
+# checked-out commit is the reviewed origin/main, and maps the go-module-origin
+# environment's R2 credentials on the publish and lock-probe steps only.
+#
+# The staging job needs no credentials: it regenerates the exact origin tree
+# from the pinned public lancedb-c release archives and verifies it against the
+# committed identity.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the validated immutable candidate"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-go-module-origin
+  cancel-in-progress: false
+
+env:
+  ORIGIN_IDENTITY: scripts/go-module-origin/v0.1.0-preview.5.identity.json
+
+jobs:
+  stage:
+    name: Stage and verify exact origin
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go 1.21
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.21.13"
+          cache: false
+
+      - name: Ensure zstd
+        run: |
+          set -euo pipefail
+          if ! command -v zstd >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          fi
+
+      - name: Check the pinned identity
+        run: |
+          set -euo pipefail
+          test -f "$ORIGIN_IDENTITY"
+          python3 - "$ORIGIN_IDENTITY" <<'PY'
+          import json, pathlib, sys
+          identity = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          for field in ("version", "time", "source_repo", "source_release", "source_commit", "manifest_sha256", "targets"):
+              assert field in identity, field
+          assert len(identity["targets"]) == 5, identity["targets"]
+          print("identity pinned:", identity["version"], identity["source_release"])
+          PY
+
+      - name: Generate the exact origin from the pinned release
+        env:
+          GOTOOLCHAIN: local
+          GOWORK: "off"
+          IDENTITY: ${{ env.ORIGIN_IDENTITY }}
+          WORK_DIR: ${{ runner.temp }}/go-module-origin
+          CANDIDATES_DIR: ${{ runner.temp }}/go-module-origin/candidates
+          DOWNLOADS_DIR: ${{ runner.temp }}/go-module-origin/downloads
+          ORIGIN_DIR: ${{ runner.temp }}/go-module-origin/origin
+          IDENTITY_OUT: ${{ runner.temp }}/go-module-origin/candidate-identity.json
+        run: |
+          set -euo pipefail
+          scripts/go-module-origin/generate-candidates.sh
+
+      - name: Verify candidates and exact manifest identity
+        env:
+          CANDIDATES_DIR: ${{ runner.temp }}/go-module-origin/candidates
+          ORIGIN_DIR: ${{ runner.temp }}/go-module-origin/origin
+        run: |
+          set -euo pipefail
+          python3 scripts/go-module-origin/verify-candidate-identity.py "$ORIGIN_IDENTITY" "$CANDIDATES_DIR"
+          python3 - "$ORIGIN_IDENTITY" "$ORIGIN_DIR/manifest.json" <<'PY'
+          import hashlib, json, pathlib, sys
+          identity = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          manifest_path = pathlib.Path(sys.argv[2])
+          digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+          assert digest == identity["manifest_sha256"], (digest, identity["manifest_sha256"])
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          assert manifest["version"] == identity["version"], (manifest["version"], identity["version"])
+          print("manifest identity: ok")
+          PY
+
+      - name: Verify the origin protocol tree
+        env:
+          GOTOOLCHAIN: local
+          GOWORK: "off"
+          ORIGIN_DIR: ${{ runner.temp }}/go-module-origin/origin
+        run: |
+          set -euo pipefail
+          ORIGIN_DIR="$ORIGIN_DIR" IDENTITY="$ORIGIN_IDENTITY" scripts/test-go-module-origin.sh
+
+      - name: Preflight the publisher without credentials
+        env:
+          ORIGIN_DIR: ${{ runner.temp }}/go-module-origin/origin
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$ORIGIN_IDENTITY")
+          scripts/publish-go-module-origin.sh \
+            --manifest "$ORIGIN_DIR/manifest.json" \
+            --bucket dry-run \
+            --endpoint https://example.invalid \
+            --version "$VERSION" \
+            --dry-run
+
+      - name: Upload staging tree
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: go-module-origin-staging
+          path: ${{ runner.temp }}/go-module-origin/origin
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish immutable origin
+    needs: stage
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      inputs.publish == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: go-module-origin
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go 1.21
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.21.13"
+          cache: false
+
+      - name: Verify reviewed main source
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"
+          git ls-files --error-unmatch "$ORIGIN_IDENTITY" >/dev/null
+          echo "publishing from the reviewed main commit $(git rev-parse HEAD)"
+
+      - name: Download staging tree
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: go-module-origin-staging
+          path: ${{ runner.temp }}/go-module-origin/origin
+          run-id: ${{ github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify staged manifest before credentials
+        env:
+          ORIGIN_DIR: ${{ runner.temp }}/go-module-origin/origin
+        run: |
+          set -euo pipefail
+          python3 - "$ORIGIN_IDENTITY" "$ORIGIN_DIR/manifest.json" <<'PY'
+          import hashlib, json, pathlib, sys
+          identity = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          digest = hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest()
+          assert digest == identity["manifest_sha256"], (digest, identity["manifest_sha256"])
+          print("staged manifest matches the pinned identity")
+          PY
+          VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$ORIGIN_IDENTITY")
+          scripts/publish-go-module-origin.sh \
+            --manifest "$ORIGIN_DIR/manifest.json" \
+            --bucket dry-run \
+            --endpoint https://example.invalid \
+            --version "$VERSION" \
+            --dry-run
+
+      - name: Publish to R2
+        env:
+          ORIGIN_DIR: ${{ runner.temp }}/go-module-origin/origin
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_PAGER: ""
+          AWS_EC2_METADATA_DISABLED: "true"
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_S3_ENDPOINT: ${{ vars.R2_S3_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$ORIGIN_IDENTITY")
+          scripts/publish-go-module-origin.sh \
+            --manifest "$ORIGIN_DIR/manifest.json" \
+            --bucket "$R2_BUCKET" \
+            --endpoint "$R2_S3_ENDPOINT" \
+            --version "$VERSION" | tee "$RUNNER_TEMP/publication.log"
+
+      - name: Probe the live version locks
+        env:
+          ORIGIN_DIR: ${{ runner.temp }}/go-module-origin/origin
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_PAGER: ""
+          AWS_EC2_METADATA_DISABLED: "true"
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_S3_ENDPOINT: ${{ vars.R2_S3_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$ORIGIN_IDENTITY")
+          scripts/verify-origin-locks.sh \
+            --manifest "$ORIGIN_DIR/manifest.json" \
+            --bucket "$R2_BUCKET" \
+            --endpoint "$R2_S3_ENDPOINT" \
+            --version "$VERSION" | tee -a "$RUNNER_TEMP/publication.log"
+
+      - name: Verify the public proxy and checksum database
+        env:
+          GOTOOLCHAIN: local
+          GOWORK: "off"
+          ORIGIN_DIR: ${{ runner.temp }}/go-module-origin/origin
+        run: |
+          set -euo pipefail
+          scripts/verify-origin-public.sh \
+            --manifest "$ORIGIN_DIR/manifest.json" \
+            --origin "$ORIGIN_DIR" | tee -a "$RUNNER_TEMP/publication.log"
+
+      - name: Upload publication log
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: go-module-origin-publication
+          path: ${{ runner.temp }}/publication.log
+          retention-days: 7
+          if-no-files-found: ignore

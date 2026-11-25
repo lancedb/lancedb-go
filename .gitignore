@@ -36,6 +36,12 @@ Thumbs.db
 *.log
 
 # -----------------------
+# Python tooling caches
+# -----------------------
+__pycache__/
+*.pyc
+
+# -----------------------
 # VSCode (if someone opens with it)
 # -----------------------
 .vscode/
