@@ -102,11 +102,11 @@ fi
 # Build the checkout consumer and verify its artifact dependency.
 
 BIN="$WORK/consumer"
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) BIN="$WORK/consumer.exe" ;;
+esac
 run_go build -o "$BIN" ./scripts/offline-consumer/consumer
-if [[ ! -f $BIN && -f $BIN.exe ]]; then
-  BIN="$BIN.exe"
-fi
-[[ -f $BIN ]] || fail "checkout consumer was not built"
+[[ -f $BIN ]] || fail "checkout consumer was not built: $BIN"
 
 ARTIFACT_VERSION=$(run_go list -m -f '{{.Version}}' "$ARTIFACT_PREFIX/$SLUG")
 [[ -n $ARTIFACT_VERSION && $ARTIFACT_VERSION != "<nil>" ]] || fail "could not resolve $ARTIFACT_PREFIX/$SLUG"

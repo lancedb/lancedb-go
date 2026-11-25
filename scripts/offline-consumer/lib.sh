@@ -58,7 +58,11 @@ prepare_windows_network_off() {
   ps=$(command -v powershell || command -v pwsh || true)
   [[ -n $ps ]] || return 1
   local winbin rule
-  winbin=$(cygpath -w "$binary")
+  winbin=$(cygpath -w -a "$binary")
+  if [[ $winbin != *.exe ]]; then
+    printf 'ERROR: Windows network isolation requires an .exe consumer path, got: %s\n' "$winbin" >&2
+    return 1
+  fi
   rule="lancedb-go-offline-${GITHUB_RUN_ID:-$$}-${GITHUB_JOB:-local}-${SLUG:-target}"
   rule=$(printf '%s' "$rule" | tr -c 'A-Za-z0-9._-' '-')
 

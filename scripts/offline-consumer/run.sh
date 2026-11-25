@@ -238,13 +238,17 @@ record artifact_uncompressed_sha256 "$ARTIFACT_SHA"
 # payload may be downloaded.
 
 TARGET="$WORK/target"
+BIN="$WORK/consumer-bin"
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) BIN="$WORK/consumer-bin.exe" ;;
+esac
 mkdir -p "$TARGET" "$WORK/caches/target-mod" "$WORK/caches/target-build"
 cp "$CONSUMER/main.go" "$TARGET/main.go"
 cp "$CONSUMER/go.mod" "$TARGET/go.mod"
 cp "$CONSUMER/go.sum" "$TARGET/go.sum"
 cd "$TARGET"
 run_go target "$WORK/caches/target-mod" "$WORK/caches/target-build" \
-  build -mod=readonly -o "$WORK/consumer-bin" . 2>&1 | tee -a "$COMMANDS"
+  build -mod=readonly -o "$BIN" . 2>&1 | tee -a "$COMMANDS"
 
 TARGET_INVENTORY="$EVIDENCE_DIR/target-module-cache.tsv"
 snapshot_module_cache target "$WORK/caches/target-mod" "$TARGET_INVENTORY"
@@ -255,11 +259,7 @@ EXPECTED_SELECTED="$ARTIFACT_PREFIX/$SLUG/@v/$ARTIFACT_VERSION.zip"
 record target_artifact_zip "$TARGET_ZIPS"
 log "target build downloaded exactly the selected artifact payload"
 
-BIN="$WORK/consumer-bin"
-if [[ ! -f $BIN && -f $BIN.exe ]]; then
-  BIN="$BIN.exe"
-fi
-[[ -f $BIN ]] || fail "consumer binary was not built"
+[[ -f $BIN ]] || fail "consumer binary was not built: $BIN"
 env "${GO_ENV[@]}" go version -m "$BIN" > "$EVIDENCE_DIR/binary-modules.txt"
 run_verify binary \
   --metadata "$EVIDENCE_DIR/binary-modules.txt" \
