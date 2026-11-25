@@ -20,14 +20,29 @@ jobs:
         include:
           - os: ubuntu-22.04
             target: linux-amd64
+            goos: linux
+            goarch: amd64
+            library: liblancedb.so
           - os: ubuntu-22.04-arm
             target: linux-arm64
+            goos: linux
+            goarch: arm64
+            library: liblancedb.so
           - os: macos-15
             target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            library: liblancedb.dylib
           - os: windows-2025
             target: windows-amd64
+            goos: windows
+            goarch: amd64
+            library: lancedb.dll
           - os: windows-11-arm
             target: windows-arm64
+            goos: windows
+            goarch: arm64
+            library: lancedb.dll
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -53,11 +68,42 @@ jobs:
         shell: bash
         run: go test -count=1 ./pkg/internal/native
 
+      - name: Offline consumer harness self-tests
+        shell: bash
+        run: |
+          PYTHON=$(command -v python3 || command -v python)
+          bash -n scripts/offline-consumer/run.sh
+          bash -n scripts/offline-consumer/run-checkout.sh
+          bash -n scripts/offline-consumer/lib.sh
+          "$PYTHON" scripts/offline-consumer/verify_test.py
+
+      - name: Cold offline default Connect (checkout consumer)
+        shell: bash
+        env:
+          TARGET_GOOS: ${{ matrix.goos }}
+          TARGET_GOARCH: ${{ matrix.goarch }}
+          LIBRARY_NAME: ${{ matrix.library }}
+          EVIDENCE_DIR: ${{ runner.temp }}/offline-checkout-evidence
+        run: bash scripts/offline-consumer/run-checkout.sh
+
+      - name: Verify offline firewall rule cleanup
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $prefix = "lancedb-go-offline-$env:GITHUB_RUN_ID-"
+          $all = @(Get-NetFirewallRule -ErrorAction Stop)
+          $remaining = @($all | Where-Object { $_.Name -like "$prefix*" })
+          if ($remaining.Count -gt 0) {
+            $remaining | Format-Table Name, DisplayName, Enabled, Direction, Action | Out-String | Write-Host
+            throw "offline firewall rules remain after the lane: $($remaining.Count)"
+          }
+          Write-Host "network_cleanup=verified-no-rules prefix=$prefix"
+
       - name: Cache native artifact
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/lancedb-native
-          key: native-${{ matrix.target }}-v0.1.0-preview.3
+          key: native-${{ matrix.target }}-${{ hashFiles('pkg/internal/native/manifest.go') }}
 
       - name: Install native artifact and run tests
         shell: bash

@@ -53,13 +53,15 @@ implementations of the published interfaces keep compiling.
   the published `lancedb-c` shared library with `purego`, uses `CGO_ENABLED=0`
   and keeps the loaded library mapped for the process lifetime.
 - **Native artifacts.** The binding pins a published `lancedb-c` preview. The
-  release notes name the exact C release, bundled SDK and Lance versions. It
-  downloads the exact published archive, verifies the archive and extracted
-  library SHA-256 digests, checks the runtime version and keeps a private
-  per-user cache. Explicit override:
-  `LANCEDB_C_LIBRARY_PATH`; cache override: `LANCEDB_C_CACHE_DIR`; pre-install
-  with the module's tag:
-  `go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@vX.Y.Z-preview.N`.
+  release notes name the exact C release, bundled SDK and Lance versions. The
+  shared library is delivered as one compiled-in companion module per target,
+  `go.lancedb.io/lancedb-go/artifacts/<target>`; the root module requires all
+  five and build-tagged selectors link exactly one. The first `Connect`
+  verifies the payload, extracts it into a private per-user cache and checks
+  the runtime version; no network access happens at runtime. Explicit override:
+  `LANCEDB_C_LIBRARY_PATH`; cache override: `LANCEDB_C_CACHE_DIR`; pre-seed
+  with:
+  `go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@latest`.
   Concurrent installers serialize cache publication with a per-target OS file
   lock. Only a digest mismatch replaces an entry; a transient open/read/sharing
   error is reported, not treated as corruption.

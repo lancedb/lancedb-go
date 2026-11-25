@@ -1,8 +1,8 @@
 # Examples
 
 These examples use the pure-Go module in the parent directory. Run them with
-Go 1.21+ and `CGO_ENABLED=0`; the first run downloads and verifies the native
-library automatically.
+Go 1.21+ and `CGO_ENABLED=0`; the first run extracts and verifies the native
+payload from its compiled-in companion module automatically.
 
 ```bash
 cd examples/basic_crud

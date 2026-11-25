@@ -13,19 +13,25 @@ payloads, and no companion-module tag is created in Git.
    companion modules and that the exact artifact version resolves through the
    public Go proxy and checksum database. Record the resolved versions and
    hashes with the release evidence.
-2. Confirm the loader pins that exact artifact version and that a real
-   `CGO_ENABLED=0` consumer runs offline on all five targets, including the
-   explicit `LANCEDB_C_LIBRARY_PATH` override.
-3. Confirm CI is green on the exact commit for Linux amd64/arm64, Windows
+2. Confirm `pkg/internal/native/manifest.go` pins that `lancedb-c` release tag
+   and runtime version, that the root `go.mod` requires all five companion
+   modules at the published artifact version, and that each artifact module's
+   `UpstreamCommit` matches `ReleaseCommit`.
+3. Confirm a real `CGO_ENABLED=0` consumer runs offline on all five targets
+   with an empty native cache and no explicit library path, including the
+   separate `LANCEDB_C_LIBRARY_PATH` override. The tag-based
+   `.github/workflows/offline-consumers.yml` lane covers the published module
+   graph after the tag exists.
+4. Confirm CI is green on the exact commit for Linux amd64/arm64, Windows
    amd64/arm64 and macOS Apple Silicon with `CGO_ENABLED=0`, including the
    external `examples` module consumer, and that the authenticated S3 and AWS
    profile/DynamoDB loopback tests pass.
-4. Confirm the public API baseline and [MIGRATION.md](MIGRATION.md) are current.
-5. Verify the module graph declares Go 1.21 and that `go mod tidy` is clean.
+5. Confirm the public API baseline and [MIGRATION.md](MIGRATION.md) are current.
+6. Verify the module graph declares Go 1.21 and that `go mod tidy` is clean.
 
-Keep release-specific facts (the pinned C release, bundled SDK and artifact
-digests) in the release notes and CHANGELOG. User-facing installation docs
-link to `@latest` where appropriate or to the releases page.
+Keep release-specific facts (the pinned C release, bundled SDK, artifact
+version and payload digests) in the release notes and CHANGELOG. User-facing
+installation docs point to `@latest` or the releases page.
 
 ## Tagging
 
@@ -42,11 +48,13 @@ releases remain with Xuanwo.
 
 Verify the tag resolves through the public Go module proxy, then build and run
 a clean external module against the tagged version without a local `replace`.
-Record the resolved version and the native runtime check with the release
-evidence.
+The pushed tag also starts the offline consumer lanes; record the resolved
+version, the selected artifact module and the native runtime check with the
+release evidence.
 
 ## Rollback
 
 Tags are append-only. If a published preview is wrong, cut a new preview that
 pins corrected behavior or a newer `lancedb-c` artifact; do not move or delete
-the old tag. The same rule applies to the immutable companion-module versions.
+the old tag. The same rule applies to the immutable companion-module versions:
+do not overwrite a published artifact module.

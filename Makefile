@@ -33,7 +33,7 @@ fmt:
 fmt-check:
 	@test -z "$$(gofmt -l $$(git ls-files '*.go'))" || { echo "run make fmt"; exit 1; }
 
-# Download and verify the pinned lancedb-c artifact for this target.
+# Extract and verify the compiled-in native payload for this target.
 install-native:
 	$(GO) run ./pkg/cmd/lancedb-go-native
 
@@ -45,8 +45,8 @@ clean:
 
 help:
 	@echo "make build            build all packages with CGO_ENABLED=0"
-	@echo "make test             run the Go test suite (downloads the native library if needed)"
+	@echo "make test             run the Go test suite (uses the compiled-in native payload)"
 	@echo "make test-native      run loader/layout tests without a native library"
 	@echo "make test-integration run authenticated S3 and AWS profile/DynamoDB tests"
-	@echo "make install-native   pre-download and verify the native library"
+	@echo "make install-native   extract and verify the native payload into the cache"
 	@echo "make vet fmt fmt-check"

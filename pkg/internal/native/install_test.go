@@ -4,50 +4,37 @@
 package native
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 )
 
-func TestInstallDownloadsVerifiesAndReusesCache(t *testing.T) {
+func TestInstallExtractsAndReusesCache(t *testing.T) {
 	library := []byte("fake runtime library bytes")
-	archive := makeArchive(t, "lib/libfake.so", library)
-	target := Target{
-		Name:          "test-target",
-		Archive:       "fake-runtime.tar.gz",
-		ArchiveSHA256: sha256Hex(archive),
-		LibraryPath:   "lib/libfake.so",
-		LibraryName:   "libfake.so",
-		LibrarySHA256: sha256Hex(library),
-	}
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		if r.URL.Path != "/"+target.Archive {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = w.Write(archive)
-	}))
-	defer server.Close()
-	t.Setenv(EnvReleaseBaseURL, server.URL)
-	t.Setenv(EnvCacheDir, t.TempDir())
+	target := fakeTarget("test-target")
+	useBundle(t, testBundle(t, target, library))
+	cache := t.TempDir()
+	t.Setenv(EnvCacheDir, cache)
 
 	path, err := install(target)
 	if err != nil {
 		t.Fatalf("install: %v", err)
+	}
+	want := filepath.Join(cache, "lancedb-go", "native", ReleaseVersion, target.Name, target.LibraryName)
+	if path != want {
+		t.Fatalf("install path = %q, want %q", path, want)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
@@ -56,10 +43,20 @@ func TestInstallDownloadsVerifiesAndReusesCache(t *testing.T) {
 	if !bytes.Equal(got, library) {
 		t.Fatalf("installed bytes differ: %q", got)
 	}
-	if requests.Load() != 1 {
-		t.Fatalf("download requests = %d, want 1", requests.Load())
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat installed library: %v", err)
+		}
+		if info.Mode().Perm() != 0o500 {
+			t.Fatalf("installed mode = %s, want 0500", info.Mode().Perm())
+		}
 	}
 
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat before reuse: %v", err)
+	}
 	again, err := install(target)
 	if err != nil {
 		t.Fatalf("second install: %v", err)
@@ -67,27 +64,26 @@ func TestInstallDownloadsVerifiesAndReusesCache(t *testing.T) {
 	if again != path {
 		t.Fatalf("second install path = %q, want %q", again, path)
 	}
-	if requests.Load() != 1 {
-		t.Fatalf("cache reuse downloaded again: %d requests", requests.Load())
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after reuse: %v", err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("warm install replaced the verified library")
+	}
+	leftover, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".*.tmp-*"))
+	if err != nil {
+		t.Fatalf("glob temporary files: %v", err)
+	}
+	if len(leftover) != 0 {
+		t.Fatalf("temporary files left in cache: %v", leftover)
 	}
 }
 
 func TestInstallReplacesCorruptCache(t *testing.T) {
 	library := []byte("correct runtime bytes")
-	archive := makeArchive(t, "lib/libfake.so", library)
-	target := Target{
-		Name:          "test-target",
-		Archive:       "fake-runtime.tar.gz",
-		ArchiveSHA256: sha256Hex(archive),
-		LibraryPath:   "lib/libfake.so",
-		LibraryName:   "libfake.so",
-		LibrarySHA256: sha256Hex(library),
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(archive)
-	}))
-	defer server.Close()
-	t.Setenv(EnvReleaseBaseURL, server.URL)
+	target := fakeTarget("test-corrupt-cache")
+	useBundle(t, testBundle(t, target, library))
 	t.Setenv(EnvCacheDir, t.TempDir())
 
 	path, err := install(target)
@@ -113,26 +109,94 @@ func TestInstallReplacesCorruptCache(t *testing.T) {
 	}
 }
 
-func TestInstallRejectsArchiveDigestMismatch(t *testing.T) {
-	library := []byte("library")
-	archive := makeArchive(t, "lib/libfake.so", library)
-	target := Target{
-		Name:          "test-target",
-		Archive:       "fake-runtime.tar.gz",
-		ArchiveSHA256: "0000000000000000000000000000000000000000000000000000000000000000",
-		LibraryPath:   "lib/libfake.so",
-		LibraryName:   "libfake.so",
-		LibrarySHA256: sha256Hex(library),
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(archive)
-	}))
-	defer server.Close()
-	t.Setenv(EnvReleaseBaseURL, server.URL)
+func TestInstallRejectsCorruptPayload(t *testing.T) {
+	library := []byte("library bytes for corruption")
+	target := fakeTarget("test-corrupt-payload")
+	bundle := testBundle(t, target, library)
 	t.Setenv(EnvCacheDir, t.TempDir())
 
-	if _, err := install(target); err == nil {
-		t.Fatal("install accepted an archive with a mismatched digest")
+	cases := []struct {
+		name        string
+		mutate      func(*Bundle)
+		wantDigest  bool
+		wantMessage string
+	}{
+		{
+			name: "compressed digest",
+			mutate: func(b *Bundle) {
+				b.CompressedSHA256 = strings.Repeat("0", 64)
+			},
+			wantDigest: true,
+		},
+		{
+			name: "uncompressed digest",
+			mutate: func(b *Bundle) {
+				b.UncompressedSHA256 = strings.Repeat("0", 64)
+			},
+			wantDigest: true,
+		},
+		{
+			name: "decompressed size",
+			mutate: func(b *Bundle) {
+				b.UncompressedSize++
+			},
+			wantDigest: true,
+		},
+		{
+			name: "compressed size metadata",
+			mutate: func(b *Bundle) {
+				b.CompressedSize++
+			},
+			wantMessage: "payload compressed size",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			corrupt := *bundle
+			tc.mutate(&corrupt)
+			useBundle(t, &corrupt)
+
+			_, err := install(target)
+			if err == nil {
+				t.Fatal("install accepted a corrupt compiled-in payload")
+			}
+			if tc.wantDigest && !errors.Is(err, errDigestMismatch) {
+				t.Fatalf("install error = %v, want a digest mismatch", err)
+			}
+			if tc.wantMessage != "" && !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("install error = %v, want a complaint containing %q", err, tc.wantMessage)
+			}
+			dir, dirErr := cacheDirFor(target)
+			if dirErr != nil {
+				t.Fatalf("cache dir: %v", dirErr)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, target.LibraryName)); !os.IsNotExist(statErr) {
+				t.Fatalf("corrupt payload was published to the cache: %v", statErr)
+			}
+			leftover, globErr := filepath.Glob(filepath.Join(dir, ".*.tmp-*"))
+			if globErr != nil {
+				t.Fatalf("glob temporary files: %v", globErr)
+			}
+			if len(leftover) != 0 {
+				t.Fatalf("temporary files left in cache: %v", leftover)
+			}
+		})
+	}
+}
+
+func TestInstallWithoutCompiledPayload(t *testing.T) {
+	previous := registeredBundle
+	registeredBundle = nil
+	t.Cleanup(func() { registeredBundle = previous })
+
+	target := fakeTarget("test-no-payload")
+	t.Setenv(EnvCacheDir, t.TempDir())
+	_, err := install(target)
+	if err == nil {
+		t.Fatal("install succeeded without a compiled-in payload")
+	}
+	if !strings.Contains(err.Error(), "no compiled-in native payload") {
+		t.Fatalf("install error = %v, want a missing-payload complaint", err)
 	}
 }
 
@@ -163,69 +227,46 @@ func TestLoadExplicitOverrideReportsMissingPath(t *testing.T) {
 
 func TestCurrentTargetsHaveCompleteInventory(t *testing.T) {
 	for key, target := range Targets {
-		if target.Name == "" || target.Archive == "" || target.LibraryPath == "" || target.LibraryName == "" {
+		if target.Name == "" || target.LibraryName == "" {
 			t.Errorf("%s has an incomplete descriptor: %+v", key, target)
 		}
-		for name, value := range map[string]string{"archive": target.ArchiveSHA256, "library": target.LibrarySHA256} {
-			if len(value) != 64 {
-				t.Errorf("%s %s digest = %q, want 64 hex chars", key, name, value)
-			}
-		}
-		if !contains(target.Archive, ReleaseCommit) {
-			t.Errorf("%s archive %q does not contain the full release commit", key, target.Archive)
+		if want := strings.ReplaceAll(key, "/", "-"); target.Name != want {
+			t.Errorf("%s target name = %q, want %q", key, target.Name, want)
 		}
 	}
 }
 
-func makeArchive(t *testing.T, name string, content []byte) []byte {
-	t.Helper()
-	var raw bytes.Buffer
-	gz := gzip.NewWriter(&raw)
-	tw := tar.NewWriter(gz)
-	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
-		t.Fatalf("tar header: %v", err)
+func TestCompiledSelectorMatchesCurrentTarget(t *testing.T) {
+	key := runtime.GOOS + "/" + runtime.GOARCH
+	if _, ok := Targets[key]; !ok {
+		t.Skipf("no supported native payload for %s", key)
 	}
-	if _, err := tw.Write(content); err != nil {
-		t.Fatalf("tar write: %v", err)
+	target, err := CurrentTarget()
+	if err != nil {
+		t.Fatalf("current target: %v", err)
 	}
-	if err := tw.Close(); err != nil {
-		t.Fatalf("tar close: %v", err)
+	bundle, err := bundleFor(target)
+	if err != nil {
+		t.Fatalf("compiled-in selector bundle: %v", err)
 	}
-	if err := gz.Close(); err != nil {
-		t.Fatalf("gzip close: %v", err)
+	if want := ArtifactModulePrefix + "/" + target.Name; bundle.Module != want {
+		t.Fatalf("bundle module = %q, want %q", bundle.Module, want)
 	}
-	return raw.Bytes()
-}
-
-func sha256Hex(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
-func contains(value, substring string) bool {
-	return len(substring) == 0 || (len(value) >= len(substring) && bytes.Contains([]byte(value), []byte(substring)))
-}
-
-func fakeTarget(library, archive []byte) Target {
-	return Target{
-		Name:          "concurrent-target",
-		Archive:       "concurrent.tar.gz",
-		ArchiveSHA256: sha256Hex(archive),
-		LibraryPath:   "lib/libfake.so",
-		LibraryName:   "libfake.so",
-		LibrarySHA256: sha256Hex(library),
+	if bundle.Target != key {
+		t.Fatalf("bundle target = %q, want %q", bundle.Target, key)
+	}
+	if bundle.LibraryName != target.LibraryName {
+		t.Fatalf("bundle library = %q, want %q", bundle.LibraryName, target.LibraryName)
+	}
+	if bundle.UpstreamCommit != ReleaseCommit {
+		t.Fatalf("bundle upstream commit = %q, want %q", bundle.UpstreamCommit, ReleaseCommit)
 	}
 }
 
 func TestInstallConcurrentColdCache(t *testing.T) {
 	library := []byte("concurrent runtime bytes")
-	archive := makeArchive(t, "lib/libfake.so", library)
-	target := fakeTarget(library, archive)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(archive)
-	}))
-	defer server.Close()
-	t.Setenv(EnvReleaseBaseURL, server.URL)
+	target := fakeTarget("concurrent-target")
+	useBundle(t, testBundle(t, target, library))
 	t.Setenv(EnvCacheDir, t.TempDir())
 
 	const workers = 8
@@ -269,12 +310,12 @@ func TestInstallConcurrentColdCache(t *testing.T) {
 
 func TestInstallConcurrentProcessesColdCache(t *testing.T) {
 	library := []byte("cross-process runtime bytes")
-	archive := makeArchive(t, "lib/libfake.so", library)
-	target := fakeTarget(library, archive)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(archive)
-	}))
-	defer server.Close()
+	target := fakeTarget("cross-process-target")
+	bundle := testBundle(t, target, library)
+	payload := filepath.Join(t.TempDir(), "payload.zst")
+	if err := os.WriteFile(payload, bundle.Compressed, 0o600); err != nil {
+		t.Fatalf("write payload fixture: %v", err)
+	}
 	cache := t.TempDir()
 	exe, err := os.Executable()
 	if err != nil {
@@ -289,11 +330,12 @@ func TestInstallConcurrentProcessesColdCache(t *testing.T) {
 		command.Env = append(os.Environ(),
 			"LANCEDB_INSTALL_HELPER=1",
 			"LANCEDB_INSTALL_TARGET="+target.Name,
-			"LANCEDB_INSTALL_ARCHIVE="+target.Archive,
-			"LANCEDB_INSTALL_ARCHIVE_SHA="+target.ArchiveSHA256,
 			"LANCEDB_INSTALL_LIBRARY="+target.LibraryName,
-			"LANCEDB_INSTALL_LIBRARY_SHA="+target.LibrarySHA256,
-			"LANCEDB_INSTALL_BASE_URL="+server.URL,
+			"LANCEDB_INSTALL_PAYLOAD="+payload,
+			"LANCEDB_INSTALL_COMPRESSED_SIZE="+strconv.FormatInt(bundle.CompressedSize, 10),
+			"LANCEDB_INSTALL_COMPRESSED_SHA="+bundle.CompressedSHA256,
+			"LANCEDB_INSTALL_UNCOMPRESSED_SIZE="+strconv.FormatInt(bundle.UncompressedSize, 10),
+			"LANCEDB_INSTALL_UNCOMPRESSED_SHA="+bundle.UncompressedSHA256,
 			"LANCEDB_INSTALL_CACHE="+cache,
 		)
 		output := &bytes.Buffer{}
@@ -324,16 +366,34 @@ func TestInstallCacheHelper(t *testing.T) {
 	if os.Getenv("LANCEDB_INSTALL_HELPER") != "1" {
 		return
 	}
-	target := Target{
-		Name:          os.Getenv("LANCEDB_INSTALL_TARGET"),
-		Archive:       os.Getenv("LANCEDB_INSTALL_ARCHIVE"),
-		ArchiveSHA256: os.Getenv("LANCEDB_INSTALL_ARCHIVE_SHA"),
-		LibraryPath:   "lib/" + os.Getenv("LANCEDB_INSTALL_LIBRARY"),
-		LibraryName:   os.Getenv("LANCEDB_INSTALL_LIBRARY"),
-		LibrarySHA256: os.Getenv("LANCEDB_INSTALL_LIBRARY_SHA"),
-	}
-	if err := os.Setenv(EnvReleaseBaseURL, os.Getenv("LANCEDB_INSTALL_BASE_URL")); err != nil {
+	payload, err := os.ReadFile(os.Getenv("LANCEDB_INSTALL_PAYLOAD"))
+	if err != nil {
 		t.Fatal(err)
+	}
+	compressedSize, err := strconv.ParseInt(os.Getenv("LANCEDB_INSTALL_COMPRESSED_SIZE"), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncompressedSize, err := strconv.ParseInt(os.Getenv("LANCEDB_INSTALL_UNCOMPRESSED_SIZE"), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := Target{
+		Name:        os.Getenv("LANCEDB_INSTALL_TARGET"),
+		LibraryName: os.Getenv("LANCEDB_INSTALL_LIBRARY"),
+	}
+	registeredBundle = &Bundle{
+		Module:             ArtifactModulePrefix + "/" + target.Name,
+		Target:             runtime.GOOS + "/" + runtime.GOARCH,
+		LibraryName:        target.LibraryName,
+		Compressed:         payload,
+		CompressedSize:     compressedSize,
+		CompressedSHA256:   os.Getenv("LANCEDB_INSTALL_COMPRESSED_SHA"),
+		UncompressedSize:   uncompressedSize,
+		UncompressedSHA256: os.Getenv("LANCEDB_INSTALL_UNCOMPRESSED_SHA"),
+		UpstreamRepo:       "lancedb/lancedb-c",
+		UpstreamCommit:     ReleaseCommit,
+		HeaderSHA256:       strings.Repeat("b", 64),
 	}
 	if err := os.Setenv(EnvCacheDir, os.Getenv("LANCEDB_INSTALL_CACHE")); err != nil {
 		t.Fatal(err)
@@ -380,38 +440,15 @@ func TestOpenExplicitRelativePathResolvesAbsolute(t *testing.T) {
 	}
 }
 
-func warmTarget(name string, library []byte) Target {
-	return Target{
-		Name:          name,
-		Archive:       "unavailable.tar.gz",
-		ArchiveSHA256: "0000000000000000000000000000000000000000000000000000000000000000",
-		LibraryPath:   "lib/libfake.so",
-		LibraryName:   "libfake.so",
-		LibrarySHA256: sha256Hex(library),
-	}
-}
-
-func writeWarmLibrary(t *testing.T, target Target, library []byte) string {
-	t.Helper()
-	dir, err := cacheDirFor(target)
-	if err != nil {
-		t.Fatalf("cache dir: %v", err)
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatalf("create cache dir: %v", err)
-	}
-	path := filepath.Join(dir, target.LibraryName)
-	if err := os.WriteFile(path, library, 0o600); err != nil {
-		t.Fatalf("write warm library: %v", err)
-	}
-	return path
-}
-
 func TestInstallWarmLibraryWorksOffline(t *testing.T) {
 	library := []byte("verified warm runtime bytes")
-	target := warmTarget("test-warm-offline", library)
+	target := fakeTarget("test-warm-offline")
+	bundle := testBundle(t, target, library)
+	// A warm entry must not consult the payload. Point the digest at a value
+	// the temp directory does not contain so any extraction attempt fails.
+	bundle.CompressedSHA256 = strings.Repeat("0", 64)
+	useBundle(t, bundle)
 	t.Setenv(EnvCacheDir, t.TempDir())
-	t.Setenv(EnvReleaseBaseURL, "http://127.0.0.1:1")
 	path := writeWarmLibrary(t, target, library)
 	before, err := os.Stat(path)
 	if err != nil {
@@ -420,7 +457,7 @@ func TestInstallWarmLibraryWorksOffline(t *testing.T) {
 
 	got, err := install(target)
 	if err != nil {
-		t.Fatalf("warm install without archive/network: %v", err)
+		t.Fatalf("warm install without payload extraction: %v", err)
 	}
 	if got != path {
 		t.Fatalf("warm install path = %q, want %q", got, path)
@@ -443,9 +480,9 @@ func TestInstallWarmLibraryWorksOffline(t *testing.T) {
 
 func TestInstallWarmConcurrentDoesNotReplace(t *testing.T) {
 	library := []byte("concurrent warm runtime bytes")
-	target := warmTarget("test-warm-concurrent", library)
+	target := fakeTarget("test-warm-concurrent")
+	useBundle(t, testBundle(t, target, library))
 	t.Setenv(EnvCacheDir, t.TempDir())
-	t.Setenv(EnvReleaseBaseURL, "http://127.0.0.1:1")
 	path := writeWarmLibrary(t, target, library)
 	before, err := os.Stat(path)
 	if err != nil {
@@ -492,9 +529,9 @@ func TestDiscoverPreservesVerifiedUnloadableCache(t *testing.T) {
 	resetForTest()
 	t.Cleanup(resetForTest)
 	library := []byte("verified bytes that are not a shared library")
-	target := warmTarget("test-unloadable-cache", library)
+	target := fakeTarget("test-unloadable-cache")
+	useBundle(t, testBundle(t, target, library))
 	t.Setenv(EnvCacheDir, t.TempDir())
-	t.Setenv(EnvReleaseBaseURL, "http://127.0.0.1:1")
 	t.Setenv(EnvLibraryPath, "")
 	path := writeWarmLibrary(t, target, library)
 	before, err := os.ReadFile(path)
@@ -527,4 +564,77 @@ func TestDiscoverPreservesVerifiedUnloadableCache(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatalf("verified cache file changed: %q", after)
 	}
+}
+
+func fakeTarget(name string) Target {
+	return Target{Name: name, LibraryName: "libfake.so"}
+}
+
+// testBundle builds a self-consistent bundle fixture. The module path matches
+// target.Name so bundleFor accepts it; the callers that exercise mismatches
+// mutate the returned value.
+func testBundle(t *testing.T, target Target, library []byte) *Bundle {
+	t.Helper()
+	compressed := zstdCompress(t, library)
+	return &Bundle{
+		Module:             ArtifactModulePrefix + "/" + target.Name,
+		Target:             runtime.GOOS + "/" + runtime.GOARCH,
+		LibraryName:        target.LibraryName,
+		Compressed:         compressed,
+		CompressedSize:     int64(len(compressed)),
+		CompressedSHA256:   sha256Hex(compressed),
+		UncompressedSize:   int64(len(library)),
+		UncompressedSHA256: sha256Hex(library),
+		UpstreamRepo:       "lancedb/lancedb-c",
+		UpstreamCommit:     ReleaseCommit,
+		HeaderSHA256:       strings.Repeat("b", 64),
+	}
+}
+
+func useBundle(t *testing.T, bundle *Bundle) {
+	t.Helper()
+	previous := registeredBundle
+	registeredBundle = bundle
+	t.Cleanup(func() { registeredBundle = previous })
+}
+
+func zstdCompress(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("create zstd writer: %v", err)
+	}
+	if _, err := writer.Write(data); err != nil {
+		t.Fatalf("write zstd payload: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close zstd writer: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func writeWarmLibrary(t *testing.T, target Target, library []byte) string {
+	t.Helper()
+	dir, err := cacheDirFor(target)
+	if err != nil {
+		t.Fatalf("cache dir: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create cache dir: %v", err)
+	}
+	path := filepath.Join(dir, target.LibraryName)
+	if err := os.WriteFile(path, library, 0o600); err != nil {
+		t.Fatalf("write warm library: %v", err)
+	}
+	return path
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func contains(value, substring string) bool {
+	return len(substring) == 0 || strings.Contains(value, substring)
 }

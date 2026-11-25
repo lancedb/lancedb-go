@@ -9,9 +9,10 @@
 //  1. LANCEDB_C_LIBRARY_PATH, which must name an existing regular file. When
 //     set, it is the only candidate; a bad value fails instead of silently
 //     falling back to another library.
-//  2. A private per-user cache populated from the pinned lancedb-c release
-//     archive. The archive and the extracted library are verified against the
-//     published SHA-256 digests before the library is loaded.
+//  2. A private per-user cache materialized from the compiled-in per-target
+//     companion module payload. The payload and the extracted library are
+//     verified against the published SHA-256 digests before the library is
+//     loaded, and installation never uses the network.
 //  3. The platform library name resolved by the system dynamic loader. This
 //     supports package-manager and system installations, but still requires the
 //     runtime version to match the header this module was built against.
@@ -40,10 +41,6 @@ const (
 	EnvLibraryPath = "LANCEDB_C_LIBRARY_PATH"
 	// EnvCacheDir overrides the root of the private native-library cache.
 	EnvCacheDir = "LANCEDB_C_CACHE_DIR"
-	// EnvReleaseBaseURL overrides the release download base URL. It is useful
-	// for a mirror or a loopback fixture; the pinned archive names and digests
-	// still apply.
-	EnvReleaseBaseURL = "LANCEDB_C_RELEASE_BASE_URL"
 )
 
 // Source identifies how a library was selected.
@@ -175,7 +172,7 @@ func openLibraryPath(path string, source Source) (*Library, error) {
 func openSystem(target Target) (*Library, error) {
 	handle, err := openNativeLibrary(target.LibraryName)
 	if err != nil {
-		return nil, fmt.Errorf("system loader could not open %q: %w; set %s to a released lancedb-c library or allow the private cache download", target.LibraryName, err, EnvLibraryPath)
+		return nil, fmt.Errorf("system loader could not open %q: %w; set %s to a released lancedb-c library or use a build with a compiled-in native payload", target.LibraryName, err, EnvLibraryPath)
 	}
 	return &Library{Path: target.LibraryName, Source: SourceSystem, Handle: handle}, nil
 }

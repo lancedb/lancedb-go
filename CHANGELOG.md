@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.2.0-preview.3
+
+### Changed
+
+- Update the pinned `lancedb-c` to `v0.1.0-preview.5` (LanceDB SDK
+  `v0.42.0-beta.30`, Lance `v15.0.0-beta.35`, source commit
+  `3106de158b8da5dcb47e2a4acc820ed1b74b3e01`).
+- Distribute the native library through the Go module graph. The payload for
+  each supported target is delivered by a companion module at
+  `go.lancedb.io/lancedb-go/artifacts/<target>`, built from the exact
+  `lancedb-c` release; the root module requires all five at
+  `v0.1.0-preview.5` and build-tagged selectors link exactly the one matching
+  the build. Native payloads and companion tags stay out of this repository.
+- Replace the first-`Connect` HTTP download with verification and extraction of
+  the compiled-in payload into the existing per-target locked cache. Cache
+  repair, permissions, concurrency and the explicit `LANCEDB_C_LIBRARY_PATH`
+  override are unchanged; the loader no longer uses the network at runtime.
+- Point installation docs at the releases page and the explicit
+  `v0.2.0-preview.3` preview version (`@latest` stays on the stable `v0.1.2`
+  line), and add the hosted offline consumer lane that proves a cold default
+  `Connect` on all five targets with no network access.
+
+The published library SHA-256 values are `4145c061702a652019a11eb5767c292d9b01c394eb16a3850c2cec53338767fd`
+(linux-amd64), `7bd7378990d540c8d4c273e48f10ec155e959a49bca9e62534c38a401bbae50b`
+(linux-arm64), `727f43a57f33f0fb1955d5b2d5388817dbf720a2ace47c131b02def91994ea2d`
+(darwin-arm64), `4b9f90ba0ca48775c9b90cca200e6a6c22c9e8771628da3897ee473e0e805de2`
+(windows-amd64) and `99b8e6ddf4203f0b2b2d435853f134bd2d5802dcf15d5b79f126301cd84f41fe`
+(windows-arm64). The archive and module identity is recorded in
+`scripts/go-module-origin/v0.1.0-preview.5.identity.json`.
+
+### Removed
+
+- Remove `LANCEDB_C_RELEASE_BASE_URL`, the release archive download, and the
+  archive/mirror handling they supported.
+
 ## v0.2.0-preview.2
 
 ### Changed
