@@ -117,9 +117,9 @@ exercise the discovery metadata. Each target has one monotonic, fractional
 deadline: every discovery request and every proxy/direct download gets only the
 remaining time, a retry wait cannot exceed the remaining budget, and a failed
 target still leaves later targets their own budget. curl and go run under
-`timeout` with a one-second TERM-to-KILL grace for the immediate command (not a
-general detached-descendant guarantee), and a timed-out go attempt logs whether
-that exact process terminated. A missing checksum entry or a version that only
+`timeout` with a one-second TERM-to-KILL grace for the immediate command;
+timeouts are reported as exit 124 or 137, and this is not a general detached-
+descendant guarantee. A missing checksum entry or a version that only
 resolves from a local cache is a stop condition.
 
 ## 4. Evidence

@@ -38,7 +38,8 @@ proxy resolution, the direct discovery-path resolution, and retry waits
 (default 900). The budget keeps fractional monotonic time; every attempt gets
 only the remaining time. --interval-seconds is the wait between attempts
 (default 20), clipped to the remaining budget. curl and go are bounded with a
-one-second TERM-to-KILL grace for the immediate command.
+one-second TERM-to-KILL grace for the immediate command; a timeout is reported
+as exit 124 or 137.
 
 Environment overrides, for fixtures only:
   ORIGIN_BASE_URL  discovery base (default https://go.lancedb.io)
@@ -118,11 +119,9 @@ remaining_ms() {
   printf '%s\n' "$remaining"
 }
 
-# bounded SECONDS COMMAND... runs one network attempt under a hard timeout.
-# curl and go are the only commands this covers; timeout signals their
-# immediate process group and uses a one-second TERM-to-KILL grace. This is not
-# a general guarantee for arbitrary detached descendants. The go case logs
-# whether the exact command from this attempt actually terminated.
+# bounded SECONDS COMMAND... runs one curl or go network attempt under a hard
+# timeout with a one-second TERM-to-KILL grace for the immediate command. This
+# is not a general guarantee for arbitrary detached descendants.
 bounded() {
   local seconds=$1
   shift
@@ -141,31 +140,6 @@ bounded_sleep() {
     remaining=$limit
   fi
   sleep "$(ms_to_seconds "$remaining")"
-}
-
-# check_go_terminated MODULE VERSION MODE logs whether the exact go command
-# from this attempt is gone after a timeout. The pattern is scoped to this
-# run's unique probe directory, module and version.
-check_go_terminated() {
-  local module=$1 version=$2 mode=$3 pattern
-  pattern="go -C $probe_dir mod download -json $module@$version"
-  if ! command -v pgrep >/dev/null 2>&1; then
-    echo "  $mode: timeout reported the immediate go command terminated (pgrep unavailable for confirmation)" >&2
-    return 0
-  fi
-  if pgrep -f "$pattern" >/dev/null 2>&1; then
-    echo "  $mode: go process still present after timeout; sending TERM then KILL" >&2
-    pkill -TERM -f "$pattern" 2>/dev/null || true
-    sleep 0.2
-    if pgrep -f "$pattern" >/dev/null 2>&1; then
-      pkill -KILL -f "$pattern" 2>/dev/null || true
-      echo "  $mode: go process required SIGKILL after the timeout grace" >&2
-    else
-      echo "  $mode: go process terminated after TERM" >&2
-    fi
-    return 0
-  fi
-  echo "  $mode: go process terminated within the timeout grace" >&2
 }
 
 python3 - "$manifest" "$origin" "$version" > "$work/modules.tsv" <<'PY'
@@ -224,8 +198,9 @@ resolve() {
     rc=$?
   fi
   if (( rc == 124 )); then
-    echo "  $mode attempt timed out after ${remaining}s (one-second TERM/KILL grace)" >&2
-    check_go_terminated "$module" "$module_version" "$mode"
+    echo "  $mode attempt timed out after ${remaining}s; GNU timeout used its one-second TERM/KILL grace on the immediate command (exit 124)" >&2
+  elif (( rc == 137 )); then
+    echo "  $mode attempt was killed after the ${remaining}s deadline; GNU timeout used its one-second TERM/KILL grace on the immediate command (exit 137)" >&2
   fi
   return "$rc"
 }

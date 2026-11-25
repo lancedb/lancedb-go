@@ -195,10 +195,10 @@ sumdb. Each target has one monotonic, fractional deadline; every discovery
 curl and every proxy/direct `go mod download` gets only the remaining time,
 retry sleeps are clipped to the remaining budget, and a failed target does not
 consume another target's budget. curl and go run under `timeout` with a
-one-second TERM-to-KILL grace for the immediate command, and a timed-out go
-attempt logs whether that exact process terminated; this is not a general
-detached-descendant guarantee. The script refuses to verify the public origin
-with the checksum database disabled.
+one-second TERM-to-KILL grace for the immediate command; a timeout is reported
+as exit 124 or 137. This is not a general detached-descendant guarantee. The
+script refuses to verify the public origin with the checksum database
+disabled.
 
 ## PR checks
 
