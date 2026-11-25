@@ -9,25 +9,45 @@ fail() {
   exit 1
 }
 
+# NET_CLEANUP_RULE is registered before the Windows rule is created so the
+# exit trap can remove a rule whose creation readback fails.
 NET_CLEANUP_RULE=${NET_CLEANUP_RULE:-}
 
-# cleanup_network_off removes the ephemeral Windows rule if one was created.
-# It is idempotent and safe to call from an exit trap.
+# cleanup_network_off removes the ephemeral Windows rule and verifies it is
+# gone. It is safe to call from an exit trap and idempotent when no rule was
+# registered. A failure is reported and returned, never hidden.
 cleanup_network_off() {
   local rule=${NET_CLEANUP_RULE:-}
   [[ -n $rule ]] || return 0
-  local ps
+  local ps output rc
   ps=$(command -v powershell || command -v pwsh || true)
-  if [[ -n $ps ]]; then
-    LDB_OFFLINE_RULE="$rule" "$ps" -NoProfile -NonInteractive -Command '
-      $ruleName = $env:LDB_OFFLINE_RULE
-      Remove-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-      & netsh advfirewall firewall delete rule name="$ruleName" | Out-Null
-      try { (New-Object -ComObject HNetCfg.FwPolicy2).Rules.Remove($ruleName) } catch {}
-    ' >/dev/null 2>&1 || true
+  if [[ -z $ps ]]; then
+    printf 'network_cleanup=FAILED reason=powershell-missing rule=%s\n' "$rule" | tee -a "${SUMMARY:-/dev/null}" >&2
+    return 1
   fi
-  printf 'network_cleanup=removed\n' | tee -a "${SUMMARY:-/dev/null}"
+  output=$(
+    LDB_OFFLINE_RULE="$rule" "$ps" -NoProfile -NonInteractive -Command '
+      $ErrorActionPreference = "Stop"
+      $ruleName = $env:LDB_OFFLINE_RULE
+      $existing = Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue
+      if ($null -ne $existing) {
+        $existing | Remove-NetFirewallRule -Confirm:$false -ErrorAction Stop
+      }
+      $remaining = Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue
+      if ($null -ne $remaining) {
+        throw "firewall rule $ruleName still exists after removal"
+      }
+      Write-Host "network_cleanup=verified rule=$ruleName"
+    ' 2>&1
+  )
+  rc=$?
+  printf '%s\n' "$output" | tee -a "${SUMMARY:-/dev/null}"
+  if [[ $rc -ne 0 ]]; then
+    printf 'network_cleanup=FAILED rule=%s\n' "$rule" | tee -a "${SUMMARY:-/dev/null}" >&2
+    return 1
+  fi
   NET_CLEANUP_RULE=
+  return 0
 }
 
 # run_network_probe runs the same consumer executable in probe mode until the
@@ -52,11 +72,16 @@ run_network_probe() {
 }
 
 # prepare_windows_network_off blocks outbound traffic for exactly the consumer
-# executable path. It first proves direct egress from that executable, then
-# installs the rule and proves the same executable is blocked. The rule is
-# removed by cleanup_network_off on exit, including error paths.
+# executable. It is authorized only on GitHub Actions hosted runners, uses the
+# native runner temp path, and proves direct egress before and after the rule.
+# The exact rule name is registered before creation so cleanup can remove a
+# rule whose readback fails; removal is verified by the exit trap.
 prepare_windows_network_off() {
   local binary=$1
+  if [[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_ENVIRONMENT:-} != github-hosted || -z ${GITHUB_RUN_ID:-} ]]; then
+    printf 'ERROR: Windows network isolation is authorized only on GitHub Actions hosted runners (GITHUB_ACTIONS=true, RUNNER_ENVIRONMENT=github-hosted, GITHUB_RUN_ID set)\n' >&2
+    return 1
+  fi
   command -v cygpath >/dev/null 2>&1 || return 1
   local ps
   ps=$(command -v powershell || command -v pwsh || true)
@@ -67,18 +92,17 @@ prepare_windows_network_off() {
     printf 'ERROR: Windows network isolation requires an .exe consumer path, got: %s\n' "$winbin" >&2
     return 1
   fi
-  rule="lancedb-go-offline-${GITHUB_RUN_ID:-$$}-${GITHUB_JOB:-local}-${SLUG:-target}"
+  rule="lancedb-go-offline-${GITHUB_RUN_ID}-${GITHUB_JOB:-job}-${SLUG:-target}-$(date +%s)-$$"
   rule=$(printf '%s' "$rule" | tr -c 'A-Za-z0-9._-' '-')
+  # Register before create: if creation succeeds but the readback below fails,
+  # the exit trap must still know which exact rule to remove.
+  NET_CLEANUP_RULE=$rule
 
   # Positive control: the executable can reach the network before the rule.
   if ! run_network_probe "$binary" 3 ok egress-ok; then
     return 1
   fi
 
-  # Create a rule for exactly this executable. Inputs go through the
-  # environment so no shell quoting is interpolated. The script prints the
-  # resolved path, the rule name and which mechanism worked, then falls back
-  # to netsh when the cmdlet rejects the parameters.
   local output rc
   output=$(
     LDB_OFFLINE_PROGRAM="$winbin" LDB_OFFLINE_RULE="$rule" "$ps" -NoProfile -NonInteractive -Command '
@@ -91,56 +115,36 @@ prepare_windows_network_off() {
       $program = $item.FullName
       Write-Host "network_rule_program_full=$program"
       Write-Host "network_rule_program_type=$($item.Attributes) length=$($item.Length)"
-      $created = $null
-      try {
-        New-NetFirewallRule -DisplayName $ruleName -Direction Outbound -Program $program -Action Block -Profile Any -ErrorAction Stop | Out-Null
-        $created = "New-NetFirewallRule"
-      } catch {
-        Write-Host "network_rule_cmdlet_error=$($_.Exception.Message) $($_.FullyQualifiedErrorId)"
-        & netsh advfirewall firewall add rule name="$ruleName" dir=out action=block program="$program" enable=yes profile=any | Out-Host
-        if ($LASTEXITCODE -eq 0) { $created = "netsh" }
-        else { Write-Host "network_rule_netsh_error=$LASTEXITCODE" }
+      $created = New-NetFirewallRule -Name $ruleName -DisplayName $ruleName -Direction Outbound -Program $program -Action Block -Profile Any -Enabled $true -ErrorAction Stop -PassThru
+      if ($null -eq $created) { throw "New-NetFirewallRule returned no rule" }
+      Write-Host "network_rule_id=$($created.InstanceID)"
+      $readback = Get-NetFirewallRule -Name $ruleName -ErrorAction Stop
+      if ($null -eq $readback) { throw "rule readback is empty" }
+      if ($readback.InstanceID -ne $created.InstanceID) {
+        throw "rule InstanceID changed: $($readback.InstanceID) != $($created.InstanceID)"
       }
-      if ($null -eq $created) {
-        try {
-          $policy = New-Object -ComObject HNetCfg.FwPolicy2
-          $fwRule = New-Object -ComObject HNetCfg.FWRule
-          $fwRule.Name = $ruleName
-          $fwRule.Description = "lancedb-go offline consumer test rule"
-          $fwRule.Direction = 2
-          $fwRule.Action = 0
-          $fwRule.Program = $program
-          $fwRule.Enabled = $true
-          $fwRule.Profiles = 0x7FFFFFFF
-          $policy.Rules.Add($fwRule)
-          $created = "HNetCfg.FwPolicy2"
-        } catch {
-          Write-Host "network_rule_com_error=$($_.Exception.Message)"
-        }
+      if ($readback.Enabled -ne $true) { throw "rule Enabled is $($readback.Enabled)" }
+      if ([string]$readback.Direction -ne "Outbound") { throw "rule Direction is $($readback.Direction)" }
+      if ([string]$readback.Action -ne "Block") { throw "rule Action is $($readback.Action)" }
+      $filter = @(Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $readback -ErrorAction Stop)
+      if ($filter.Count -ne 1) { throw "expected one application filter, got $($filter.Count)" }
+      $filterProgram = $filter[0].Program
+      if ([string]::IsNullOrEmpty($filterProgram)) { throw "application filter has no program" }
+      $want = [System.IO.Path]::GetFullPath($program)
+      $got = [System.IO.Path]::GetFullPath($filterProgram)
+      if (-not [string]::Equals($want, $got, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "application filter program $filterProgram does not match $program"
       }
-      if ($null -eq $created) {
-        $control = Join-Path $env:SystemRoot "System32\curl.exe"
-        try {
-          New-NetFirewallRule -DisplayName "$ruleName-control" -Direction Outbound -Program $control -Action Block -Profile Any -ErrorAction Stop | Out-Null
-          Write-Host "network_rule_control=New-NetFirewallRule"
-          Remove-NetFirewallRule -DisplayName "$ruleName-control" -ErrorAction SilentlyContinue
-        } catch {
-          Write-Host "network_rule_control_error=$($_.Exception.Message) $($_.FullyQualifiedErrorId)"
-        }
-        exit 1
-      }
-      $readback = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction Stop
-      Write-Host "network_rule_created=$created readback=$($readback.DisplayName) enabled=$($readback.Enabled) direction=$($readback.Direction) action=$($readback.Action)"
+      Write-Host "network_rule_filter=$filterProgram"
+      Write-Host "network_rule_created=New-NetFirewallRule id=$($readback.InstanceID) enabled=$($readback.Enabled) direction=$($readback.Direction) action=$($readback.Action)"
     ' 2>&1
   )
   rc=$?
   printf '%s\n' "$output" | tee -a "${SUMMARY:-/dev/null}"
   [[ $rc == 0 ]] || return 1
 
-  NET_CLEANUP_RULE=$rule
   # Negative control: the same executable must now be blocked.
   if ! run_network_probe "$binary" 10 blocked egress-blocked; then
-    cleanup_network_off
     return 1
   fi
   return 0

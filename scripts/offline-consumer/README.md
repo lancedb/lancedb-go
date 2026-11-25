@@ -49,11 +49,14 @@ Each run refuses to claim an offline check without a real isolation mechanism:
 - Linux: `unshare -rn` network namespace.
 - macOS: `sandbox-exec` with a deny-network profile.
 - Windows: a per-executable outbound Windows Firewall rule for the built
-  consumer. The lane first proves direct egress from that executable, installs
-  the rule, proves the same executable is blocked, then runs the cold and
-  override consumers. The rule is scoped to the executable path, is created
-  only in the ephemeral CI job, and is removed by the exit trap on success and
-  on errors.
+  consumer, only on GitHub Actions hosted runners (`GITHUB_ACTIONS=true`,
+  `RUNNER_ENVIRONMENT=github-hosted`). The lane first proves direct egress
+  from that executable, creates a uniquely named rule, reads it back by its
+  literal `InstanceID` and checks its application filter, Enabled, Direction
+  and Action, then proves the same executable is blocked. The exact rule name
+  is registered before creation so the exit trap can remove it even if the
+  readback fails; removal is verified, and a separate CI step checks that no
+  `lancedb-go-offline-<run-id>-*` rule remains.
 
 The tag-based `run.sh` lane uses the same validation, so the release-tag
 external consumers are covered by the same isolation contract.

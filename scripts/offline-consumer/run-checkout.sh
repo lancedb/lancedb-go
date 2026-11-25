@@ -55,12 +55,21 @@ GO_ENV=(
 
 finish() {
   local rc=$?
-  cleanup_network_off
+  local cleanup_rc=0
+  cleanup_network_off || cleanup_rc=$?
   printf '%s\n' "$rc" > "$EVIDENCE_DIR/exit-code.txt"
   if [[ $rc -ne 0 ]]; then
     printf 'result=FAIL\nexit_code=%s\n' "$rc" >> "$SUMMARY"
-    printf 'offline checkout consumer FAILED (exit %s); work kept at %s\n' "$rc" "$WORK" | tee -a "$SUMMARY" >&2
+    if [[ $cleanup_rc -ne 0 ]]; then
+      printf 'network_cleanup=FAILED original_failure_preserved\n' >> "$SUMMARY"
+    fi
+    printf 'offline native consumer FAILED (exit %s); work kept at %s\n' "$rc" "$WORK" | tee -a "$SUMMARY" >&2
+  elif [[ $cleanup_rc -ne 0 ]]; then
+    printf 'result=FAIL\nexit_code=%s\n' "$cleanup_rc" >> "$SUMMARY"
+    printf 'network cleanup FAILED after a successful run; work kept at %s\n' "$WORK" | tee -a "$SUMMARY" >&2
+    rc=$cleanup_rc
   fi
+  exit "$rc"
 }
 trap finish EXIT
 
@@ -222,5 +231,8 @@ if [[ -n $(find "$OVERRIDE_CACHE" -type f ! -name '.lock' -print -quit 2>/dev/nu
 fi
 record override_cache_files "$(find "$OVERRIDE_CACHE" -type f 2>/dev/null | wc -l | tr -d ' ')"
 
+if ! cleanup_network_off; then
+  fail "network cleanup failed"
+fi
 log "result=PASS"
 record result PASS
