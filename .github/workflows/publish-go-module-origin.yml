@@ -18,11 +18,6 @@ on:
         required: true
         default: false
         type: boolean
-      verify_protections:
-        description: "Probe the live version locks on one retained .info object (first publication; default on)"
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: read
@@ -218,7 +213,6 @@ jobs:
             --version "$VERSION" | tee "$RUNNER_TEMP/publication.log"
 
       - name: Probe the live version locks
-        if: inputs.verify_protections == true
         env:
           ORIGIN_DIR: ${{ runner.temp }}/go-module-origin/origin
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

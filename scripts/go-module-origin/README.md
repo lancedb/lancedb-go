@@ -152,14 +152,10 @@ First publication sequence:
    `generate-go-module-origin-candidates.yml` on `main` with `verify=true` and
    confirm the recorded identity and manifest hash.
 3. Dispatch `publish-go-module-origin.yml` on `main` with `publish=true`.
-   `verify_protections` defaults to true, so the first publication always runs
-   the lock probe without any extra input.
+   The lock probe always runs; there is no input that can disable it.
 4. The workflow publishes `.info`/`.mod`/`.zip` first, then merges `@v/list`,
    then writes discovery; the lock probe and the public proxy/sumdb verification
    follow. A failed probe fails the publication run.
-
-Subsequent dispatches may set `verify_protections=false` once the locks have
-been probed for that publication line.
 
 ### Lock probe
 

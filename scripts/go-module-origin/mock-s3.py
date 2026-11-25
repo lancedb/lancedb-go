@@ -13,8 +13,9 @@ without touching R2:
     ``accept`` performs the write, ``transport`` drops the connection without a
     response, and ``transport-remove`` removes the object and then drops the
     connection.
-  * ``--fail-get KEY`` drops the connection without a response for GET/HEAD of
-    one key, so a probe readback cannot silently reuse stale bytes.
+  * ``--fail-get KEY`` drops the connection without a response for GET of one
+    key (HEAD still reports existence), so a probe readback or publisher
+    readback cannot silently reuse stale bytes.
 """
 
 from __future__ import annotations
@@ -106,10 +107,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self):
         try:
             key = self.split()
-            if key in STORE.fail_get:
-                STORE.write_log(f"HEAD {key} transport-drop")
-                self.drop()
-                return
             path = STORE.path(key)
             if not path.is_file():
                 STORE.write_log(f"HEAD {key} 404")

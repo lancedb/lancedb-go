@@ -78,6 +78,9 @@ head_key() {
 
 get_object() {
   local key=$1 body=$2 meta=$3
+  # Remove previous bodies first: a failed GET must never leave a readable
+  # stale file behind for a later hash.
+  rm -f "$body" "$meta"
   aws_cli s3api get-object --bucket "$bucket" --endpoint-url "$endpoint" \
     --key "$key" "$body" > "$meta"
 }
@@ -93,7 +96,15 @@ PY
 
 object_sha256() {
   local key=$1 body=$2 meta=$3
-  get_object "$key" "$body" "$meta"
+  # Explicit status propagation: command substitution does not inherit
+  # errexit, so a failed GET must return non-zero rather than hash a previous
+  # temp file. Callers must check this status.
+  if ! get_object "$key" "$body" "$meta"; then
+    return 1
+  fi
+  if [[ ! -f $body ]]; then
+    return 1
+  fi
   sha256sum "$body" | awk '{print $1}'
 }
 
@@ -112,7 +123,10 @@ publish_immutable() {
   local key=$1 path=$2 ctype=$3 cache=$4 hash=$5
   if head_key "$key"; then
     local existing
-    existing=$(object_sha256 "$key" "$tmp/existing" "$tmp/existing.json")
+    if ! existing=$(object_sha256 "$key" "$tmp/existing" "$tmp/existing.json"); then
+      echo "read existing object failed: $key" >&2
+      exit 1
+    fi
     [[ $existing == "$hash" ]] || {
       echo "immutable object conflict: $key (existing $existing, expected $hash)" >&2
       exit 1
@@ -126,7 +140,10 @@ publish_immutable() {
       exit 1
     fi
     local existing
-    existing=$(object_sha256 "$key" "$tmp/created" "$tmp/created.json")
+    if ! existing=$(object_sha256 "$key" "$tmp/created" "$tmp/created.json"); then
+      echo "read concurrently created object failed: $key" >&2
+      exit 1
+    fi
     [[ $existing == "$hash" ]] || {
       echo "conditional create conflict: $key" >&2
       exit 1
@@ -135,7 +152,10 @@ publish_immutable() {
     return
   fi
   local uploaded
-  uploaded=$(object_sha256 "$key" "$tmp/uploaded" "$tmp/uploaded.json")
+  if ! uploaded=$(object_sha256 "$key" "$tmp/uploaded" "$tmp/uploaded.json"); then
+    echo "read back uploaded object failed: $key" >&2
+    exit 1
+  fi
   [[ $uploaded == "$hash" ]] || { echo "uploaded hash mismatch: $key" >&2; exit 1; }
   printf 'published %s\n' "$key"
 }
@@ -163,7 +183,10 @@ publish_list() {
   local attempt body="$tmp/list.body" meta="$tmp/list.json" merged="$tmp/list.merged" etag
   for attempt in 1 2 3; do
     if head_key "$key"; then
-      get_object "$key" "$body" "$meta"
+      if ! get_object "$key" "$body" "$meta"; then
+        echo "read list object failed: $key" >&2
+        exit 1
+      fi
       etag=$(object_etag "$meta")
       [[ -n $etag ]] || { echo "list object has no ETag: $key" >&2; exit 1; }
       merge_list "$body" "$path" "$merged"
@@ -186,7 +209,10 @@ publish_list() {
         continue
       fi
     fi
-    get_object "$key" "$body" "$meta"
+    if ! get_object "$key" "$body" "$meta"; then
+      echo "read back list object failed: $key" >&2
+      exit 1
+    fi
     if cmp -s "$body" "$merged"; then
       printf 'published %s\n' "$key"
       return

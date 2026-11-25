@@ -85,6 +85,44 @@ after_put=$(grep -c '^PUT ' "$log")
 cp "$origin/$target_zip" "$zip_path"
 stop_mock
 
+# --- Publisher readback: a failed GET for a later identical .info object must
+# not hash the previous object's temp file and report a false success. ---
+python3 - "$manifest" "$origin/stale-manifest.json" <<'PY'
+import json
+import pathlib
+import sys
+
+source = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+infos = sorted((obj for obj in source["objects"] if obj["key"].endswith(".info")), key=lambda obj: obj["key"])
+assert len(infos) >= 2, infos
+first, second = infos[0], infos[1]
+if pathlib.Path(sys.argv[1]).parent.joinpath(first["key"]).read_bytes() != pathlib.Path(sys.argv[1]).parent.joinpath(second["key"]).read_bytes():
+    raise SystemExit("fixture .info objects are not byte-identical")
+manifest = {
+    "version": source["version"],
+    "module_prefix": source["module_prefix"],
+    "base_url": source["base_url"],
+    "objects": [first, second],
+}
+pathlib.Path(sys.argv[2]).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+print("stale-read fixture:", first["key"], "then", second["key"])
+PY
+first_info=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["objects"][0]["key"])' "$origin/stale-manifest.json")
+second_info=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["objects"][1]["key"])' "$origin/stale-manifest.json")
+start_mock "$store" 18790 "$work/requests-stale.log" --fail-get "$second_info"
+before_stale_put=$(grep -c '^PUT ' "$work/requests-stale.log" 2>/dev/null || true)
+set +e
+"${publish[@]}" --manifest "$origin/stale-manifest.json" --bucket lancedb-go-fixture --endpoint http://127.0.0.1:18790 --version "$version" > "$work/stale-get.log" 2>&1
+stale_rc=$?
+set -e
+stop_mock
+[[ $stale_rc -ne 0 ]] || { echo "stale-read: publisher passed when a later identical .info GET failed" >&2; cat "$work/stale-get.log" >&2; exit 1; }
+grep -F "read existing object failed: $second_info" "$work/stale-get.log" >/dev/null || { cat "$work/stale-get.log" >&2; exit 1; }
+after_stale_put=$(grep -c '^PUT ' "$work/requests-stale.log" 2>/dev/null || true)
+[[ $after_stale_put -eq $before_stale_put ]] || { echo "stale-read: publisher wrote objects after the failed readback" >&2; exit 1; }
+cmp "$store/$second_info" "$origin/$second_info" || { echo "stale-read: object bytes changed" >&2; exit 1; }
+echo "publisher stale-read fixture: ok"
+
 # --- @v/list merge under normal and reversed publication order. ---
 list_key="modules/${module_prefix}/linux-amd64/@v/list"
 list_prefix="$work/list-prefix"

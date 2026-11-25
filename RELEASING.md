@@ -91,9 +91,9 @@ rules `modules/go.lancedb.io/lancedb-go/artifacts/<target>/@v/v`. Then dispatch
 `publish=true`. The workflow accepts live writes only from `refs/heads/main`,
 re-fetches `origin/main` and requires the checked-out commit to equal it and to
 track the reviewed identity file before any credential is used, and pins its
-privileged-job actions to audited refs. `verify_protections` defaults to true,
-so the first publication probes one retained `.info` object of the exact
-version: it requires the service to deny an unconditional overwrite and a
+privileged-job actions to audited refs. The lock probe always runs and cannot
+be disabled by an input, so the first publication probes one retained `.info`
+object of the exact version: it requires the service to deny an unconditional overwrite and a
 delete with HTTP 409 `ObjectLockedByBucketPolicy`, never accepts a transport
 failure or a 403 as proof, repairs the exact staged bytes immediately if an
 authoritative readback shows the object missing, byte-compares the readback and
