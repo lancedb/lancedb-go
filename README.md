@@ -137,6 +137,11 @@ record, err := qv2.QueryV2().
 `ITableUpdateExpr`, `ITableTimeTravel`, `ITableSchemaEvolve` and
 `ITablePrewarmIndex` expose the other additive capabilities.
 
+See [docs/api-guide.md](docs/api-guide.md) for complete programs covering
+queries, vector and full-text search, mutations, merge insert, schema
+evolution, time travel, index management, cloud storage, errors and Arrow
+ownership.
+
 Arrow IPC is the boundary for schemas, input records and query results. Input
 batches are sent in one write; query results preserve every batch for the
 published slice API and are concatenated for the context/single-record API.
@@ -178,4 +183,5 @@ make test-integration  # authenticated S3 + AWS profile/DynamoDB loopback tests
 make vet fmt-check
 ```
 
-See [RELEASE_PROCESS.md](RELEASE_PROCESS.md) for the Go-module release flow.
+See [RELEASING.md](RELEASING.md) for the root-module and native-artifact release
+flow.
