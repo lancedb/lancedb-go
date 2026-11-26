@@ -13,17 +13,20 @@ Rust toolchain, no C compiler and no `CGO_ENABLED=1` build.
 ## Install
 
 Preview releases are published on the
-[releases page](https://github.com/lancedb/lancedb-go/releases). The planned
-next preview is `v0.2.0-preview.3`, the first release with offline native
-loading. When it is published, install that preview explicitly:
+[releases page](https://github.com/lancedb/lancedb-go/releases). Choose a
+preview from that page whose release notes specify module-backed offline native
+loading, then use that same tag in both commands below (replacing
+`vX.Y.Z-preview.N`):
 
 ```bash
-go get github.com/lancedb/lancedb-go@v0.2.0-preview.3
+go get github.com/lancedb/lancedb-go@vX.Y.Z-preview.N
 ```
 
-`@latest` resolves the newest stable release (currently `v0.1.2`), which
-predates the pure-Go preview and does not contain the native payload or the
-`lancedb-go-native` helper, so name the preview version explicitly.
+`@latest` selects the highest release version when the module has one; only a
+module with no release version falls back to a prerelease or a pseudo-version.
+The stable `v0.1.2` release predates the pure-Go preview and does not contain
+the native payload or the `lancedb-go-native` helper, so name a preview
+explicitly.
 
 The native library for the running target is delivered as a compiled-in
 companion module (`go.lancedb.io/lancedb-go/artifacts/<target>`) that the root
@@ -33,10 +36,10 @@ works offline once `go get` has resolved the modules. No source build happens
 on the consumer machine.
 
 To pre-seed the cache (for example in an offline image or CI), run the helper
-from the same preview version:
+from the same tag:
 
 ```bash
-go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@v0.2.0-preview.3
+go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@vX.Y.Z-preview.N
 ```
 
 Discovery can be controlled explicitly:
