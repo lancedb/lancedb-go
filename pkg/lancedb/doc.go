@@ -20,22 +20,25 @@ through compiled-in companion modules and is never downloaded at runtime.
 
 # Installing
 
-Preview releases are published on the
-releases page (https://github.com/lancedb/lancedb-go/releases). Install the
-current preview explicitly:
+Preview releases are published on the releases page
+(https://github.com/lancedb/lancedb-go/releases). Choose a preview from that
+page whose release notes specify module-backed offline native loading, then use
+that same tag in both commands below (replacing vX.Y.Z-preview.N):
 
-	go get github.com/lancedb/lancedb-go@v0.2.0-preview.3
+	go get github.com/lancedb/lancedb-go@vX.Y.Z-preview.N
 
-@latest resolves the newest stable release, which predates the pure-Go
-preview, so name the preview version. The root module requires one companion
-artifact module per target
+@latest selects the highest release version when the module has one; only a
+module with no release version falls back to a prerelease or a pseudo-version.
+The stable v0.1.2 release predates the pure-Go preview and does not contain the
+native payload or the lancedb-go-native helper, so name a preview explicitly.
+The root module requires one companion artifact module per target
 (go.lancedb.io/lancedb-go/artifacts/<goos>-<goarch>); build-tagged selectors
 link exactly the module for the target being built.
 
 To pre-seed the native cache, for example in an offline image or CI, run the
-helper from the same preview version:
+helper from the same tag:
 
-	go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@v0.2.0-preview.3
+	go run github.com/lancedb/lancedb-go/pkg/cmd/lancedb-go-native@vX.Y.Z-preview.N
 
 # Native Library Loading
 
@@ -53,7 +56,10 @@ Discovery order:
     falling back to another library.
   - The compiled-in payload for the running target, materialized in the
     private cache.
-  - The platform library name resolved by the system dynamic loader.
+  - The platform library name resolved by the system dynamic loader. The loader
+    tries the system library only when installing the compiled-in payload
+    fails; if the verified cache file itself cannot be loaded, the error is
+    returned without a system-loader fallback.
 
 LANCEDB_C_CACHE_DIR overrides the cache root. The default is
 os.UserCacheDir()/lancedb-go/native/<lancedb-c version>/<target>.
